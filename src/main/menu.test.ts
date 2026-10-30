@@ -17,7 +17,7 @@ function shortcuts(platform: NodeJS.Platform) {
 describe('menuTemplate', () => {
   it('macOS: Cmd shortcuts, tabs 1–9 hidden but bound', () => {
     const { byKey, sent } = shortcuts('darwin')
-    for (const k of ['Cmd+T', 'Cmd+W', 'Cmd+Shift+O', 'Cmd+F', 'Cmd+Shift+]', 'Cmd+Shift+[']) expect(byKey.has(k), k).toBe(true)
+    for (const k of ['Cmd+T', 'Cmd+W', 'Cmd+Shift+O', 'Cmd+F', 'Cmd+Shift+]', 'Cmd+Shift+[', 'Cmd+Shift+G']) expect(byKey.has(k), k).toBe(true)
     const tab3 = byKey.get('Cmd+3')
     expect(tab3?.visible).toBe(false)
     tab3?.click?.({} as never, undefined, {} as never)
@@ -29,7 +29,7 @@ describe('menuTemplate', () => {
     const keys = [...byKey.keys()]
     expect(keys.filter((k) => /^Ctrl\+[A-Z0-9]$/i.test(k))).toEqual([])
     expect(keys.filter((k) => /Alt/.test(k))).toEqual([])
-    for (const k of ['Ctrl+Shift+T', 'Ctrl+Shift+W', 'Ctrl+Shift+O', 'Ctrl+Shift+F', 'Ctrl+Tab', 'Ctrl+Shift+Tab']) {
+    for (const k of ['Ctrl+Shift+T', 'Ctrl+Shift+W', 'Ctrl+Shift+O', 'Ctrl+Shift+F', 'Ctrl+Shift+G', 'Ctrl+Tab', 'Ctrl+Shift+Tab']) {
       expect(byKey.has(k), k).toBe(true)
     }
     for (let i = 1; i <= 9; i++) expect(byKey.get(`Ctrl+Shift+${i}`)?.visible, `tab ${i}`).toBe(true)

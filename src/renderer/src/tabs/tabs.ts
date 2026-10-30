@@ -20,6 +20,8 @@ export interface TerminalTab {
   /** Foreground process name from main. */
   process: string
   exited?: number
+  /** The git panel was closed in this tab (View → Git Panel). */
+  gitHidden?: boolean
 }
 
 export type Tab = ProjectsTab | TerminalTab
