@@ -5,3 +5,6 @@ __pycache__/
 
 # electron-builder resources; un-ignore over a global "build" exclude
 !/build/
+node_modules/
+out/
+dist/
