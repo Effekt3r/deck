@@ -38,6 +38,23 @@ Deck replaces it.
 | `projects.json` / `projects.windows.json` | Dashboard config: `command`, `pinned`, `scan`, `depth` |
 | `install.sh` / `install.ps1` | Install WezTerm, copy files to `~/.config/wezterm`, hook the shell profile |
 
+### Branding and packaging (ready for the Electron app)
+| Path | Role |
+|---|---|
+| `branding/generate.py` | Regenerates every icon/installer image from SVG; see `branding/README.md` |
+| `build/icon.icns` / `icon.ico` / `icon.png` / `icons/` | App icons (Mac full iconutil slot set, Windows 16–256, Linux PNGs) |
+| `build/background*.png` | DMG window (app at x180, Applications at x480, y215) |
+| `build/installer*.bmp`, `uninstallerSidebar.bmp`, `installer.nsh`, `license.txt` | NSIS installer art, "Open in Deck" folder context menu, EULA (have Franco review) |
+| `build/trayTemplate*.png`, `tray.*` | Menu-bar / tray icons |
+| `build/entitlements.mac.plist` | Hardened-runtime entitlements (JIT, node-pty, network) |
+| `electron-builder.yml` | Mac dmg+zip (arm64/x64, notarised), Windows NSIS (x64; arm64 later), GitHub publish |
+| `.github/workflows/release.yml` | Tag `v*` → build both platforms; signs only when secrets exist |
+
+The NSIS include passes `--open "<folder>"`: the app must handle that argument
+(open a tab in that folder). Bundle id `com.effektstudios.deck` is confirmed.
+`build/` is un-ignored in `.gitignore` because Franco's global gitignore
+excludes every `build` folder.
+
 ### How the prototype fits together
 - Shell prompt → hook sets `GIT_REPO`/`GIT_BRANCH` user vars → `user-var-changed`
   in `wezterm.lua` → `sync()` opens activity (right, 30%) then graph (left, 34% of
@@ -133,19 +150,24 @@ Deck replaces it.
 
 1. ~~Smoke-test the prototype on the Mac; fix what breaks. Check a real session log
    under `~/.claude/projects/` against the parser above.~~ Done (M0, 2026-10-30).
-2. Confirm open decisions with Franco (see `docs/DECK.md` → Open decisions).
-   Default if he doesn't say: **Electron + xterm.js + node-pty**, unsigned CI
-   builds with signing switched on by secrets.
+2. ~~Confirm open decisions with Franco.~~ Done 2026-10-30, recorded in
+   `docs/DECK.md` → Decisions: Electron + xterm.js + node-pty, Apple Developer ID
+   (no Windows signing yet), GitHub Actions, `com.effektstudios.deck`, the
+   branch + chevron icon in `branding/`.
 3. Scaffold Deck per `docs/DECK.md`, porting the Python logic (merge-target rules,
    log parser, dashboard scan) to TypeScript with unit tests against fixtures.
-4. CI for macOS (arm64 + x64) and Windows x64; signing + notarisation once
-   certificates are in place.
+   Write fixtures by hand in the shapes above; never copy real session logs
+   into the repo (they hold client code and prompts).
+4. CI for macOS (arm64 + x64) and Windows x64: `.github/workflows/release.yml`
+   exists; Mac signing + notarisation switch on when the secrets are added,
+   Windows stays unsigned until there's a signing route.
 
 ## Conventions
 
 - **Never add `Co-Authored-By` lines** to commits or PRs.
-- Commit author: Franco Landman <franco.landman@wyobi.com> unless he says to use an
-  Effekt Studios address.
+- Commit author: Franco Landman <franco@effektstudios.com> (from 2026-10-30;
+  the first three commits used franco.landman@wyobi.com). His global git email
+  is the outlook.com one, so set it per commit: `git -c user.email=franco@effektstudios.com commit …`.
 - Everything must work on **macOS (Apple silicon) and Windows 11** — no Mac-only
   shortcuts in shared code; keep paths, shells and keys platform-aware.
 - Franco's repos: Wyobi under `/Volumes/wyobi`, others under `~/Development`.

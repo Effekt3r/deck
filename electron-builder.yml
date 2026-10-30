@@ -1,0 +1,102 @@
+# Deck — installer/packaging config (electron-builder)
+# Used once the Electron app exists (milestone M1+). Assets live in build/.
+appId: com.effektstudios.deck            # confirmed 2026-10-30; never change after the first signed release
+productName: Deck
+copyright: Copyright © 2026 Effekt Studios
+artifactName: ${productName}-${version}-${os}-${arch}.${ext}
+
+directories:
+  buildResources: build
+  output: dist
+
+files:
+  - out/**/*            # electron-vite output
+  - package.json
+asarUnpack:
+  - "**/node_modules/node-pty/**"   # native PTY binaries must stay outside asar
+
+# ---------------------------------------------------------------- macOS
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip            # needed for auto-update
+      arch: [arm64, x64]
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Signs with "Developer ID Application: Effekt Studios (TEAMID)" from the
+  # keychain / CSC_LINK. Unsigned when no identity is available.
+  notarize: true             # uses APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER
+  extendInfo:
+    NSHumanReadableCopyright: Copyright © 2026 Effekt Studios
+    LSApplicationCategoryType: public.app-category.developer-tools
+
+dmg:
+  title: Deck ${version}
+  icon: build/icon.icns
+  background: build/background.png   # background@2x.png is picked up automatically
+  iconSize: 128
+  window:
+    width: 660
+    height: 400
+  contents:
+    - x: 180
+      y: 215
+    - x: 480
+      y: 215
+      type: link
+      path: /Applications
+
+# ---------------------------------------------------------------- Windows
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]            # arm64 later (node-pty has to be cross-built for it)
+  # No Windows signing route yet (2026-10-30): installers are unsigned. Add
+  # publisherName with the certificate — electron-updater rejects updates whose
+  # signature doesn't match it, so it must not be set while unsigned.
+  # publisherName: Effekt Studios
+  # Pick ONE signing route when certificates exist:
+  # azureSignOptions:                 # Azure Trusted Signing
+  #   publisherName: Effekt Studios
+  #   endpoint: https://weu.codesigning.azure.net
+  #   codeSigningAccountName: effekt-studios
+  #   certificateProfileName: deck
+  # or an OV/EV cert via CSC_LINK + CSC_KEY_PASSWORD (WIN_CSC_LINK on mac runners)
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  installerSidebar: build/installerSidebar.bmp
+  uninstallerSidebar: build/uninstallerSidebar.bmp
+  installerHeader: build/installerHeader.bmp
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Deck
+  uninstallDisplayName: Deck
+  include: build/installer.nsh
+  license: build/license.txt
+
+# ---------------------------------------------------------------- Linux (optional)
+linux:
+  icon: build/icons
+  category: Development
+  target: [AppImage]
+  maintainer: Effekt Studios
+
+publish:
+  provider: github
+  owner: Effekt3r
+  repo: deck
+  private: true
+  releaseType: draft

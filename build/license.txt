@@ -1,0 +1,14 @@
+Deck
+Copyright (c) 2026 Effekt Studios. All rights reserved.
+
+This software is proprietary and confidential. It is licensed, not sold.
+You may install and use it on devices you own or control. You may not copy,
+modify, distribute, sublicense, reverse engineer or resell it except as
+permitted in writing by Effekt Studios or required by applicable law.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. IN NO EVENT SHALL EFFEKT STUDIOS BE LIABLE FOR ANY CLAIM, DAMAGES OR
+OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+
+Deck is an independent product by Effekt Studios. It is not affiliated with or
+endorsed by Anthropic. Claude and Claude Code are trademarks of Anthropic, PBC.
