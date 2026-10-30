@@ -100,7 +100,7 @@ deck/
   route yet). Later: Azure Trusted Signing (electron-builder `azureSignOptions`)
   or an OV/EV certificate on a cloud HSM; check Trusted Signing accepts a South
   African company first.
-- **CI:** GitHub Actions in the private repo (macos-14 + windows-latest),
+- **CI:** GitHub Actions in the private repo (macos-15 + windows-latest),
   `.github/workflows/release.yml`. Builds stay unsigned until the signing
   secrets exist, then sign automatically. Tag `v*` → draft GitHub Release.
 - Auto-update via electron-updater from GitHub Releases (private repo needs a

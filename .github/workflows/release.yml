@@ -23,7 +23,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15   # macos-14 images retire 2026-11-02
             target: --mac
           - os: windows-latest
             target: --win
