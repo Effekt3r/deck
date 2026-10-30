@@ -6,6 +6,7 @@ import { app, type BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electr
 import { IPC } from '@shared/channels'
 import type { AppInfo, PtyCreateOptions } from '@shared/types'
 import { buildMenu } from './menu'
+import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
 import { registerProjectsIpc } from './projects/ipc'
 import { PtyManager } from './pty/manager'
@@ -94,6 +95,8 @@ async function start(): Promise<void> {
     // First run takes over the WezTerm prototype's dashboard settings.
     importFrom: join(homedir(), '.config', 'wezterm', 'projects.json'),
   })
+
+  registerGitIpc({ targetsFile: join(userData, 'git-targets.json') })
 
   Menu.setApplicationMenu(buildMenu((cmd) => send(IPC.appMenu, cmd)))
   win = createWindow()
