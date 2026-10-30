@@ -71,11 +71,23 @@ TRUNK_ORDER = ["dev", "develop", "development", "main", "master"]
 RELEASE_ORDER = ["main", "master"]
 
 
+def is_ancestor(repo, a, b):
+    try:
+        return subprocess.run(["git", "-C", repo, "merge-base", "--is-ancestor", a, b],
+                              capture_output=True, env=ENV, timeout=15).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def resolve(repo, name):
-    for cand in (name, "origin/" + name):
-        if ref_ok(repo, cand):
-            return cand
-    return None
+    """The local branch, unless it is missing or only a stale copy of
+    origin/<name> (PRs merge on the remote, so that is where commits land)."""
+    local = name if ref_ok(repo, name) else None
+    remote = "origin/" + name if ref_ok(repo, "origin/" + name) else None
+    if local and remote and git(repo, "rev-parse", local) != git(repo, "rev-parse", remote) \
+            and is_ancestor(repo, local, remote):
+        return remote
+    return local or remote
 
 
 def merge_target(repo, branch):
@@ -411,6 +423,18 @@ def set_user_var(name, value):
     sys.stdout.write(f"\x1b]1337;SetUserVar={name}={b}\x07")
 
 
+def paint(lines, height):
+    """Draw a full frame. Rows are cleared before they're written: with
+    autowrap off the cursor stays on the last column, so a trailing ESC[K
+    would erase the last character of every full-width row."""
+    rows = lines[:height]
+    frame = "\x1b[H" + "\r\n".join("\x1b[2K" + l for l in rows)
+    if len(rows) < height:
+        frame += ("\r\n" if rows else "") + "\x1b[J"
+    sys.stdout.write(frame)
+    sys.stdout.flush()
+
+
 # ---------------------------------------------------------------------- main
 
 def main():
@@ -443,8 +467,11 @@ def main():
         os.system("")  # enable VT processing on old consoles
         enable_windows_vt_input()
 
-    # Mark this pane so WezTerm never treats it as a "shell" pane.
+    # Mark this pane so WezTerm never treats it as a "shell" pane, and say
+    # which side pane it is so wezterm.lua can find it again after a reload.
     set_user_var("GIT_GRAPH_PANE", "1")
+    set_user_var("SIDE_PANE", "graph")
+    set_user_var("SIDE_REPO", start)
     sys.stdout.write(f"\x1b]2;⎇ {os.path.basename(repo or start)}\x07")
     # alt screen, hide cursor, no wrap, SGR mouse wheel reporting
     sys.stdout.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")
@@ -497,12 +524,7 @@ def main():
                         set_user_var("GIT_BRANCH", branch)
                     else:
                         lines = [dim(f"{start} is not a git repository"), dim("q to close")]
-                    frame = "\x1b[H" + "".join(l + "\x1b[K\r\n" for l in lines[:h - 1])
-                    if len(lines) >= h:
-                        frame += lines[h - 1] + "\x1b[K"
-                    frame += "\x1b[J"
-                    sys.stdout.write(frame)
-                    sys.stdout.flush()
+                    paint(lines, h)
     except KeyboardInterrupt:
         return 0
     finally:

@@ -3,7 +3,7 @@
 
 Follows the newest Claude Code session for PROJECT (including its worktrees)
 by tailing the session log under ~/.claude/projects, and shows:
-  * status: working / running a tool / waiting / idle, model, context size
+  * status: working / running a tool / waiting on you / idle, model, context size
   * the to-do list Claude keeps
   * sub-agents it started, and what each one is doing now
   * a feed of prompts, thinking, replies and tool calls (newest at the bottom)
@@ -25,11 +25,17 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from git_graph_pane import (IS_WIN, Keys, RESET, bold, clip, cyan, dim, enable_windows_vt_input,  # noqa: E402
-                            green, magenta, red, set_user_var, sgr, term_size, yellow, blue)
+                            green, magenta, paint, red, set_user_var, sgr, term_size, yellow, blue)
 
 CLAUDE_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.join(os.path.expanduser("~"), ".claude")
 PROJECTS = os.path.join(CLAUDE_DIR, "projects")
 MAX_EVENTS = 600
+AGENT_TOOLS = ("Task", "Agent")
+ASK_TOOLS = ("AskUserQuestion", "ExitPlanMode")  # pending = Claude is waiting on you
+WORKTREES = "--claude-worktrees-"                 # <repo>/.claude/worktrees/<name>, encoded
+NOT_PROMPTS = ("<local-command-caveat>", "<local-command-stdout>", "<local-command-stderr>",
+               "<system-reminder>", "<bash-stdout>", "<bash-stderr>")
+MODES = {"bypassPermissions": "bypass", "acceptEdits": "accept edits", "plan": "plan mode", "auto": "auto mode"}
 
 
 def italic(t): return sgr("3", t)
@@ -40,16 +46,18 @@ def encode(path):
 
 
 def sessions_for(project):
-    """All session logs for this folder and its worktrees, newest first."""
-    real = os.path.realpath(project)
-    keys = {encode(real), encode(os.path.abspath(project))}
+    """All session logs for this folder and its worktrees, newest first.
+    Claude names the folder after process.cwd(), which has the on-disk case
+    (/Volumes/wyobi/X logs to -Volumes-Wyobi-X), so match case-insensitively."""
+    keys = {encode(p).lower() for p in (os.path.realpath(project), os.path.abspath(project))}
     found = []
     try:
         dirs = os.listdir(PROJECTS)
     except OSError:
         return []
     for d in dirs:
-        if any(d == k or d.startswith(k + "-") for k in keys):
+        low = d.lower()
+        if any(low == k or low.startswith(k + WORKTREES) for k in keys):
             for f in glob.glob(os.path.join(PROJECTS, d, "*.jsonl")):
                 try:
                     found.append((os.path.getmtime(f), f))
@@ -59,13 +67,26 @@ def sessions_for(project):
     return [f for _, f in found]
 
 
+def quiet_for(path):
+    try:
+        return time.time() - os.path.getmtime(path)
+    except OSError:
+        return 9999.0
+
+
 def short_path(p, project):
     if not isinstance(p, str):
         return str(p)
     for base in (os.path.realpath(project), project):
-        if p.startswith(base.rstrip("/\\") + os.sep) or p.startswith(base.rstrip("/\\") + "/"):
-            return p[len(base.rstrip("/\\")) + 1:]
+        base = base.rstrip("/\\")
+        if p.lower().startswith(base.lower() + "/") or p.lower().startswith(base.lower() + "\\"):
+            return p[len(base) + 1:]
     return p.replace(os.path.expanduser("~"), "~", 1)
+
+
+def tag(text, name):
+    m = re.search(rf"<{name}>(.*?)</{name}>", text, re.S)
+    return m.group(1).strip() if m else ""
 
 
 def first_line(s, n=200):
@@ -83,7 +104,7 @@ def describe_tool(name, inp, project):
         return p("file_path") or p("notebook_path")
     if name in ("Grep", "Glob"):
         return f'{inp.get("pattern", "")}' + (f'  in {p("path")}' if inp.get("path") else "")
-    if name in ("Task", "Agent"):
+    if name in AGENT_TOOLS:
         return f'{inp.get("subagent_type") or "agent"}: {inp.get("description", "")}'
     if name in ("WebFetch",):
         return inp.get("url", "")
@@ -91,7 +112,11 @@ def describe_tool(name, inp, project):
         return inp.get("query", "")
     if name == "TodoWrite":
         return f'{len(inp.get("todos") or [])} items'
-    for k in ("description", "subject", "prompt", "query", "path", "file_path", "url", "command"):
+    if name == "AskUserQuestion":
+        qs = [q.get("question", "") for q in inp.get("questions") or [] if isinstance(q, dict)]
+        return first_line(qs[0]) if qs else ""
+    for k in ("description", "subject", "summary", "skill", "prompt", "query", "path", "file_path",
+              "url", "command", "reason", "task_id", "plan"):
         if inp.get(k):
             return first_line(str(inp[k]))
     return ""
@@ -105,16 +130,21 @@ class Session:
         self.pos = 0
         self.partial = ""
         self.events = []          # (kind, text) — kind: user/think/text/tool/err/sys
-        self.pending = {}         # tool_use_id -> (name, summary)
-        self.agents = {}          # tool_use_id -> dict(desc, type, done, err)
+        self.pending = {}         # tool_use_id -> (name, summary), until its result arrives
+        self.agents = {}          # tool_use_id -> dict(type, desc, id, done, err)
+        self.background = set()   # ids of background shell tasks still running
         self.todos = []           # list of (status, text)
         self.tasks = {}           # TaskCreate/TaskUpdate tracking: id -> [status, text]
         self.model = ""
         self.ctx = 0
-        self.title = ""
+        self.title = ""           # ai-title; a custom title (/rename) wins
+        self.custom_title = ""
         self.branch = ""
-        self.last_kind = ""
-        self.last_ts = 0.0
+        self.mode = ""            # permission mode
+        self.pr = ""
+        self.in_turn = False      # a prompt is being worked on
+        self.error = ""           # last API error (rate limit, overload, …)
+        self.exited = False       # Claude quit (until the session is resumed)
 
     def poll(self):
         try:
@@ -146,44 +176,145 @@ class Session:
 
     def ingest(self, e):
         t = e.get("type")
-        if t == "summary" and e.get("summary"):
+        if t == "custom-title" and e.get("customTitle"):
+            self.custom_title = e["customTitle"]
+        elif t == "ai-title" and (e.get("aiTitle") or e.get("title")):
+            self.title = e.get("aiTitle") or e.get("title")
+        elif t == "summary" and e.get("summary"):  # Claude Code before 2.1
             self.title = e["summary"]
+        elif t == "permission-mode":
+            self.mode = e.get("permissionMode") or ""
+        elif t == "pr-link" and e.get("prNumber"):
+            self.pr = f'PR #{e["prNumber"]}'
+        elif t == "cost-state":  # written as Claude exits; its background work dies with it
+            self.exited = True
+            self.end_turn()
+            self.background.clear()
+            for a in self.agents.values():
+                a["done"] = True
+        if t not in ("user", "assistant", "system", "attachment"):
             return
-        if t in ("custom-title", "ai-title") and (e.get("title") or e.get("customTitle")):
-            self.title = e.get("title") or e.get("customTitle")
-            return
+        self.exited = False
         if e.get("gitBranch"):
             self.branch = e["gitBranch"]
-        if t not in ("user", "assistant"):
-            return
         if e.get("isSidechain"):
             return  # sub-agent traffic is shown via its own log
+        if t == "system":
+            self.system(e)
+        elif t == "attachment":
+            # Input that arrived while Claude was busy and was taken in mid-turn:
+            # prompts you typed, or notifications that a background task ended.
+            a = e.get("attachment") or {}
+            if a.get("type") == "queued_command" and isinstance(a.get("prompt"), str):
+                if a.get("commandMode") == "task-notification":
+                    self.notification(a["prompt"])
+                elif (a.get("origin") or {}).get("kind", "human") == "human":
+                    self.prompt(a["prompt"])
+        elif t == "user":
+            self.user(e)
+        else:
+            self.assistant(e)
+
+    def system(self, e):
+        st = e.get("subtype")
+        if st == "turn_duration":  # written when a turn ends
+            self.end_turn()
+        elif st == "compact_boundary":
+            self.add("sys", "conversation compacted")
+        elif st in ("informational", "model_refusal_fallback", "scheduled_task_fire") and e.get("content"):
+            self.add("sys", first_line(str(e["content"])))
+
+    def user(self, e):
+        if e.get("isCompactSummary"):
+            return  # the summary a compacted conversation restarts from
+        content = (e.get("message") or {}).get("content")
+        blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content or []
+        # origin.kind: human (absent in older logs), task-notification, peer, auto-continuation, …
+        human = (e.get("origin") or {}).get("kind", "human") == "human" and not e.get("isMeta")
+        texts, images = [], 0
+        for b in blocks:
+            if not isinstance(b, dict):
+                continue
+            if b.get("type") == "tool_result":
+                self.result(b, e.get("toolUseResult"))
+            elif b.get("type") == "text":
+                text = b.get("text") or ""
+                if "<task-notification>" in text[:40]:
+                    self.notification(text)
+                elif human:
+                    texts.append(text)
+            elif b.get("type") == "image" and human:
+                images += 1
+        for text in texts:
+            self.user_text(text, legacy=e.get("origin") is None)
+        if images and not texts:
+            self.prompt("[image]")
+
+    def user_text(self, text, legacy):
+        text = text.strip()
+        if not text or text.startswith(NOT_PROMPTS):
+            return
+        if text.startswith("<command-name>"):
+            self.add("sys", tag(text, "command-name") or text[:60])
+        elif text.startswith("<bash-input>"):
+            self.add("user", "! " + tag(text, "bash-input"))
+        elif text.startswith("[Request interrupted"):
+            self.add("err", "✗ interrupted")
+            self.end_turn()
+        elif legacy and text.startswith("<") and ">" in text[:40] and not text.startswith("<pasted"):
+            return  # older logs: hook output and reminders arrived as user text
+        else:
+            self.prompt(re.sub(r"</?pasted_content[^>]*>", "", text).strip())
+
+    def prompt(self, text):
+        if text:
+            self.add("user", text)
+            self.in_turn, self.error = True, ""
+
+    def end_turn(self):
+        self.in_turn = False
+        self.pending.clear()  # nothing is still running once a turn is over
+
+    def result(self, b, info):
+        tid = b.get("tool_use_id")
+        name, _ = self.pending.pop(tid, ("", ""))
+        info = info if isinstance(info, dict) else {}
+        agent = self.agents.get(tid)
+        if agent:
+            agent["id"] = info.get("agentId") or agent["id"]
+            # Agents mostly start async: this result only says "launched" and a
+            # <task-notification> reports the end.
+            if info.get("status") != "async_launched":
+                agent["done"], agent["err"] = True, bool(b.get("is_error"))
+        if info.get("backgroundTaskId"):
+            self.background.add(str(info["backgroundTaskId"]))
+        if b.get("is_error"):
+            txt = b.get("content")
+            if isinstance(txt, list):
+                txt = " ".join(x.get("text", "") for x in txt if isinstance(x, dict))
+            self.add("err", f"✗ {name}: {first_line(str(txt), 300)}")
+
+    def notification(self, text):
+        """<task-notification>: a background agent or shell command finished."""
+        task, status = tag(text, "task-id"), tag(text, "status")
+        agent = self.agents.get(tag(text, "tool-use-id")) or \
+            next((a for a in self.agents.values() if task and a["id"] == task), None)
+        if agent:
+            agent["done"], agent["err"] = True, status == "failed"
+        self.background.discard(task)
+        if tag(text, "summary"):
+            self.add("err" if status == "failed" else "sys", first_line(tag(text, "summary")))
+
+    def assistant(self, e):
         msg = e.get("message") or {}
         content = msg.get("content")
-        self.last_ts = time.time()
-        if t == "user":
-            if isinstance(content, str):
-                self.user_text(content, e)
-                return
-            for b in content or []:
-                if not isinstance(b, dict):
-                    continue
-                if b.get("type") == "text":
-                    self.user_text(b.get("text", ""), e)
-                elif b.get("type") == "tool_result":
-                    tid = b.get("tool_use_id")
-                    name, summ = self.pending.pop(tid, ("", ""))
-                    if tid in self.agents:
-                        self.agents[tid]["done"] = True
-                        self.agents[tid]["err"] = bool(b.get("is_error"))
-                    if b.get("is_error"):
-                        txt = b.get("content")
-                        if isinstance(txt, list):
-                            txt = " ".join(x.get("text", "") for x in txt if isinstance(x, dict))
-                        self.add("err", f"✗ {name}: {first_line(str(txt), 300)}")
-                    self.last_kind = "result"
+        if e.get("isApiErrorMessage"):  # synthetic reply (model "<synthetic>"): rate limit, overload…
+            txt = " ".join(b.get("text", "") for b in content or [] if isinstance(b, dict))
+            self.error = first_line(txt, 120) or str(e.get("error") or "API error")
+            self.add("err", "⚠ " + self.error)
+            self.end_turn()
             return
-        # assistant
+        self.in_turn, self.error = True, ""
         self.model = msg.get("model") or self.model
         u = msg.get("usage") or {}
         tot = sum(int(u.get(k) or 0) for k in ("input_tokens", "cache_read_input_tokens",
@@ -196,25 +327,31 @@ class Session:
             bt = b.get("type")
             if bt == "thinking":
                 self.add("think", (b.get("thinking") or "").strip())
-                self.last_kind = "think"
             elif bt == "redacted_thinking":
                 self.add("think", "")
-                self.last_kind = "think"
             elif bt == "text" and b.get("text", "").strip():
                 self.add("text", b["text"].strip())
-                self.last_kind = "text"
             elif bt == "tool_use":
                 name, inp = b.get("name", "?"), b.get("input") or {}
                 summ = describe_tool(name, inp, self.project)
                 self.pending[b.get("id")] = (name, summ)
                 self.add("tool", (name, summ))
-                self.last_kind = "tool"
-                if name in ("Task", "Agent"):
+                if name in AGENT_TOOLS:
                     self.agents[b.get("id")] = {
                         "type": inp.get("subagent_type") or "agent",
                         "desc": inp.get("description") or first_line(inp.get("prompt", ""), 60),
-                        "done": False, "err": False, "started": time.time(),
+                        "id": None, "done": False, "err": False,
                     }
+                elif name == "SendMessage":  # continues an agent that had finished
+                    for a in self.agents.values():
+                        if a["id"] and a["id"] == inp.get("to"):
+                            a["done"] = False
+                elif name == "TaskStop":
+                    task = str(inp.get("task_id") or "")
+                    self.background.discard(task)
+                    for a in self.agents.values():
+                        if task and a["id"] == task:
+                            a["done"] = True
                 elif name == "TodoWrite":
                     self.todos = [(td.get("status", ""), td.get("content") or td.get("activeForm", ""))
                                   for td in (inp.get("todos") or []) if isinstance(td, dict)]
@@ -225,22 +362,8 @@ class Session:
                     tid = str(inp.get("taskId") or inp.get("id") or "")
                     if tid in self.tasks and inp.get("status"):
                         self.tasks[tid][0] = inp["status"]
-
-    def user_text(self, text, e):
-        text = text.strip()
-        if not text or e.get("isMeta"):
-            return
-        if text.startswith("<command-name>"):
-            m = re.search(r"<command-name>(.*?)</command-name>", text)
-            self.add("sys", m.group(1) if m else text[:60])
-            return
-        if text.startswith("<") and ">" in text[:40]:
-            return  # local command output, reminders, hook text
-        if text.startswith("[Request interrupted"):
-            self.add("err", "✗ interrupted")
-            return
-        self.add("user", text)
-        self.last_kind = "user"
+        if msg.get("stop_reason") == "end_turn":
+            self.end_turn()
 
     def todo_list(self):
         if self.todos:
@@ -248,34 +371,47 @@ class Session:
         return [tuple(v) for v in self.tasks.values()]
 
 
-def subagent_status(session_path):
-    """Latest action of each sub-agent log next to the session (newer Claude Code)."""
-    base = os.path.splitext(session_path)[0]
-    out = []
-    for f in sorted(glob.glob(os.path.join(base, "subagents", "*.jsonl")), key=os.path.getmtime)[-6:]:
+def last_step(path, project):
+    """The latest tool call or reply in a sub-agent's log."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(max(0, os.path.getsize(path) - 20000))
+            tail = fh.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return ""
+    for line in reversed(tail):
         try:
-            age = time.time() - os.path.getmtime(f)
-            with open(f, "rb") as fh:
-                fh.seek(max(0, os.path.getsize(f) - 20000))
-                tail = fh.read().decode("utf-8", "replace").splitlines()
-        except OSError:
+            e = json.loads(line)
+        except ValueError:
             continue
-        last = ""
-        for line in reversed(tail):
-            try:
-                e = json.loads(line)
-            except ValueError:
-                continue
-            for b in reversed(((e.get("message") or {}).get("content")) or []):
-                if isinstance(b, dict) and b.get("type") == "tool_use":
-                    last = f'{b.get("name")}: {describe_tool(b.get("name"), b.get("input"), "")}'
-                    break
-                if isinstance(b, dict) and b.get("type") == "text" and b.get("text", "").strip():
-                    last = first_line(b["text"])
-                    break
-            if last:
-                break
-        out.append((age, last))
+        for b in reversed(((e.get("message") or {}).get("content")) or []):
+            if isinstance(b, dict) and b.get("type") == "tool_use":
+                return f'{b.get("name")}: {describe_tool(b.get("name"), b.get("input"), project)}'
+            if isinstance(b, dict) and b.get("type") == "text" and b.get("text", "").strip():
+                return first_line(b["text"])
+    return ""
+
+
+def subagent_steps(sess):
+    """What each running sub-agent is doing now, by Agent tool_use id. Its log
+    is <session>/subagents/agent-<agentId>.jsonl, and agent-<agentId>.meta.json
+    names the tool call that started it (toolUseId)."""
+    running = {tid: a for tid, a in sess.agents.items() if not a["done"]}
+    if not running:
+        return {}
+    base = os.path.join(os.path.splitext(sess.path)[0], "subagents")
+    logs = {}
+    for meta in glob.glob(os.path.join(base, "agent-*.meta.json")):
+        try:
+            with open(meta, encoding="utf-8") as fh:
+                logs[json.load(fh).get("toolUseId")] = meta[:-len(".meta.json")] + ".jsonl"
+        except (OSError, ValueError, AttributeError):
+            pass
+    out = {}
+    for tid, a in running.items():
+        log = logs.get(tid) or (a["id"] and os.path.join(base, f'agent-{a["id"]}.jsonl'))
+        if log:
+            out[tid] = last_step(log, sess.project)
     return out
 
 
@@ -321,19 +457,46 @@ def feed_lines(sess, width, show_thinking):
         elif kind == "tool":
             name, summ = val
             color = TOOL_COLOR.get(name, magenta)
-            out.append(f"  {color('⏺ ' + name)} {dim(summ)}")
+            label = name[5:].replace("__", ":", 1) if name.startswith("mcp__") else name
+            out.append(f"  {color('⏺ ' + label)} {dim(summ)}")
         elif kind == "err":
             out.append("  " + red(val))
         elif kind == "sys":
             out.append(dim(f"  ⌘ {val}"))
-    return out
+    return out or [dim("No prompts in this session yet.")]
+
+
+def status(sess, idle_for):
+    pending = list(sess.pending.values())
+    if pending:
+        name = pending[-1][0]
+        if name in ASK_TOOLS:
+            return yellow("◐ waiting on you") + dim(f" ({name})")
+        # A permission prompt leaves no trace in the log: guess from the silence.
+        if idle_for > 8 and name not in AGENT_TOOLS and sess.mode != "bypassPermissions":
+            return yellow("◐ waiting on you?") + dim(f" ({name})")
+        return yellow(f"⏺ {name}")
+    if sess.in_turn:
+        return dim(f"? quiet for {int(idle_for // 60)}m") if idle_for > 600 else magenta("✻ working")
+    if sess.exited:
+        return dim("⏹ exited")
+    if sess.error:
+        return red("⚠ " + sess.error)
+    state = green("✓ idle")
+    agents = sum(1 for a in sess.agents.values() if not a["done"])
+    if agents:
+        state += dim(f" · {agents} agent{'s' * (agents != 1)} running")
+    if sess.background:
+        n = len(sess.background)
+        state += dim(f" · {n} background task{'s' * (n != 1)}")
+    return state
 
 
 def fmt_tokens(n):
     return f"{n / 1000:.0f}k" if n >= 1000 else str(n)
 
 
-def build_frame(project, sess, width, height, offset, follow, show_thinking, sub_logs):
+def build_frame(project, sess, width, height, offset, follow, show_thinking, steps):
     name = os.path.basename(os.path.realpath(project).rstrip("/\\"))
     hdr = []
     if not sess:
@@ -342,22 +505,7 @@ def build_frame(project, sess, width, height, offset, follow, show_thinking, sub
         hdr.append(dim("No Claude Code session for this folder yet."))
         hdr.append(dim("Start `claude` in the pane on the left."))
         return hdr, 0
-    try:
-        idle_for = time.time() - os.path.getmtime(sess.path)
-    except OSError:
-        idle_for = 9999
-    pending = list(sess.pending.values())
-    if pending and idle_for > 8 and not any(n in ("Task", "Agent") for n, _ in pending):
-        state = yellow("◐ waiting on you?") + dim(f" ({pending[-1][0]})")
-    elif pending:
-        state = yellow(f"⏺ {pending[-1][0]}")
-    elif idle_for < 4 and sess.last_kind in ("user", "result", "think", "tool"):
-        state = magenta("✻ working")
-    elif idle_for < 4:
-        state = magenta("✻ writing")
-    else:
-        state = green("✓ idle")
-    hdr.append(bold("Claude") + "  " + dim(name) + "  " + state)
+    hdr.append(bold("Claude") + "  " + dim(name) + "  " + status(sess, quiet_for(sess.path)))
     meta = []
     if sess.model:
         meta.append(sess.model.replace("claude-", ""))
@@ -365,10 +513,14 @@ def build_frame(project, sess, width, height, offset, follow, show_thinking, sub
         meta.append("ctx " + fmt_tokens(sess.ctx))
     if sess.branch:
         meta.append("⎇ " + sess.branch)
+    if sess.mode in MODES:
+        meta.append(MODES[sess.mode])
+    if sess.pr:
+        meta.append(sess.pr)
     if meta:
         hdr.append(dim("  " + " · ".join(meta)))
-    if sess.title:
-        hdr.append(dim("  " + sess.title))
+    if sess.custom_title or sess.title:
+        hdr.append(dim("  " + (sess.custom_title or sess.title)))
 
     todos = sess.todo_list()
     if todos:
@@ -379,16 +531,15 @@ def build_frame(project, sess, width, height, offset, follow, show_thinking, sub
             mark = {"completed": green("✓"), "in_progress": yellow("▸")}.get(st, dim("○"))
             hdr.append(f" {mark} " + (bold(txt) if st == "in_progress" else txt))
 
-    agents = list(sess.agents.values())
+    agents = list(sess.agents.items())
     if agents:
-        running = [a for a in agents if not a["done"]]
+        running = [(tid, a) for tid, a in agents if not a["done"]]
         hdr.append(bold(f"Agents {len(running)} running · {len(agents) - len(running)} done"))
-        live = sorted(sub_logs, key=lambda x: x[0])
-        for i, a in enumerate((running or agents[-3:])[:5]):
+        for tid, a in (running or agents[-3:])[:5]:
             mark = yellow("◐") if not a["done"] else (red("✗") if a["err"] else green("✓"))
             hdr.append(f" {mark} {magenta(a['type'])} {a['desc']}")
-            if not a["done"] and i < len(live) and live[i][1]:
-                hdr.append(dim(f"    ↳ {live[i][1]}"))
+            if not a["done"] and steps.get(tid):
+                hdr.append(dim(f"    ↳ {steps[tid]}"))
     hdr.append(dim("─" * width))
     hdr = [clip(l, width) for l in hdr]
 
@@ -424,20 +575,28 @@ def main():
 
     skip = 0  # 0 = newest session, n = n-th older
     sess = None
+    seen = {}  # path -> Session, so switching back doesn't re-read a long log
 
     def pick():
         nonlocal sess
         found = sessions_for(project)
         path = found[min(skip, len(found) - 1)] if found else None
-        if path and (not sess or sess.path != path):
-            sess = Session(path, project)
+        # Other tabs or worktrees may run Claude here too: stay on the session
+        # being followed until it has been quiet for a while.
+        if path and (not sess or sess.path != path) and \
+                (not sess or skip or quiet_for(sess.path) > 15):
+            sess = seen.get(path) or Session(path, project)
+            seen[path] = sess
+            for old in list(seen)[:-4]:
+                if seen[old] is not sess:
+                    del seen[old]
         if sess:
             sess.poll()
 
     if once:
         pick()
         lines, _ = build_frame(project, sess, width or 60, height or 50, 0, True, True,
-                               subagent_status(sess.path) if sess else [])
+                               subagent_steps(sess) if sess else {})
         print("\n".join(lines))
         return 0
 
@@ -445,6 +604,8 @@ def main():
         os.system("")
         enable_windows_vt_input()
     set_user_var("GIT_GRAPH_PANE", "1")  # never treated as a shell pane
+    set_user_var("SIDE_PANE", "activity")  # lets wezterm.lua find it again after a reload
+    set_user_var("SIDE_REPO", pos[0] if pos else project)
     sys.stdout.write(f"\x1b]2;✻ Claude · {os.path.basename(project)}\x07")
     sys.stdout.write("\x1b[?1049h\x1b[?25l\x1b[?7l\x1b[?1000h\x1b[?1006h")
     sys.stdout.flush()
@@ -474,7 +635,7 @@ def main():
                         skip = (skip + 1) % max(1, len(sessions_for(project))); sess = None; follow = True
                         last_scan = 0
                     elif k in ("r", "R"):
-                        skip = 0; last_scan = 0
+                        skip = 0; sess = None; last_scan = 0
                 now = time.time()
                 if now - last_scan > 2:
                     last_scan = now
@@ -491,14 +652,9 @@ def main():
                     last_sig, redraw = sig, True
                 if redraw:
                     w, h = size
-                    subs = subagent_status(sess.path) if sess and sess.agents else []
-                    lines, offset = build_frame(project, sess, w, h, offset, follow, show_thinking, subs)
-                    frame = "\x1b[H" + "".join(l + "\x1b[K\r\n" for l in lines[:h - 1])
-                    if len(lines) >= h:
-                        frame += lines[h - 1] + "\x1b[K"
-                    frame += "\x1b[J"
-                    sys.stdout.write(frame)
-                    sys.stdout.flush()
+                    steps = subagent_steps(sess) if sess else {}
+                    lines, offset = build_frame(project, sess, w, h, offset, follow, show_thinking, steps)
+                    paint(lines, h)
     except KeyboardInterrupt:
         return 0
     finally:

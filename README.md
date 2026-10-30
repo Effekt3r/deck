@@ -43,11 +43,16 @@ dashboard: `o` shell only, `p` pin, `/` filter, `e` edit projects.json.
 
 - **Git graph** (`git_graph_pane.py`): polls refs + status every 1.5 s with
   `GIT_OPTIONAL_LOCKS=0`, so it never fights Claude for `index.lock`. Merge
-  target is detected (feature → dev, dev → main); override with
+  target is detected (feature → dev, dev → main), counted against
+  `origin/<target>` when your local copy is only behind it; override with
   `git config branch.<name>.mergeTarget origin/dev`. Highlighted hashes are the
   commits that will land in the target.
 - **Claude activity** (`claude_activity_pane.py`): tails the newest session log
-  in `~/.claude/projects/<folder>/` (worktrees included). Read-only. Thinking is
-  shown when Claude Code records it in the log; otherwise "✻ thinking…".
+  in `~/.claude/projects/<folder>/` (worktrees included). Read-only. Status is
+  working / running a tool / waiting on you / idle / exited; sub-agents show
+  their current step. If two sessions run in the folder it stays on the one it
+  follows until that's been quiet for 15 s (`n` cycles). Thinking is shown when
+  Claude Code records it in the log; otherwise "✻ thinking…".
 - **Prompt hook** (`wezterm-git.zsh` / `.ps1`): reports the repo and branch to
-  WezTerm; `wezterm.lua` opens/closes the side panes when that changes.
+  WezTerm; `wezterm.lua` opens/closes the side panes when that changes. Re-running
+  `install.sh` while WezTerm is open reloads the config without duplicating panes.

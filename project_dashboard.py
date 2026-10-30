@@ -23,7 +23,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from git_graph_pane import (IS_WIN, Keys, bold, clip, cyan, dim, enable_windows_vt_input,  # noqa: E402
-                            green, set_user_var, sgr, term_size, yellow)
+                            green, paint, set_user_var, sgr, term_size, yellow)
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "projects.json")
@@ -134,8 +134,11 @@ def ago(t):
 # ------------------------------------------------------------------ wezterm
 
 def wezterm_bin():
-    for c in (os.environ.get("WEZTERM_EXECUTABLE"), shutil.which("wezterm"),
-              "/Applications/WezTerm.app/Contents/MacOS/wezterm"):
+    # Not $WEZTERM_EXECUTABLE: that is wezterm-gui, which has no `cli`
+    # subcommand. The CLI binary sits next to it.
+    exe_dir = os.environ.get("WEZTERM_EXECUTABLE_DIR")
+    for c in (exe_dir and os.path.join(exe_dir, "wezterm.exe" if IS_WIN else "wezterm"),
+              shutil.which("wezterm"), "/Applications/WezTerm.app/Contents/MacOS/wezterm"):
         if c and os.path.exists(c):
             return c
     return "wezterm"
@@ -325,9 +328,7 @@ def main():
                 if now - last_scan > 60:
                     last_scan, all_items = now, scan(cfg)
                 lines = render(items, sel, top, w, h, filt, filtering, msg, cfg, open_set)
-                sys.stdout.write("\x1b[H" + "".join(l + "\x1b[0m\x1b[K\r\n" for l in lines[:h - 1]) +
-                                 (lines[h - 1] + "\x1b[0m\x1b[K" if len(lines) >= h else "") + "\x1b[J")
-                sys.stdout.flush()
+                paint([l + "\x1b[0m" for l in lines], h)
     except KeyboardInterrupt:
         return 0
     finally:
