@@ -1,0 +1,8 @@
+{
+  "command": "claude --effort max --model claude-opus-5-5 --remote-control",
+  "pinned": [],
+  "scan": [
+    "~/Development"
+  ],
+  "depth": 2
+}

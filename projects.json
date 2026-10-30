@@ -1,0 +1,11 @@
+{
+  "command": "claude --effort max --model claude-opus-5-5 --remote-control",
+  "pinned": [
+    "/Volumes/wyobi/AccessControl_Guard"
+  ],
+  "scan": [
+    "/Volumes/wyobi",
+    "~/Development"
+  ],
+  "depth": 2
+}
