@@ -14,6 +14,9 @@ files:
   - package.json
 asarUnpack:
   - "**/node_modules/node-pty/**"   # native PTY binaries must stay outside asar
+# node-pty ships N-API prebuilds for every target (darwin/win32, arm64/x64), which
+# load in Electron as they are; rebuilding from source only adds a toolchain step.
+npmRebuild: false
 
 # ---------------------------------------------------------------- macOS
 mac:

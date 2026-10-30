@@ -61,6 +61,8 @@ export type ProjectAction = 'claude' | 'shell'
 export interface AppInfo {
   home: string
   version: string
+  /** Windows build (e.g. 26100); xterm only reflows ConPTY output when it knows it. */
+  windowsBuild?: number
 }
 
 export interface DeckApi {
