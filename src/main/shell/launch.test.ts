@@ -38,6 +38,14 @@ describe('shellLaunch on macOS', () => {
     expect(shellLaunch({ platform: 'darwin', env: { ...mac, CLAUDECODE: '1', GIT_EDITOR: 'nvim' }, ...opts }).env.GIT_EDITOR).toBe('nvim')
     expect(shellLaunch({ platform: 'darwin', env: { ...mac, GIT_EDITOR: 'true' }, ...opts }).env.GIT_EDITOR).toBe('true')
   })
+  it("drops the launching terminal's and multiplexer's own variables", () => {
+    const env = { ...mac, TMUX: '/tmp/tmux-501/default,1,0', TMUX_PANE: '%1', STY: '1.pts', TERM_SESSION_ID: 'x',
+      ITERM_SESSION_ID: 'w0', LC_TERMINAL: 'iTerm2', WEZTERM_PANE: '3', KITTY_WINDOW_ID: '1', VSCODE_PID: '9',
+      WT_SESSION: 'g', ELECTRON_RENDERER_URL: 'http://localhost:5173', COLUMNS: '80', LINES: '24' }
+    const l = shellLaunch({ platform: 'darwin', env, ...opts })
+    for (const k of Object.keys(env)) if (!(k in mac)) expect(l.env[k], k).toBeUndefined()
+    expect(l.env.HOME).toBe('/Users/f')
+  })
   it('drops variables that tie a shell to a parent Claude Code session or Electron', () => {
     const env = { ...mac, CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'x', CLAUDE_CODE_MESSAGING_TOKEN: 't',
       AI_AGENT: 'claude-code', ELECTRON_RUN_AS_NODE: '1', CLAUDE_CODE_USE_BEDROCK: '1' }

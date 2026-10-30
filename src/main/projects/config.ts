@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import type { ProjectsConfig } from '@shared/types'
 
@@ -76,6 +76,9 @@ export async function loadConfig(file: string, opts: { importFrom?: string } = {
 export async function saveConfig(file: string, config: ProjectsConfig): Promise<ProjectsConfig> {
   const clean = normalizeConfig(config)
   await mkdir(dirname(file), { recursive: true })
-  await writeFile(file, `${JSON.stringify(clean, null, 2)}\n`, 'utf8')
+  // Written beside the file, then renamed over it: a crash mid-write can't leave half a file.
+  const tmp = `${file}.${process.pid}.tmp`
+  await writeFile(tmp, `${JSON.stringify(clean, null, 2)}\n`, 'utf8')
+  await rename(tmp, file)
   return clean
 }

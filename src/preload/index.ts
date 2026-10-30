@@ -15,6 +15,7 @@ const api: DeckApi = {
     write: (id, data) => ipcRenderer.send(IPC.ptyWrite, id, data),
     resize: (id, cols, rows) => ipcRenderer.send(IPC.ptyResize, id, cols, rows),
     kill: (id) => ipcRenderer.send(IPC.ptyKill, id),
+    ack: (id, chars) => ipcRenderer.send(IPC.ptyAck, id, chars),
     onData: (cb) => on<[string, string]>(IPC.ptyData, cb),
     onExit: (cb) => on<[string, number]>(IPC.ptyExit, cb),
     onProcess: (cb) => on<[string, string]>(IPC.ptyProcess, cb),
@@ -37,5 +38,9 @@ const api: DeckApi = {
     ready: () => ipcRenderer.send(IPC.appReady),
   },
 }
+
+// Every terminal tab listens on the pty channels; past 10 tabs EventEmitter
+// would warn about a leak that isn't one.
+ipcRenderer.setMaxListeners(0)
 
 contextBridge.exposeInMainWorld('deck', api)

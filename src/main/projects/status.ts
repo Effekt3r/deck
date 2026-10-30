@@ -21,7 +21,9 @@ export function countStatus(porcelain: string): Omit<ProjectStatus, 'path'> {
 
 async function statusOf(path: string, timeout: number): Promise<ProjectStatus | null> {
   try {
-    const { stdout } = await run('git', ['-C', path, 'status', '--porcelain=v1'], {
+    // core.fsmonitor off: a repo's config could otherwise start a daemon or run a
+    // command of its choosing every time the Projects tab refreshes.
+    const { stdout } = await run('git', ['-C', path, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v1'], {
       // Optional locks off so this never takes index.lock while Claude commits; never wait on a prompt.
       env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
       timeout,

@@ -20,12 +20,26 @@ export const SCRUBBED_ENV: readonly string[] = [
   'ELECTRON_RUN_AS_NODE', 'ELECTRON_NO_ATTACH_CONSOLE',
 ]
 
+/** When Deck is started from another terminal, that terminal's (or tmux/screen's)
+ *  variables describe a session the tabs aren't in. node-pty would drop some of
+ *  these itself, but only when handed process.env unchanged. */
+const TERMINAL_ENV = [
+  'TMUX', 'TMUX_PANE', 'STY', 'WINDOW', 'WINDOWID', 'TERMCAP', 'COLUMNS', 'LINES',
+  'TERM_SESSION_ID', 'LC_TERMINAL', 'LC_TERMINAL_VERSION', 'WT_SESSION', 'WT_PROFILE_ID',
+]
+const TERMINAL_ENV_PREFIXES = ['ITERM_', 'WEZTERM_', 'KITTY_', 'VSCODE_', 'ELECTRON_']
+
+function inherited(name: string): boolean {
+  return !SCRUBBED_ENV.includes(name) && !TERMINAL_ENV.includes(name) &&
+    !TERMINAL_ENV_PREFIXES.some((prefix) => name.startsWith(prefix))
+}
+
 /** Which shell a new tab runs, with which arguments and environment. Pure: the
  *  platform and environment come in, so every platform is testable anywhere. */
 export function shellLaunch(o: ShellLaunchOptions): ShellLaunch {
   const env: Record<string, string> = {}
   for (const [k, v] of Object.entries(o.env)) {
-    if (v !== undefined && !SCRUBBED_ENV.includes(k)) env[k] = v
+    if (v !== undefined && inherited(k)) env[k] = v
   }
   // Claude Code runs its own commands with GIT_EDITOR=true; a Deck started from
   // one of its shells shouldn't hand that to tabs, where `git commit` needs an editor.

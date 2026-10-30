@@ -91,10 +91,12 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
       term.write(`\r\n\x1b[2m[process exited with code ${code} — press Enter to close]\x1b[0m\x1b[?25l`)
     }
 
+    // Acknowledged once xterm has processed it, so main can pause a flooding pty.
+    const show = (pid: string, data: string) => term.write(data, () => pty.ack(pid, data.length))
     const unsubscribe = [
       pty.onData((pid, data) => {
-        if (pid === ptyId) term.write(data)
-        else if (pending) early.push({ pid, run: () => term.write(data) })
+        if (pid === ptyId) show(pid, data)
+        else if (pending) early.push({ pid, run: () => show(pid, data) })
       }),
       pty.onExit((pid, code) => {
         if (pid === ptyId) handleExit(code)

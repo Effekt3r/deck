@@ -54,21 +54,34 @@ async function start(): Promise<void> {
     },
   )
 
+  // ipcMain.on listeners can't reject like handle() can: a throw there becomes an
+  // error dialog, so arguments are checked first (the pty calls guard themselves).
   ipcMain.handle(IPC.ptyCreate, (_e, opts: PtyCreateOptions) =>
-    ptys.create({ ...opts, cwd: opts.cwd && isDir(opts.cwd) ? opts.cwd : homedir() }))
-  ipcMain.on(IPC.ptyWrite, (_e, id: string, data: string) => ptys.write(id, data))
-  ipcMain.on(IPC.ptyResize, (_e, id: string, cols: number, rows: number) => ptys.resize(id, cols, rows))
-  ipcMain.on(IPC.ptyKill, (_e, id: string) => ptys.kill(id))
+    ptys.create({ ...opts, cwd: typeof opts?.cwd === 'string' && isDir(opts.cwd) ? opts.cwd : homedir() }))
+  ipcMain.on(IPC.ptyWrite, (_e, id: unknown, data: unknown) => {
+    if (typeof id === 'string' && typeof data === 'string') ptys.write(id, data)
+  })
+  ipcMain.on(IPC.ptyResize, (_e, id: unknown, cols: unknown, rows: unknown) => {
+    if (typeof id === 'string' && typeof cols === 'number' && typeof rows === 'number') ptys.resize(id, cols, rows)
+  })
+  ipcMain.on(IPC.ptyAck, (_e, id: unknown, chars: unknown) => {
+    if (typeof id === 'string' && typeof chars === 'number') ptys.ack(id, chars)
+  })
+  ipcMain.on(IPC.ptyKill, (_e, id: unknown) => {
+    if (typeof id === 'string') ptys.kill(id)
+  })
 
   ipcMain.handle(IPC.appInfo, (): AppInfo => ({
     home: homedir(),
     version: app.getVersion(),
     windowsBuild: process.platform === 'win32' ? Number(release().split('.')[2]) || undefined : undefined,
   }))
-  ipcMain.on(IPC.appOpenExternal, (_e, url: string) => {
-    if (/^https?:\/\//i.test(url)) void shell.openExternal(url)
+  ipcMain.on(IPC.appOpenExternal, (_e, url: unknown) => {
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) void shell.openExternal(url)
   })
-  ipcMain.on(IPC.appCopyText, (_e, text: string) => clipboard.writeText(text))
+  ipcMain.on(IPC.appCopyText, (_e, text: unknown) => {
+    if (typeof text === 'string') clipboard.writeText(text)
+  })
   ipcMain.handle(IPC.appReadText, () => clipboard.readText())
   ipcMain.on(IPC.appReady, () => {
     rendererReady = true
@@ -96,6 +109,11 @@ async function start(): Promise<void> {
   })
   app.on('before-quit', () => ptys.killAll())
 }
+
+// A stray error in the main process is logged, not shown as a modal dialog over
+// every open terminal.
+process.on('uncaughtException', (err) => console.error('main: uncaught exception', err))
+process.on('unhandledRejection', (reason) => console.error('main: unhandled rejection', reason))
 
 // Passed to the running instance as additionalData: the argv it receives can be
 // reordered by Chromium, which separates `--open` from its folder.

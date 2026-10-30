@@ -72,6 +72,8 @@ export interface DeckApi {
     write(id: string, data: string): void
     resize(id: string, cols: number, rows: number): void
     kill(id: string): void
+    /** The terminal has processed `chars` characters of output (flow control). */
+    ack(id: string, chars: number): void
     onData(cb: (id: string, data: string) => void): () => void
     onExit(cb: (id: string, exitCode: number) => void): () => void
     /** The pty's foreground process changed (e.g. 'zsh' → 'claude'). */

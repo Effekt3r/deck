@@ -33,7 +33,9 @@ If `npm run dev` says Electron failed to install, run `node node_modules/electro
   `repo · <Claude's status title>` while Claude runs.
 - **Keys** (Windows: Ctrl+Shift instead of Cmd): Cmd+T new tab, Cmd+W close,
   Cmd+1…9 select, Cmd+Shift+O projects, Cmd+F find, Shift+Enter newline in Claude.
+  Next/previous tab: Cmd+Shift+] / [ (Windows: Ctrl+Tab / Ctrl+Shift+Tab).
   Windows copies/pastes with Ctrl+Shift+C/V (Ctrl+C copies only with a selection).
+  Nothing uses Ctrl+Alt, which is AltGr on many keyboard layouts.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 

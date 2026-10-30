@@ -3,6 +3,7 @@ export const IPC = {
   ptyWrite: 'pty:write',
   ptyResize: 'pty:resize',
   ptyKill: 'pty:kill',
+  ptyAck: 'pty:ack',
   ptyData: 'pty:data',
   ptyExit: 'pty:exit',
   ptyProcess: 'pty:process',

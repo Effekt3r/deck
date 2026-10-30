@@ -41,7 +41,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: npm ci
-      - run: npm test --if-present
+      - run: npm run typecheck   # the electron-vite build doesn't typecheck
+      - run: npm test
       - run: npm run build
 
       - name: macOS signing material
