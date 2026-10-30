@@ -1,0 +1,14 @@
+# /etc/zshrc set HISTFILE from ZDOTDIR, i.e. into this folder: point it home.
+[[ $HISTFILE == "$DECK_ZDOTDIR"/* ]] && HISTFILE="$DECK_USER_ZDOTDIR/.zsh_history"
+if [[ -f "$DECK_USER_ZDOTDIR/.zshrc" ]]; then
+  if [[ $DECK_USER_ZDOTDIR == "$HOME" ]]; then unset ZDOTDIR; else ZDOTDIR=$DECK_USER_ZDOTDIR; fi
+  . "$DECK_USER_ZDOTDIR/.zshrc"
+  DECK_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
+  ZDOTDIR=$DECK_ZDOTDIR
+fi
+. "$DECK_ZDOTDIR/deck.zsh"
+# Non-login shells never read .zlogin, so hand ZDOTDIR back now.
+if [[ ! -o login ]]; then
+  if [[ $DECK_USER_ZDOTDIR == "$HOME" ]]; then unset ZDOTDIR; else ZDOTDIR=$DECK_USER_ZDOTDIR; fi
+  unset DECK_ZDOTDIR DECK_USER_ZDOTDIR
+fi

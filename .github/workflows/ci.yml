@@ -1,0 +1,27 @@
+# Unit tests and typecheck on macOS and Windows, for pull requests (or run by
+# hand). Windows is where this matters most: the pty, path and shell-launch tests
+# run against ConPTY and Windows paths, which no one has run locally yet.
+name: ci
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, windows-latest]   # macos-14 images retire 2026-11-02
+    runs-on: ${{ matrix.os }}
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: '1' # the unit tests don't start Electron
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

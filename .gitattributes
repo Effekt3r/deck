@@ -1,0 +1,4 @@
+# Shell scripts bundled into the app must keep LF line endings even when the
+# repo is checked out on Windows with core.autocrlf (zsh chokes on CRLF).
+src/main/shell/scripts/zsh/* text eol=lf
+*.sh text eol=lf

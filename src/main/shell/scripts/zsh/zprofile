@@ -1,0 +1,6 @@
+if [[ -f "$DECK_USER_ZDOTDIR/.zprofile" ]]; then
+  if [[ $DECK_USER_ZDOTDIR == "$HOME" ]]; then unset ZDOTDIR; else ZDOTDIR=$DECK_USER_ZDOTDIR; fi
+  . "$DECK_USER_ZDOTDIR/.zprofile"
+  DECK_USER_ZDOTDIR=${ZDOTDIR:-$HOME}
+  ZDOTDIR=$DECK_ZDOTDIR
+fi

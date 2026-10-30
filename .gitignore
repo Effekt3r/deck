@@ -2,3 +2,9 @@ __pycache__/
 *.pyc
 *.bak.*
 .DS_Store
+
+# electron-builder resources; un-ignore over a global "build" exclude
+!/build/
+node_modules/
+out/
+dist/

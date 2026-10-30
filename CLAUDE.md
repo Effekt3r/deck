@@ -22,11 +22,52 @@ app by Effekt Studios**. Franco keeps using Claude Code in a terminal, but wants
 Name is **Deck** (not "Claude …" — Anthropic trademark; don't put "Claude" in the
 product name, bundle id or icon). Description/copy is ours to write.
 
-## Current state: working prototype (v0)
+## Current state
 
-This repo is a WezTerm-based prototype that already does 1–4 with text (TUI)
-panes. It's the behaviour reference for the real app — keep it working until
-Deck replaces it.
+**Deck app: M1 done** (2026-10-30, branch `m1-electron-shell`): Electron app with
+the Projects tab, terminal tabs and shell integration. Git panel (M2) and Claude
+panel (M3) are next. Plan that built it:
+`docs/superpowers/plans/2026-10-30-m1-electron-shell.md`.
+
+| Path | Role |
+|---|---|
+| `src/shared/` | `DeckApi` IPC contract (`types.ts`) and channel names; the only thing main and renderer share |
+| `src/preload/index.ts` | exposes `window.deck`; sandboxed, requires only `electron` |
+| `src/main/index.ts` | lifecycle, single instance + `--open <folder>`, IPC wiring; `window.ts`, `menu.ts` (platform shortcuts → `MenuCommand`) |
+| `src/main/shell/` | `shellLaunch()` (which shell/args/env, pure), zsh `ZDOTDIR` wrappers + `deck.zsh`, PowerShell `deck.ps1`, installed to userData |
+| `src/main/pty/` | node-pty sessions, output batching, startup command typed when the line editor is ready |
+| `src/main/projects/` | `projects.json` (userData), scan, `.git/HEAD` branch, dirty counts, native context menu |
+| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search), `projects/` |
+
+Things that aren't obvious from the code:
+- The app scrubs a parent Claude Code session's variables (`CLAUDECODE`, session
+  ids, messaging socket, `GIT_EDITOR=true`) from shells, so starting Deck from a
+  Claude shell doesn't make its `claude` a nested child.
+- The tab's command is typed when zsh's line editor turns on bracketed paste
+  (`ESC[?2004h`) after the prompt mark. Typing at the mark echoed it twice, and
+  zsh gets no blind timeout because it would type into oh-my-zsh's update question.
+- node-pty 1.1.0 publishes its macOS `spawn-helper` without the execute bit;
+  `scripts/postinstall.mjs` fixes it, or every spawn fails with `posix_spawnp failed`.
+- PowerShell loads the hook as `try { . 'deck.ps1' } catch {}`, not with
+  `-ExecutionPolicy Bypass` (security tools flag it), so Windows PowerShell 5.1
+  under its default Restricted policy runs without integration; pwsh 7 is fine.
+- The second instance's `argv` can be reordered, so `--open` travels in
+  `requestSingleInstanceLock` additionalData.
+- At a prompt the tab title is the folder: the shell's own idle title (oh-my-zsh's
+  `user@host:dir`) is dropped when `GIT_REPO` arrives.
+- Off macOS, Electron menu accelerators only fire for keys the page leaves alone,
+  so `terminal/keys.ts` returns `'menu'` for Deck's own Ctrl+Shift shortcuts and
+  Ctrl+Tab. Never bind Ctrl+Alt (AltGr on German/French layouts); match keys by
+  `e.code`. `menu.test.ts` enforces both for Windows.
+- Flow control: the renderer acks output from xterm's write callback and main
+  pauses a pty above 100k unacknowledged chars (resumes below 10k). Anything
+  that writes to xterm must ack, or that tab freezes.
+- `ipcMain.on` listeners check their arguments and pty calls are guarded: a throw
+  in a listener shows a modal error dialog (node-pty throws on a pty whose shell
+  just exited).
+
+**WezTerm prototype (v0):** does 1–4 with text (TUI) panes. It's the behaviour
+reference for M2/M3; keep it working until Deck replaces it.
 
 | File | Role |
 |---|---|
@@ -37,6 +78,23 @@ Deck replaces it.
 | `wezterm-git.zsh` / `wezterm-git.ps1` | Prompt hooks: emit `GIT_REPO`, `GIT_BRANCH` user vars (OSC 1337 SetUserVar) + OSC 7 cwd |
 | `projects.json` / `projects.windows.json` | Dashboard config: `command`, `pinned`, `scan`, `depth` |
 | `install.sh` / `install.ps1` | Install WezTerm, copy files to `~/.config/wezterm`, hook the shell profile |
+
+### Branding and packaging (ready for the Electron app)
+| Path | Role |
+|---|---|
+| `branding/generate.py` | Regenerates every icon/installer image from SVG; see `branding/README.md` |
+| `build/icon.icns` / `icon.ico` / `icon.png` / `icons/` | App icons (Mac full iconutil slot set, Windows 16–256, Linux PNGs) |
+| `build/background*.png` | DMG window (app at x180, Applications at x480, y215) |
+| `build/installer*.bmp`, `uninstallerSidebar.bmp`, `installer.nsh`, `license.txt` | NSIS installer art, "Open in Deck" folder context menu, EULA (have Franco review) |
+| `build/trayTemplate*.png`, `tray.*` | Menu-bar / tray icons |
+| `build/entitlements.mac.plist` | Hardened-runtime entitlements (JIT, node-pty, network) |
+| `electron-builder.yml` | Mac dmg+zip (arm64/x64, notarised), Windows NSIS (x64; arm64 later), GitHub publish |
+| `.github/workflows/release.yml` | Tag `v*` → build both platforms; signs only when secrets exist |
+
+The NSIS include passes `--open "<folder>"`: the app must handle that argument
+(open a tab in that folder). Bundle id `com.effektstudios.deck` is confirmed.
+`build/` is un-ignored in `.gitignore` because Franco's global gitignore
+excludes every `build` folder.
 
 ### How the prototype fits together
 - Shell prompt → hook sets `GIT_REPO`/`GIT_BRANCH` user vars → `user-var-changed`
@@ -133,19 +191,58 @@ Deck replaces it.
 
 1. ~~Smoke-test the prototype on the Mac; fix what breaks. Check a real session log
    under `~/.claude/projects/` against the parser above.~~ Done (M0, 2026-10-30).
-2. Confirm open decisions with Franco (see `docs/DECK.md` → Open decisions).
-   Default if he doesn't say: **Electron + xterm.js + node-pty**, unsigned CI
-   builds with signing switched on by secrets.
-3. Scaffold Deck per `docs/DECK.md`, porting the Python logic (merge-target rules,
-   log parser, dashboard scan) to TypeScript with unit tests against fixtures.
-4. CI for macOS (arm64 + x64) and Windows x64; signing + notarisation once
-   certificates are in place.
+2. ~~Confirm open decisions with Franco.~~ Done 2026-10-30, recorded in
+   `docs/DECK.md` → Decisions: Electron + xterm.js + node-pty, Apple Developer ID
+   (no Windows signing yet), GitHub Actions, `com.effektstudios.deck`, the
+   branch + chevron icon in `branding/`.
+3. ~~Scaffold Deck and build M1 (tabs, terminal, shell integration, Projects tab;
+   the dashboard scan is ported).~~ Done 2026-10-30.
+   **Next: M2 git panel**, porting the merge-target rules and graph from
+   `git_graph_pane.py`, then **M3 Claude panel**, porting the log parser from
+   `claude_activity_pane.py`, both to TypeScript with unit tests against fixtures.
+   Write fixtures by hand in the shapes above; never copy real session logs into
+   the repo (they hold client code and prompts). Test M1 on Windows 11 too.
+4. CI for macOS (arm64 + x64) and Windows x64: `.github/workflows/release.yml`
+   exists; Mac signing + notarisation switch on when the secrets are added,
+   Windows stays unsigned until there's a signing route. `ci.yml` runs typecheck +
+   tests on macOS and Windows for pull requests.
+
+Deferred from the M1 review (`3f9feb6` fixed the important ones):
+- **Windows, untested:**
+  - PowerShell may decode the hook's git output in the console code page, which
+    would garble non-ASCII repo paths; switch to UTF-8 around the calls.
+  - Launch pwsh by absolute path (`where pwsh`): a `pwsh.exe` in the current folder wins.
+  - The hook's `'` escaping misses `‘ ’`.
+  - Dropping a folder on the Dock icon needs folder document types in `mac.extendInfo`.
+- **Startup command:** zsh has no fallback when the hook never loads (`/etc/zshenv`
+  setting ZDOTDIR, `exec tmux` in `.zshrc`); show a hint after ~10 s. Consider
+  cancelling it when the user types first; xterm's own replies (DA, cursor
+  reports) go through the same path, so filter those out.
+- **Main:**
+  - If shell-integration install fails, start without it rather than with no window.
+  - Async `stat` in IPC.
+  - Reload the window after a renderer crash.
+- **Projects:**
+  - An invalid `projects.json` is replaced by defaults on the next save (keep a backup).
+  - The scan has no concurrency limit and refreshes can overlap.
+  - Reftable repos show `.invalid` as the branch.
+- **Renderer:** route pty events from one listener; memoize `ProjectsView`. Decide
+  whether Shift+Enter → `ESC CR` should apply only in tabs running Claude, and add
+  close confirmations (M5).
+- **Tests:** a `deck.ps1` test with Homebrew `pwsh`; the zsh test covers `-i -c`, not `-l`.
+- **Security (M4):**
+  - Check the IPC sender frame.
+  - Load the renderer from a custom protocol, not `file://`.
+  - Deny permission requests.
+  - Set Electron fuses, after moving node-pty into a `utilityProcess` (its Windows
+    kill runs Electron as Node).
 
 ## Conventions
 
 - **Never add `Co-Authored-By` lines** to commits or PRs.
-- Commit author: Franco Landman <franco.landman@wyobi.com> unless he says to use an
-  Effekt Studios address.
+- Commit author: Franco Landman <franco@effektstudios.com> (from 2026-10-30;
+  the first three commits used franco.landman@wyobi.com). His global git email
+  is the outlook.com one, so set it per commit: `git -c user.email=franco@effektstudios.com commit …`.
 - Everything must work on **macOS (Apple silicon) and Windows 11** — no Mac-only
   shortcuts in shared code; keep paths, shells and keys platform-aware.
 - Franco's repos: Wyobi under `/Volumes/wyobi`, others under `~/Development`.
@@ -155,7 +252,23 @@ Deck replaces it.
 ## Handy commands
 
 ```bash
-# render panes once, no TTY needed
+# Deck app (Node 22: export PATH="$HOME/.nvm/versions/node/v22.19.0/bin:$PATH" or `nvm use`)
+npm test && npm run typecheck && npm run build
+npm run dev                                   # the app, with renderer hot reload
+npx electron-vite dev --remoteDebuggingPort 9333   # + DevTools protocol for scripted checks
+# unsigned packaged app (never let it sign with whatever identity is in the keychain)
+CSC_IDENTITY_AUTO_DISCOVERY=false npx electron-builder --mac --dir --arm64 -c.mac.notarize=false -c.mac.identity=null
+```
+
+Checking the running app from a shell: with `--remoteDebuggingPort`, fetch
+`http://127.0.0.1:9333/json`, open the page's `webSocketDebuggerUrl` (Node 22 has
+`WebSocket`) and send `Runtime.evaluate` to read tab titles or row counts. The
+terminal itself is a WebGL canvas, so to read a shell's state, type a command
+that writes to a file. The dev app runs as process "Electron", the packaged one as
+"Deck"; both use the same userData, so quit one before starting the other.
+
+```bash
+# render prototype panes once, no TTY needed
 python3 git_graph_pane.py /path/to/repo --once --width 80 --height 30
 CLAUDE_CONFIG_DIR=~/.claude python3 claude_activity_pane.py /path/to/repo --once --width 60 --height 40
 python3 project_dashboard.py --once

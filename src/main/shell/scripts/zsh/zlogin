@@ -1,0 +1,4 @@
+# Last startup file: hand ZDOTDIR back (zsh reads .zlogout from it at exit).
+if [[ $DECK_USER_ZDOTDIR == "$HOME" ]]; then unset ZDOTDIR; else ZDOTDIR=$DECK_USER_ZDOTDIR; fi
+[[ -f "$DECK_USER_ZDOTDIR/.zlogin" ]] && . "$DECK_USER_ZDOTDIR/.zlogin"
+unset DECK_ZDOTDIR DECK_USER_ZDOTDIR
