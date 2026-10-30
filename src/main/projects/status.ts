@@ -1,10 +1,8 @@
-import { execFile } from 'node:child_process'
-import { promisify } from 'node:util'
 import type { ProjectStatus } from '@shared/types'
+import { tryGit } from '../git/runner'
 
-const run = promisify(execFile)
-
-/** Counts from `git status --porcelain=v1`, as `status_counts()` in the prototype does. */
+/** Counts from `git status --porcelain=v1`, one per path: a path staged and changed again is one
+ *  changed path here (the git panel's `countStatus` in git/summary.ts counts it in both). */
 export function countStatus(porcelain: string): Omit<ProjectStatus, 'path'> {
   let changed = 0
   let untracked = 0
@@ -20,20 +18,9 @@ export function countStatus(porcelain: string): Omit<ProjectStatus, 'path'> {
 }
 
 async function statusOf(path: string, timeout: number): Promise<ProjectStatus | null> {
-  try {
-    // core.fsmonitor off: a repo's config could otherwise start a daemon or run a
-    // command of its choosing every time the Projects tab refreshes.
-    const { stdout } = await run('git', ['-C', path, '-c', 'core.fsmonitor=false', 'status', '--porcelain=v1'], {
-      // Optional locks off so this never takes index.lock while Claude commits; never wait on a prompt.
-      env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' },
-      timeout,
-      maxBuffer: 16 * 1024 * 1024,
-      windowsHide: true,
-    })
-    return { path, ...countStatus(stdout) }
-  } catch {
-    return null // not a repo, no git, or too slow
-  }
+  // The runner keeps optional locks and fsmonitor off; null: not a repo, no git, or too slow.
+  const out = await tryGit(path, ['status', '--porcelain=v1'], { timeoutMs: timeout })
+  return out === null ? null : { path, ...countStatus(out) }
 }
 
 /** Dirty counts for each repo in `paths`, a few git processes at a time; non-repos are left out. */

@@ -107,7 +107,7 @@ export interface GitSummary {
 
 export interface GitSnapshot {
   summary: GitSummary
-  /** First page of `git log --all --exclude=refs/stash --date-order`. */
+  /** First page of `git log --exclude=refs/stash --all --date-order` (the exclude only applies to an `--all` after it). */
   commits: GitCommit[]
   hasMore: boolean
   /** Commits in target..HEAD (at most 2000). */

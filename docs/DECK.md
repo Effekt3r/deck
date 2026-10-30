@@ -45,7 +45,7 @@ Side panels are resizable and collapsible per tab and remember their width.
 **Git panel** (git repos only)
 - Header: current branch, merge target + commits to merge / behind, upstream
   ahead/behind, staged/changed/untracked/conflicts, in-progress merge/rebase.
-- Real graph: lanes computed from `git log --all --exclude=refs/stash
+- Real graph: lanes computed from `git log --exclude=refs/stash --all
   --date-order --format=%H%x1f%P%x1f%D%x1f%s%x1f%ct%x1f%an`, drawn on canvas/SVG
   with Sourcetree-like curves; branch/tag pills; commits that will merge
   highlighted; virtualised scrolling.
