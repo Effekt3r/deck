@@ -1,3 +1,42 @@
+# Deck
+
+A terminal built around Claude Code, by Effekt Studios: every project in a tab,
+its git history on the left and what Claude is doing on the right. Spec and plan:
+[`docs/DECK.md`](docs/DECK.md).
+
+**Status:** M1 — the Electron app has the Projects tab and terminal tabs with
+shell integration. The git panel (M2) and Claude panel (M3) still live in the
+WezTerm prototype below.
+
+## Deck app (Electron)
+
+Needs Node 22 (`nvm use` reads `.nvmrc`).
+
+```bash
+npm install          # postinstall fixes node-pty's spawn-helper permissions
+npm run dev          # app with hot reload
+npm test             # unit tests (vitest)
+npm run typecheck
+npm run build        # out/
+npm run dist:mac     # dist/ (dmg + zip; unsigned unless signing secrets are set)
+```
+
+If `npm run dev` says Electron failed to install, run `node node_modules/electron/install.js`.
+
+- **Projects tab:** pinned folders, then repos under the scan roots, newest
+  first, with branch, changes and an "open" marker. Double-click (or Enter) opens
+  a tab that runs the configured command; right-click for shell only, pin,
+  reveal, copy path; Settings for the command, scan roots and depth. The first
+  run imports `~/.config/wezterm/projects.json` from the prototype.
+- **Terminal tabs:** xterm.js (WebGL) on node-pty. zsh and PowerShell get Deck's
+  prompt hook automatically (no dotfile edits), so tabs show `repo ⎇ branch`, or
+  `repo · <Claude's status title>` while Claude runs.
+- **Keys** (Windows: Ctrl+Shift instead of Cmd): Cmd+T new tab, Cmd+W close,
+  Cmd+1…9 select, Cmd+Shift+O projects, Cmd+F find, Shift+Enter newline in Claude.
+  Windows copies/pastes with Ctrl+Shift+C/V (Ctrl+C copies only with a selection).
+- **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
+  tab in the running window.
+
 # Claude workspace for WezTerm (prototype)
 
 One terminal app, many tabs. Each tab opened in a git repo becomes:

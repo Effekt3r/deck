@@ -122,8 +122,8 @@ deck/
 
 ## Milestones
 
-1. **M0** — prototype verified on Mac (this repo).
-2. **M1** — Electron shell: tabs + terminal + shell integration + Projects tab.
+1. **M0** — prototype verified on Mac (this repo). Done 2026-10-30.
+2. **M1** — Electron shell: tabs + terminal + shell integration + Projects tab. Done 2026-10-30 on macOS; Windows still to test.
 3. **M2** — Git panel with real graph + live refresh.
 4. **M3** — Claude panel.
 5. **M4** — Signed and notarised Mac build + signed Windows installer from CI.
