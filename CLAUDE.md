@@ -55,6 +55,16 @@ Things that aren't obvious from the code:
   `requestSingleInstanceLock` additionalData.
 - At a prompt the tab title is the folder: the shell's own idle title (oh-my-zsh's
   `user@host:dir`) is dropped when `GIT_REPO` arrives.
+- Off macOS, Electron menu accelerators only fire for keys the page leaves alone,
+  so `terminal/keys.ts` returns `'menu'` for Deck's own Ctrl+Shift shortcuts and
+  Ctrl+Tab. Never bind Ctrl+Alt (AltGr on German/French layouts); match keys by
+  `e.code`. `menu.test.ts` enforces both for Windows.
+- Flow control: the renderer acks output from xterm's write callback and main
+  pauses a pty above 100k unacknowledged chars (resumes below 10k). Anything
+  that writes to xterm must ack, or that tab freezes.
+- `ipcMain.on` listeners check their arguments and pty calls are guarded: a throw
+  in a listener shows a modal error dialog (node-pty throws on a pty whose shell
+  just exited).
 
 **WezTerm prototype (v0):** does 1–4 with text (TUI) panes. It's the behaviour
 reference for M2/M3; keep it working until Deck replaces it.
@@ -194,7 +204,38 @@ excludes every `build` folder.
    the repo (they hold client code and prompts). Test M1 on Windows 11 too.
 4. CI for macOS (arm64 + x64) and Windows x64: `.github/workflows/release.yml`
    exists; Mac signing + notarisation switch on when the secrets are added,
-   Windows stays unsigned until there's a signing route.
+   Windows stays unsigned until there's a signing route. `ci.yml` runs typecheck +
+   tests on macOS and Windows for pull requests.
+
+Deferred from the M1 review (`3f9feb6` fixed the important ones):
+- **Windows, untested:**
+  - PowerShell may decode the hook's git output in the console code page, which
+    would garble non-ASCII repo paths; switch to UTF-8 around the calls.
+  - Launch pwsh by absolute path (`where pwsh`): a `pwsh.exe` in the current folder wins.
+  - The hook's `'` escaping misses `‘ ’`.
+  - Dropping a folder on the Dock icon needs folder document types in `mac.extendInfo`.
+- **Startup command:** zsh has no fallback when the hook never loads (`/etc/zshenv`
+  setting ZDOTDIR, `exec tmux` in `.zshrc`); show a hint after ~10 s. Consider
+  cancelling it when the user types first; xterm's own replies (DA, cursor
+  reports) go through the same path, so filter those out.
+- **Main:**
+  - If shell-integration install fails, start without it rather than with no window.
+  - Async `stat` in IPC.
+  - Reload the window after a renderer crash.
+- **Projects:**
+  - An invalid `projects.json` is replaced by defaults on the next save (keep a backup).
+  - The scan has no concurrency limit and refreshes can overlap.
+  - Reftable repos show `.invalid` as the branch.
+- **Renderer:** route pty events from one listener; memoize `ProjectsView`. Decide
+  whether Shift+Enter → `ESC CR` should apply only in tabs running Claude, and add
+  close confirmations (M5).
+- **Tests:** a `deck.ps1` test with Homebrew `pwsh`; the zsh test covers `-i -c`, not `-l`.
+- **Security (M4):**
+  - Check the IPC sender frame.
+  - Load the renderer from a custom protocol, not `file://`.
+  - Deny permission requests.
+  - Set Electron fuses, after moving node-pty into a `utilityProcess` (its Windows
+    kill runs Electron as Node).
 
 ## Conventions
 
