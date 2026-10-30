@@ -1,0 +1,123 @@
+# Deck — product spec and build plan
+
+**Deck** · by Effekt Studios
+*A terminal built around Claude Code: every project in a tab, its git history on
+the left and what Claude is doing on the right.*
+
+## Layout
+
+```
+┌ Tabs: ⌂ Projects | AccessControl_Guard ✳ | AgriHost ⎇ dev | + ───────────────┐
+├ Git ─────────────┬ Terminal ──────────────────────────┬ Claude ───────────────┤
+│ ⎇ feature/X      │ $ claude --effort max …            │ ✻ working · ctx 84k   │
+│ ↳ into dev (2)   │                                    │ To-do 1/3             │
+│ ●─┐ a1b2 feat…   │                                    │ Agents 1 running      │
+│ │ ● c3d4 main    │                                    │ feed: prompts,        │
+│ ●─┘ …            │                                    │ thinking, tools       │
+└──────────────────┴────────────────────────────────────┴───────────────────────┘
+```
+Side panels are resizable and collapsible per tab and remember their width.
+
+## Features (v1)
+
+**Projects tab** (always first, can't be closed)
+- Grid/list of pinned folders, then repos found under scan roots
+  (`/Volumes/wyobi`, `~/Development` on Mac), newest activity first.
+- Shows name, branch, dirty state, last activity, "open" marker.
+- Double-click → new tab in that folder running the configured command
+  (default `claude --effort max --model claude-opus-5-5 --remote-control`).
+  Context menu: open shell only, pin/unpin, reveal in Finder/Explorer, copy path.
+- Filter box; settings for command, scan roots, depth.
+
+**Terminal tab**
+- xterm.js with WebGL renderer, Unicode 11 widths, search, links, 50k scrollback.
+- Shell integration injected automatically (no editing the user's dotfiles):
+  zsh via a `ZDOTDIR` wrapper that sources the user's real `.zshrc`; PowerShell
+  via `-NoExit -Command ". <hook>"`. The hooks emit OSC 7 (cwd) and
+  OSC 1337 SetUserVar (`GIT_REPO`, `GIT_BRANCH`), parsed with
+  `term.parser.registerOscHandler`.
+- Shift+Enter sends `ESC CR` (newline in Claude's prompt).
+- Tab title: repo name plus Claude's own terminal title (✳ status) when Claude
+  is running, else branch.
+- Native notification when a tab's Claude goes from working → waiting on you/idle
+  while Deck isn't focused (nice to have).
+
+**Git panel** (git repos only)
+- Header: current branch, merge target + commits to merge / behind, upstream
+  ahead/behind, staged/changed/untracked/conflicts, in-progress merge/rebase.
+- Real graph: lanes computed from `git log --all --exclude=refs/stash
+  --date-order --format=%H%x1f%P%x1f%D%x1f%s%x1f%ct%x1f%an`, drawn on canvas/SVG
+  with Sourcetree-like curves; branch/tag pills; commits that will merge
+  highlighted; virtualised scrolling.
+- Click a commit → details (message, files changed); copy hash. Read-only in v1.
+- Refresh: `fs.watch` on `.git/HEAD`, `.git/refs`, `packed-refs`, `index`,
+  `logs/HEAD` (+ worktree git dirs), debounced 300 ms, with a 3 s poll fallback.
+  Always `GIT_OPTIONAL_LOCKS=0`.
+- Merge-target rules: as in `CLAUDE.md`, plus a per-repo override in the UI.
+
+**Claude panel**
+- Follows the newest session for the folder (and its worktrees); session picker.
+- Status, model, context size, git branch, session title.
+- To-do list, sub-agents with live current step.
+- Feed: prompts, thinking (collapsible), replies (markdown), tool calls with
+  icons and one-line summaries, errors; follow/pause on scroll.
+- Read-only: never writes to Claude's files or sends input.
+
+## Architecture (default: Electron)
+
+```
+deck/
+  package.json            electron-vite + electron-builder
+  electron-builder.yml
+  build/                  icons, entitlements.mac.plist
+  src/main/
+    index.ts              windows, menus, IPC
+    pty.ts                node-pty sessions per tab (spawn, resize, kill)
+    shell-integration/    zsh ZDOTDIR wrapper, pwsh hook
+    git/                  runner (GIT_OPTIONAL_LOCKS=0), watcher, mergeTarget.ts, log parser
+    claude/               session locator, incremental JSONL tailer, event model
+    projects/             scan, config (app userData/projects.json)
+  src/preload/            typed IPC bridge (contextIsolation on, no nodeIntegration)
+  src/renderer/           React + TS
+    tabs/, terminal/ (xterm), git-panel/ (graph lanes + canvas), claude-panel/, projects/
+  test/fixtures/          sample repos script, sample session .jsonl files
+```
+- Port the logic from the prototype's Python (merge target, status parsing, log
+  parser, dashboard scan) with unit tests (vitest) against fixtures.
+- Security: contextIsolation, sandboxed renderer, strict CSP, no remote content.
+
+## Packaging, signing, releases
+
+- `appId`: `com.effektstudios.deck` (confirm), `productName`: Deck,
+  copyright "© Effekt Studios".
+- **macOS:** dmg + zip, arm64 and x64. Hardened runtime with entitlements for
+  Electron JIT. Sign with **Developer ID Application: Effekt Studios**, then
+  notarise with an App Store Connect API key (`APPLE_API_KEY`,
+  `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`). The node-pty native binaries must be
+  signed too; electron-builder handles that.
+- **Windows:** NSIS installer, x64 (arm64 later). Sign with Azure Trusted Signing
+  (electron-builder `azureSignOptions`) or an OV/EV certificate on a cloud HSM.
+  Check Trusted Signing accepts a South African company first.
+- **CI:** GitHub Actions in the private repo (macos-14 + windows-latest), or
+  Codemagic, which Franco already uses. Builds stay unsigned until the signing
+  secrets exist, then sign automatically. Tag `v*` → draft GitHub Release.
+- Auto-update via electron-updater from GitHub Releases (private repo needs a
+  token — decide later).
+
+## Open decisions (ask Franco)
+
+1. Stack: Electron (default) vs Tauri vs rebranded WezTerm fork.
+2. Signing assets: does Effekt Studios have an Apple Developer ID team and a
+   Windows signing route yet?
+3. Bundle id and the commit/author email for Effekt Studios work.
+4. CI: GitHub Actions or Codemagic.
+5. Icon and visual identity (Effekt Studios brand?).
+
+## Milestones
+
+1. **M0** — prototype verified on Mac (this repo).
+2. **M1** — Electron shell: tabs + terminal + shell integration + Projects tab.
+3. **M2** — Git panel with real graph + live refresh.
+4. **M3** — Claude panel.
+5. **M4** — Signed and notarised Mac build + signed Windows installer from CI.
+6. **M5** — Polish: settings UI, notifications, auto-update.
