@@ -1246,14 +1246,23 @@ export function registerClipboardIpc(opts: { tempDir: string; platform: Platform
       void watch.baseline()
       w.on('focus', () => watch.focus())
       w.on('blur', () => watch.blur())
-      // A locked screen or a sleeping Mac sends no blur: stop looking then too.
+      // A locked screen or a sleeping Mac sends no blur: stop looking then too (blur() does nothing
+      // when Deck wasn't in front). Waking with a password first fires resume, then unlock-screen:
+      // look again only once unlocked.
+      let locked = false
       const away = () => watch.blur()
       const back = () => {
-        if (!w.isDestroyed() && w.isFocused()) watch.focus()
+        if (!locked && !w.isDestroyed() && w.isFocused()) watch.focus()
       }
-      powerMonitor.on('lock-screen', away)
+      powerMonitor.on('lock-screen', () => {
+        locked = true
+        away()
+      })
+      powerMonitor.on('unlock-screen', () => {
+        locked = false
+        back()
+      })
       powerMonitor.on('suspend', away)
-      powerMonitor.on('unlock-screen', back)
       powerMonitor.on('resume', back)
       if (w.isFocused()) watch.focus()
     },
@@ -1880,6 +1889,12 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
   - with a 5K screenshot PNG (`pb hold-png`).
 
   Each should stay well under 5% of a core. The git poll's 12% is the warning sign.
+
+- [ ] **Step 6c: Lock and unlock.** With Deck in front, lock the screen (⌃⌘Q), wait 5 s, then unlock.
+  - Polling stops while locked: no reads, which shows up in the CPU check of 6b.
+  - It starts again after unlocking. A screenshot taken then shows a card at the next look.
+
+  If no card appears, `w.isFocused()` was false at `unlock-screen`, and `back()` needs another signal (`focus` again after unlock).
 
 - [ ] **Step 7: Clean up.** Stop the fake claude with Ctrl+D, quit the dev app, then run `pb restore /tmp/deck-clip-saved.plist` and `rm -rf /tmp/deckclip`. Compare the clipboard's checksum with the one from before; don't print its contents.
 
