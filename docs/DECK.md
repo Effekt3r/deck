@@ -138,4 +138,14 @@ deck/
 5. **M4** — Signed and notarised Mac build + signed Windows installer from CI.
    Mac signing and notarisation work (2026-10-31); Windows signing waits
    for a route.
-6. **M5** — Polish: settings UI, notifications, auto-update.
+6. **M5** — Polish: settings UI, notifications, auto-update, and:
+   - **Clipboard card and smart paste:** the Claude panel shows what was just
+     copied (image, files, text) with "Add to Claude"; Cmd/Ctrl+V and drops
+     insert images and files as paths. Spec:
+     `docs/superpowers/specs/2026-10-31-clipboard-design.md`.
+   - **Permissions guide on first launch:** walk through every permission Deck
+     needs, including what Claude Code and the other tools in its tabs need
+     (macOS asks on Deck's behalf for anything run in a tab): Desktop, Documents
+     and Downloads, removable and network volumes (`/Volumes/wyobi`), Local
+     Network, Notifications. Ask for access whenever a project folder is added
+     (pinned or a scan root). Windows equivalents where they exist.
