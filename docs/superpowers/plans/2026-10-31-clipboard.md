@@ -261,6 +261,8 @@ git -c user.email=franco@effektstudios.com commit -m "Clipboard: contract, shell
 
 ### Task 2: Clipboard content, previews and fingerprints
 
+> Done and reviewed. The code below is the first version; review fixes changed it (see "After review" at the end of this task). The final code is in `src/main/clipboard/item.ts`; don't re-run these steps as written.
+
 **Files:**
 - Create: `src/main/clipboard/item.ts`
 - Test: `src/main/clipboard/item.test.ts`
@@ -441,6 +443,8 @@ git -c user.email=franco@effektstudios.com commit -m "Clipboard: content, previe
 ---
 
 ### Task 3: Saved images and the text to insert
+
+> Done and reviewed. The code below is the first version; review fixes changed it (see "After review" at the end of this task). The final code is in `src/main/clipboard/temp.ts` and `insert.ts`; don't re-run these steps as written.
 
 **Files:**
 - Create: `src/main/clipboard/temp.ts`, `src/main/clipboard/insert.ts`
@@ -1911,6 +1915,9 @@ Also add a row to the `src/main` table:
      paths may need double quotes.)
 18c. Copy a password from your password manager: no card, and Ctrl+V pastes it as before.
 18d. Drag a PDF from Explorer onto the terminal: its quoted path appears.
+18e. Copy a new screenshot and click **Add to Claude** several times quickly. Each click
+     inserts the path, with no "Couldn't save the image" error. (Antivirus can hold a
+     just-written file for a moment; Deck retries.)
 ```
 
 `docs/DECK.md`, in M5, add `(built 2026-10-31; Windows to test)` after the clipboard bullet's title.
