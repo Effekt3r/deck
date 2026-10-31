@@ -12,16 +12,17 @@ export interface InsertDeps {
 }
 
 /** The text that inserts `content` into a terminal:
- *  - files: their quoted paths (Claude reads them);
- *  - text: as it is;
- *  - an image, in a tab running Claude: the quoted path of a saved PNG, which Claude Code
- *    attaches as [Image #N]; in a shell tab: null, nothing, as before. */
+ *  - files: their quoted paths (Claude reads them), with a trailing space (Terminal.app/iTerm2
+ *    paste file paths the same way, so two drops or pastes in a row don't run together);
+ *  - text: as it is, no trailing space;
+ *  - an image, in a tab running Claude: the quoted path of a saved PNG (with the same trailing
+ *    space), which Claude Code attaches as [Image #N]; in a shell tab: null, nothing, as before. */
 export async function insertFor(content: ClipboardContent, claude: boolean, deps: InsertDeps): Promise<InsertResult | null> {
   switch (content.kind) {
     case 'files': {
       if (!content.paths.length) return null // nothing to paste
       const text = quotePaths(content.paths, deps.platform)
-      return text === null ? { error: UNSAFE } : { text }
+      return text === null ? { error: UNSAFE } : { text: text + ' ' }
     }
     case 'text':
       return { text: content.text }
@@ -29,7 +30,7 @@ export async function insertFor(content: ClipboardContent, claude: boolean, deps
       if (!claude) return null
       try {
         const text = quotePath(await deps.saveImage(content.png), deps.platform)
-        return text === null ? { error: UNSAFE } : { text }
+        return text === null ? { error: UNSAFE } : { text: text + ' ' }
       } catch (err) {
         return { error: `Couldn't save the image for Claude: ${err instanceof Error ? err.message : String(err)}` }
       }

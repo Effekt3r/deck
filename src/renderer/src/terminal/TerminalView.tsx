@@ -1,4 +1,4 @@
-import { memo, type MutableRefObject, useEffect, useRef, useState } from 'react'
+import { memo, type RefObject, useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
@@ -22,7 +22,7 @@ interface Props {
   /** Windows build number; lets xterm reflow ConPTY output on resize. */
   windowsBuild?: number
   /** Set while mounted: pastes text into this terminal (the clipboard card's Add) and focuses it. */
-  pasteRef?: MutableRefObject<((text: string) => void) | null>
+  pasteRef?: RefObject<((text: string) => void) | null>
   onUpdate(id: string, patch: TerminalPatch): void
   onClose(id: string): void
 }
@@ -46,7 +46,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
     tabRef.current = tab
   })
 
-  // Runs once per mount: the tab's id, starting cwd and command are read here only.
+  // Runs once per mount: the tab's id, starting cwd, command and pasteRef are read here only.
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
@@ -157,17 +157,21 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
     // running, an image as a saved PNG's path (Claude attaches it); text pastes as it is.
     const paste = (text: string) => term.paste(pasteSafe(text))
     const smartPaste = () => {
+      if (exited) return // don't use up the card's item, or save an image, for a dead tab
       const { process: name, title: current } = tabRef.current
       clipboard.paste({ claude: runsClaude(name, current) }).then(
         (result) => {
           if (!result || disposed) return
-          if ('text' in result) paste(result.text)
-          else console.warn('paste:', result.error)
+          if ('text' in result) {
+            if (result.text) paste(result.text)
+          } else console.warn('paste:', result.error)
         },
         (err: unknown) => console.warn('paste failed', err),
       )
     }
-    // macOS: the Edit menu's Paste arrives as a paste event on xterm's textarea; take it first.
+    // macOS Cmd+V (the Edit menu's Paste) and Windows' Shift+Insert arrive as a paste event on
+    // xterm's textarea; take it here, in the capture phase, so xterm's own, unfiltered paste
+    // handler never runs.
     const onPaste = (e: ClipboardEvent) => {
       e.preventDefault()
       e.stopPropagation()
@@ -180,9 +184,10 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
       e.dataTransfer.dropEffect = 'copy'
     }
     const onDrop = (e: DragEvent) => {
-      const files = Array.from(e.dataTransfer?.files ?? [])
+      if (!e.dataTransfer?.types.includes('Files')) return
+      e.preventDefault() // even with no File objects below, or Chromium's own drop handling runs
+      const files = Array.from(e.dataTransfer.files)
       if (!files.length) return
-      e.preventDefault()
       const paths = files.map((f) => app.pathForFile(f)).filter((p) => p !== '')
       const text = quotePaths(paths, platform) // null: none, or a name with control characters
       if (text === null) {
@@ -190,20 +195,19 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
         return
       }
       if (!exited) {
-        paste(text)
+        paste(text + ' ') // trailing space, like Terminal.app/iTerm2: two drops don't run together
         term.focus()
       }
     }
     host.addEventListener('paste', onPaste, true)
     host.addEventListener('dragover', onDragOver)
     host.addEventListener('drop', onDrop)
-    if (pasteRef) {
-      pasteRef.current = (text) => {
-        if (exited) return
-        paste(text)
-        term.focus()
-      }
+    const handle = (text: string) => {
+      if (exited) return
+      paste(text)
+      term.focus()
     }
+    if (pasteRef) pasteRef.current = handle
 
     term.attachCustomKeyEventHandler((e) => {
       if (e.isComposing) return true
@@ -264,7 +268,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
       host.removeEventListener('paste', onPaste, true)
       host.removeEventListener('dragover', onDragOver)
       host.removeEventListener('drop', onDrop)
-      if (pasteRef) pasteRef.current = null
+      if (pasteRef?.current === handle) pasteRef.current = null
       term.dispose()
       termRef.current = null
       fitRef.current = null
