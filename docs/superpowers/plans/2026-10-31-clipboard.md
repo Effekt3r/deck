@@ -252,6 +252,11 @@ git add src/shared src/preload
 git -c user.email=franco@effektstudios.com commit -m "Clipboard: contract, shell quoting, preload bridge" -m "Claude-Session: https://claude.ai/code/session_012Tidn9qVajMb9EYY5GyX8U"
 ```
 
+**After review (done in a follow-up commit):**
+- `quotePath` and `quotePaths` return `string | null`. They refuse empty paths and any path with control characters (`/[\u0000-\u001f\u007f-\u009f]/`): a file name holding `ESC[201~`, Ctrl+U and CR ran a command in zsh with no Enter.
+- The PowerShell class covers all five of its quote characters (`/['\u2018\u2019\u201A\u201B]/g`; U+201A was missing).
+- Tests round-trip names through the real zsh, and through `pwsh` where it exists.
+
 ---
 
 ### Task 2: Clipboard content, previews and fingerprints
@@ -471,7 +476,7 @@ describe('TempImages', () => {
 
 ```ts
 import { describe, expect, it } from 'vitest'
-import { insertFor } from './insert'
+import { insertFor, UNSAFE } from './insert'
 
 const deps = { platform: 'darwin' as const, saveImage: async () => '/tmp/Deck clipboard/clipboard-1.png' }
 const image = { kind: 'image' as const, png: new Uint8Array([1]) }
@@ -501,6 +506,10 @@ describe('insertFor', () => {
 
   it('Windows: PowerShell quoting', async () => {
     expect(await insertFor({ kind: 'files', paths: ["C:\\it's\\a.txt"] }, false, { ...deps, platform: 'win32' })).toEqual({ text: "'C:\\it''s\\a.txt'" })
+  })
+
+  it("a file name with control characters: refused, it can't be pasted safely", async () => {
+    expect(await insertFor({ kind: 'files', paths: ['/ok.txt', '/bad\u001b[201~name'] }, true, deps)).toEqual({ error: UNSAFE })
   })
 })
 ```
@@ -544,6 +553,9 @@ import { quotePath, quotePaths } from '@shared/quote'
 import type { InsertResult, Platform } from '@shared/types'
 import type { ClipboardContent } from './item'
 
+/** quotePath refused a path: it has control characters, which no quoting makes safe to paste. */
+export const UNSAFE = "A file name has control characters, so it can't be pasted safely."
+
 export interface InsertDeps {
   platform: Platform
   /** Writes an image where Claude can read it; resolves with its path (TempImages.save). */
@@ -557,14 +569,17 @@ export interface InsertDeps {
  *    attaches as [Image #N]; in a shell tab: null, nothing, as before. */
 export async function insertFor(content: ClipboardContent, claude: boolean, deps: InsertDeps): Promise<InsertResult | null> {
   switch (content.kind) {
-    case 'files':
-      return { text: quotePaths(content.paths, deps.platform) }
+    case 'files': {
+      const text = quotePaths(content.paths, deps.platform)
+      return text === null ? { error: UNSAFE } : { text }
+    }
     case 'text':
       return { text: content.text }
     case 'image':
       if (!claude) return null
       try {
-        return { text: quotePath(await deps.saveImage(content.png), deps.platform) }
+        const text = quotePath(await deps.saveImage(content.png), deps.platform)
+        return text === null ? { error: UNSAFE } : { text }
       } catch (err) {
         return { error: `Couldn't save the image for Claude: ${err instanceof Error ? err.message : String(err)}` }
       }
@@ -575,7 +590,7 @@ export async function insertFor(content: ClipboardContent, claude: boolean, deps
 - [ ] **Step 5: Run them to make sure they pass**
 
 Run: `npx vitest run src/main/clipboard/temp.test.ts src/main/clipboard/insert.test.ts`
-Expected: PASS, 8 tests.
+Expected: PASS, 9 tests.
 
 - [ ] **Step 6: Commit**
 
@@ -1237,9 +1252,61 @@ git -c user.email=franco@effektstudios.com commit -m "Clipboard: read the system
 ### Task 6: Smart paste and drops in the terminal
 
 **Files:**
+- Create: `src/renderer/src/terminal/paste.ts`, `src/renderer/src/terminal/paste.test.ts`
 - Modify: `src/renderer/src/terminal/TerminalView.tsx`
 
-There's no unit test for this: `TerminalView` is DOM and xterm glue, and the renderer tests run in Node without a DOM. Task 8 checks it in the real app.
+`TerminalView` itself has no unit test: it is DOM and xterm glue, and the renderer tests run in Node without a DOM. Task 8 checks it in the real app. The marker filter is pure and is tested.
+
+- [ ] **Step 0a: Write the failing test** — `src/renderer/src/terminal/paste.test.ts`:
+
+```ts
+import { describe, expect, it } from 'vitest'
+import { pasteSafe } from './paste'
+
+describe('pasteSafe', () => {
+  it("drops the bracketed-paste markers, so pasted text can't end the paste early", () => {
+    expect(pasteSafe('ls\u001b[201~\u0015rm -rf ~\r')).toBe('ls\u0015rm -rf ~\r')
+    expect(pasteSafe('a\u001b[200~b')).toBe('ab')
+  })
+
+  it('also drops a marker that removing another one would put together', () => {
+    expect(pasteSafe('\u001b[2\u001b[201~01~x')).toBe('x')
+  })
+
+  it('leaves other text alone', () => {
+    expect(pasteSafe('plain text\nwith lines')).toBe('plain text\nwith lines')
+  })
+})
+```
+
+- [ ] **Step 0b: Run it to make sure it fails**
+
+Run: `npx vitest run src/renderer/src/terminal/paste.test.ts`
+Expected: FAIL, `./paste` can't be resolved.
+
+- [ ] **Step 0c: Write `src/renderer/src/terminal/paste.ts`**
+
+```ts
+/** The bracketed-paste markers xterm wraps a paste in. */
+const MARKER = /\u001b\[20[01]~/g
+
+/** Text ready for xterm's paste(). xterm wraps a paste in ESC[200~ … ESC[201~ and removes nothing,
+ *  so a pasted ESC[201~ would end the paste early, and what follows would act as typed keys
+ *  (Ctrl+U, Enter). Removing one marker can join two halves into another, hence the loop. */
+export function pasteSafe(text: string): string {
+  let out = text
+  for (let before = ''; before !== out; ) {
+    before = out
+    out = out.replace(MARKER, '')
+  }
+  return out
+}
+```
+
+- [ ] **Step 0d: Run it to make sure it passes**
+
+Run: `npx vitest run src/renderer/src/terminal/paste.test.ts`
+Expected: PASS, 3 tests.
 
 - [ ] **Step 1: Props and refs** — in `TerminalView.tsx`:
 
@@ -1254,6 +1321,7 @@ and add
 ```ts
 import { quotePaths } from '@shared/quote'
 import { runsClaude } from '../tabs/title'
+import { pasteSafe } from './paste'
 ```
 
 In `interface Props`, add:
@@ -1306,12 +1374,13 @@ Just above `term.attachCustomKeyEventHandler(`, add:
 ```ts
     // Cmd/Ctrl+V: main reads the clipboard. Copied files paste as quoted paths and, with Claude
     // running, an image as a saved PNG's path (Claude attaches it); text pastes as it is.
+    const paste = (text: string) => term.paste(pasteSafe(text))
     const smartPaste = () => {
       const { process: name, title: current } = tabRef.current
       clipboard.paste({ claude: runsClaude(name, current) }).then(
         (result) => {
           if (!result || disposed) return
-          if ('text' in result) term.paste(result.text)
+          if ('text' in result) paste(result.text)
           else console.warn('paste:', result.error)
         },
         (err: unknown) => console.warn('paste failed', err),
@@ -1334,8 +1403,13 @@ Just above `term.attachCustomKeyEventHandler(`, add:
       if (!files.length) return
       e.preventDefault()
       const paths = files.map((f) => app.pathForFile(f)).filter((p) => p !== '')
-      if (paths.length && !exited) {
-        term.paste(quotePaths(paths, platform))
+      const text = quotePaths(paths, platform) // null: none, or a name with control characters
+      if (text === null) {
+        if (paths.length) console.warn("drop: a file name has control characters, so it isn't pasted")
+        return
+      }
+      if (!exited) {
+        paste(text)
         term.focus()
       }
     }
@@ -1345,7 +1419,7 @@ Just above `term.attachCustomKeyEventHandler(`, add:
     if (pasteRef) {
       pasteRef.current = (text) => {
         if (exited) return
-        term.paste(text)
+        paste(text)
         term.focus()
       }
     }
@@ -1368,7 +1442,7 @@ Expected: typecheck clean (the last `readText` use is gone), all tests pass, `bu
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/renderer/src/terminal/TerminalView.tsx
+git add src/renderer/src/terminal/TerminalView.tsx src/renderer/src/terminal/paste.ts src/renderer/src/terminal/paste.test.ts
 git -c user.email=franco@effektstudios.com commit -m "Terminal: smart paste and file drops through main" -m "Claude-Session: https://claude.ai/code/session_012Tidn9qVajMb9EYY5GyX8U"
 ```
 
@@ -1770,6 +1844,17 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
     Code turns into `[Image #N]`; cleared at start and quit.
   - **Testing on macOS:** a clipboard written by a process that has quit keeps only its first
     item, so test writers must stay running (Finder does).
+  - **Paste safety:**
+    - Every paste goes through `pasteSafe()`, which removes the `ESC[200~`/`ESC[201~` markers.
+      xterm wraps a paste in them and filters nothing, so a pasted `ESC[201~` would run the rest
+      as typed keys.
+    - `quotePath()` refuses paths with control characters, because no quoting makes them safe.
+```
+
+In the file table, change the `src/shared/` row to:
+
+```md
+| `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, and `quote.ts` (shell quoting, used by main and the renderer); the only thing main and renderer share |
 ```
 
 Also add a row to the `src/main` table:
