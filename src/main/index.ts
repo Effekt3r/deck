@@ -83,7 +83,8 @@ async function start(): Promise<void> {
     windowsBuild: process.platform === 'win32' ? Number(release().split('.')[2]) || undefined : undefined,
   }))
   ipcMain.on(IPC.appOpenExternal, (_e, url: unknown) => {
-    if (typeof url === 'string' && /^https?:\/\//i.test(url)) void shell.openExternal(url)
+    // Web and mail links only; never file:// or custom schemes from terminal output.
+    if (typeof url === 'string' && /^(https?:\/\/|mailto:)/i.test(url)) void shell.openExternal(url)
   })
   ipcMain.on(IPC.appCopyText, (_e, text: unknown) => {
     if (typeof text === 'string') clipboard.writeText(text)

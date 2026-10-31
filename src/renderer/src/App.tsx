@@ -1,11 +1,13 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import type { AppInfo, MenuCommand, ProjectAction } from '@shared/types'
+import { ClaudePanel } from './claude/ClaudePanel'
+import { useClaudeSession } from './claude/useClaude'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
 import { ProjectsView } from './projects/ProjectsView'
 import { TabBar } from './tabs/TabBar'
 import { initialTabs, isTerminal, PROJECTS_ID, tabsReducer, type TerminalPatch, type TerminalTab } from './tabs/tabs'
-import { tabTitle } from './tabs/title'
+import { runsClaude, tabTitle } from './tabs/title'
 import { TerminalView } from './terminal/TerminalView'
 
 // Main holds --open folders until the first ready(); StrictMode runs effects twice.
@@ -16,8 +18,19 @@ const GIT_WIDTH_KEY = 'deck.gitWidth'
 const GIT_WIDTH = 360
 const GIT_MIN = 240
 const GIT_MAX_SHARE = 0.55
-const clampGitWidth = (px: number) =>
-  Math.round(Math.min(Math.max(px, GIT_MIN), Math.max(GIT_MIN, window.innerWidth * GIT_MAX_SHARE)))
+/** The Claude panel's width, shared by every tab: 260 px … 45 % of the window. */
+const CLAUDE_WIDTH_KEY = 'deck.claudeWidth'
+const CLAUDE_WIDTH = 380
+const CLAUDE_MIN = 260
+const CLAUDE_MAX_SHARE = 0.45
+/** What a drag leaves the terminal when both panels are open (and styles.css: .terminal-view). */
+const TERMINAL_MIN = 280
+
+/** `px` within min … share of the window, and within `room` (what the other panel and the terminal leave). */
+const clampWidth = (px: number, min: number, share: number, room = Infinity) =>
+  Math.round(Math.min(Math.max(px, min), Math.max(min, Math.min(window.innerWidth * share, room))))
+const clampGitWidth = (px: number, room?: number) => clampWidth(px, GIT_MIN, GIT_MAX_SHARE, room)
+const clampClaudeWidth = (px: number, room?: number) => clampWidth(px, CLAUDE_MIN, CLAUDE_MAX_SHARE, room)
 
 export function App() {
   const platform = window.deck.platform
@@ -25,6 +38,9 @@ export function App() {
   const [info, setInfo] = useState<AppInfo | null>(null)
   const [findRequests, setFindRequests] = useState<Record<string, number>>({})
   const [gitWidth, setGitWidth] = useState(() => loadSize(GIT_WIDTH_KEY, GIT_WIDTH))
+  const [claudeWidth, setClaudeWidth] = useState(() => loadSize(CLAUDE_WIDTH_KEY, CLAUDE_WIDTH))
+  /** View → Claude Panel, per tab: the tab knows whether its panel shows. */
+  const [claudeToggles, setClaudeToggles] = useState<Record<string, number>>({})
 
   // Menu commands and IPC events read the latest state through refs.
   const stateRef = useRef(state)
@@ -70,6 +86,11 @@ export function App() {
     setGitWidth(width)
     saveSize(GIT_WIDTH_KEY, width)
   }, [])
+  const storeClaudeWidth = useCallback((px: number) => {
+    const width = clampClaudeWidth(px)
+    setClaudeWidth(width)
+    saveSize(CLAUDE_WIDTH_KEY, width)
+  }, [])
 
   useEffect(() => {
     const onMenu = (cmd: MenuCommand) => {
@@ -93,6 +114,11 @@ export function App() {
           // Only where there is a panel to show or hide.
           const tab = stateRef.current.tabs.find((t) => t.id === active)
           if (tab && isTerminal(tab) && tab.vars.GIT_REPO) update(tab.id, { gitHidden: !tab.gitHidden })
+          return
+        }
+        case 'toggle-claude': {
+          const tab = stateRef.current.tabs.find((t) => t.id === active)
+          if (tab && isTerminal(tab)) setClaudeToggles((t) => ({ ...t, [active]: (t[active] ?? 0) + 1 }))
           return
         }
       }
@@ -126,8 +152,9 @@ export function App() {
           findRequest={findRequests[PROJECTS_ID] ?? 0} onOpen={openProject} />
         {terminals.map((tab) => (
           <Workspace key={tab.id} tab={tab} active={tab.id === state.active} home={info?.home ?? ''}
-            gitWidth={gitWidth} windowsBuild={info?.windowsBuild} findRequest={findRequests[tab.id] ?? 0}
-            onGitWidth={storeGitWidth} onUpdate={update} onClose={close} />
+            gitWidth={gitWidth} claudeWidth={claudeWidth} windowsBuild={info?.windowsBuild}
+            findRequest={findRequests[tab.id] ?? 0} claudeToggle={claudeToggles[tab.id] ?? 0}
+            onGitWidth={storeGitWidth} onClaudeWidth={storeClaudeWidth} onUpdate={update} onClose={close} />
         ))}
       </main>
     </div>
@@ -140,23 +167,41 @@ interface WorkspaceProps {
   home: string
   /** The stored width; CSS keeps it within 240 px … 55 % when the window shrinks. */
   gitWidth: number
+  /** Likewise, 260 px … 45 %. */
+  claudeWidth: number
   findRequest: number
+  /** Incremented by View → Claude Panel. */
+  claudeToggle: number
   windowsBuild?: number
   /** A drag ended (or a reset): clamp, store and share the width. */
   onGitWidth(px: number): void
+  onClaudeWidth(px: number): void
   onUpdate(id: string, patch: TerminalPatch): void
   onClose(id: string): void
 }
 
 /** A terminal tab: the git panel while the shell is in a repo (unless hidden with
- *  View → Git Panel), the splitter, the terminal. Inactive tabs stay mounted. */
+ *  View → Git Panel), the terminal, and the Claude panel while Claude runs in the tab
+ *  or the folder has a session (unless hidden with View → Claude Panel), each panel
+ *  with its splitter. Inactive tabs stay mounted. */
 const Workspace = memo(function Workspace(props: WorkspaceProps) {
-  const { tab, active, home, gitWidth, findRequest, windowsBuild, onGitWidth, onUpdate, onClose } = props
+  const { tab, active, home, gitWidth, claudeWidth, findRequest, claudeToggle, windowsBuild } = props
+  const { onGitWidth, onClaudeWidth, onUpdate, onClose } = props
   const repo = tab.vars.GIT_REPO ?? ''
   const showGit = repo !== '' && !tab.gitHidden
+  // Claude logs under the folder it was started in: the tab's cwd, which stays put while
+  // it runs (no prompts, so no OSC 7).
+  const folder = tab.cwd || repo
+  const claudeRuns = runsClaude(tab.process, tab.title)
+  const claude = useClaudeSession(folder, active && tab.claudeHidden !== true)
+  // claudeHidden: true = hidden with View → Claude Panel; false = shown with it, even
+  // with nothing to show yet; unset = shown when there is something to show.
+  const showClaude = tab.claudeHidden !== true && (tab.claudeHidden === false || claudeRuns || claude.snapshot !== null)
   const [dragWidth, setDragWidth] = useState<number | null>(null)
+  const [claudeDrag, setClaudeDrag] = useState<number | null>(null)
   const rootRef = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
+  const claudeRef = useRef<HTMLDivElement>(null)
 
   // Hidden for the repo it was hidden in: like the prototype's q, entering another repo shows it again.
   const hiddenIn = useRef<string | null>(null)
@@ -166,12 +211,33 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     else if (repo && repo !== hiddenIn.current) onUpdate(tab.id, { gitHidden: false })
   }, [tab.gitHidden, tab.id, repo, onUpdate])
 
-  // Hiding the panel while it had the keyboard would leave it with nobody: give it to the terminal.
+  // View → Claude Panel: hides the panel when it shows, else shows it.
+  const toggleSeen = useRef(claudeToggle)
   useEffect(() => {
-    if (showGit || !active) return
+    if (claudeToggle === toggleSeen.current) return
+    toggleSeen.current = claudeToggle
+    onUpdate(tab.id, { claudeHidden: showClaude })
+  }, [claudeToggle]) // showClaude, tab.id and onUpdate as of this render
+
+  // Like the git panel's: the choice holds in the repo (or folder) it was made in.
+  const claudeKey = repo || folder
+  const claudeChoiceIn = useRef<string | null>(null)
+  useEffect(() => {
+    if (tab.claudeHidden === undefined) claudeChoiceIn.current = null
+    else if (claudeChoiceIn.current === null) claudeChoiceIn.current = claudeKey
+    else if (claudeKey && claudeKey !== claudeChoiceIn.current) onUpdate(tab.id, { claudeHidden: undefined })
+  }, [tab.claudeHidden, tab.id, claudeKey, onUpdate])
+
+  // Hiding a panel while it had the keyboard would leave it with nobody: give it to the terminal.
+  useEffect(() => {
+    if (!active) return
     const focused = document.activeElement
     if (!focused || focused === document.body) rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
-  }, [showGit, active])
+  }, [showGit, showClaude, active])
+
+  /** What a panel can have: the workspace less the other panel, the splitters and the terminal's minimum. */
+  const roomBeside = (other: HTMLDivElement | null) =>
+    (rootRef.current?.clientWidth ?? window.innerWidth) - (other?.offsetWidth ?? 0) - 2 - TERMINAL_MIN
 
   return (
     <div className={active ? 'workspace' : 'workspace is-hidden'} ref={rootRef}>
@@ -183,15 +249,31 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
       {showGit && (
         <Splitter orientation="vertical" label="Resize the git panel"
           getSize={() => paneRef.current?.offsetWidth ?? gitWidth}
-          onResize={(px) => setDragWidth(clampGitWidth(px))}
+          onResize={(px) => setDragWidth(clampGitWidth(px, roomBeside(claudeRef.current)))}
           onResizeEnd={(px) => {
             setDragWidth(null)
-            onGitWidth(px)
+            onGitWidth(clampGitWidth(px, roomBeside(claudeRef.current)))
           }}
           onReset={() => onGitWidth(GIT_WIDTH)} />
       )}
       <TerminalView tab={tab} active={active} windowsBuild={windowsBuild} findRequest={findRequest}
         onUpdate={onUpdate} onClose={onClose} />
+      {showClaude && (
+        <Splitter orientation="vertical" label="Resize the Claude panel" direction={-1}
+          getSize={() => claudeRef.current?.offsetWidth ?? claudeWidth}
+          onResize={(px) => setClaudeDrag(clampClaudeWidth(px, roomBeside(paneRef.current)))}
+          onResizeEnd={(px) => {
+            setClaudeDrag(null)
+            onClaudeWidth(clampClaudeWidth(px, roomBeside(paneRef.current)))
+          }}
+          onReset={() => onClaudeWidth(CLAUDE_WIDTH)} />
+      )}
+      {showClaude && (
+        <div className="claude-pane" ref={claudeRef} style={{ width: claudeDrag ?? claudeWidth }}>
+          <ClaudePanel folder={folder} snapshot={claude.snapshot} phase={claude.phase} error={claude.error}
+            claudeRuns={claudeRuns} active={active} home={home} onRetry={claude.retry} />
+        </div>
+      )}
     </div>
   )
 })
