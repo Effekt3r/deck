@@ -27,9 +27,9 @@ the Claude panel.
 
 **Installing**
 
-- **macOS** (Apple silicon: `mac-arm64`; Intel: `mac-x64`): open the `.dmg` and
-  drag Deck to Applications. Signed by Effekt Studios Pty Ltd and notarised by
-  Apple.
+- **macOS** (Apple silicon; Intel Macs aren't supported): open
+  `Deck-0.2.0-mac-arm64.dmg` and drag Deck to Applications. Signed by Effekt
+  Studios Pty Ltd and notarised by Apple.
 - **Windows** (x64): run the `.exe`. It isn't signed yet, so SmartScreen warns on
   first run: choose **More info → Run anyway**.
 
