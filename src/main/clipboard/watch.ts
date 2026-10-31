@@ -23,9 +23,10 @@ interface Item {
 
 /** Decides what the clipboard card offers.
  *  - Deck looks when its window comes to the front, about once a second while it's there, and
- *    once more on its way to the background (one last look at a copy made just before leaving);
- *    never while it's in the background otherwise. A slow read backs the polling rate off, so a
- *    large image sitting on the clipboard doesn't cost much.
+ *    once more as it leaves (one last look at a copy made just before); nothing while it's
+ *    actually in the background — blur() only looks if Deck was in front, so a lock or sleep that
+ *    hits it while it's already behind reads nothing. A slow read backs the polling rate off, so
+ *    a large image on the clipboard doesn't cost much, for at most 15 s.
  *  - Coming to the front, anything copied since Deck last looked is new: it came from another app.
  *  - While Deck is in front, or on its way out, only images and files are new (a screenshot to
  *    the clipboard): text that changes then is Deck's own copy (a terminal selection, Copy hash,
@@ -65,12 +66,13 @@ export class ClipboardWatch {
     if (this.timer) return // already in front: a repeated event, not a fresh arrival
     void this.look('arrived')
     this.timer = setInterval(() => {
-      if (Date.now() >= this.quietUntil) void this.look('poll')
+      if (performance.now() >= this.quietUntil) void this.look('poll')
     }, this.deps.pollMs ?? 1000)
   }
 
   /** The window went to the background: one last look (a copy made just before) and no more. */
   blur(): void {
+    if (!this.timer) return // not in front: a lock or sleep while Deck is behind, or a repeated event
     this.stop()
     void this.look('leaving')
   }
@@ -101,13 +103,15 @@ export class ClipboardWatch {
         return { error: `Couldn't read the clipboard: ${err instanceof Error ? err.message : String(err)}` }
       }
       const fingerprint = fingerprintOf(content)
-      this.seen = fingerprint
       // The card shows what Cmd/Ctrl+V pastes: a clipboard that moved on before a look saw it
       // retires it, as a look would have.
       if (this.item && this.item.fingerprint !== fingerprint) this.set(null)
       if (!content) return null
       const result = await this.deps.insert(content, claude)
-      if (result && 'text' in result && this.item?.fingerprint === fingerprint) this.set(null)
+      if (result && 'text' in result) {
+        this.seen = fingerprint // what was pasted never shows later; what pasted nothing still can
+        if (this.item?.fingerprint === fingerprint) this.set(null)
+      }
       return result
     })
   }
@@ -129,14 +133,16 @@ export class ClipboardWatch {
     return this.serial(async () => {
       try {
         let content: ClipboardContent | null
-        const started = Date.now()
+        const started = performance.now()
         try {
           content = await this.deps.read()
         } catch {
           return // unreadable just now: the next look tries again
         } finally {
-          // Reading is what polling costs (an image is read whole): keep it to about 5% of the time.
-          this.quietUntil = Date.now() + (Date.now() - started) * 19
+          // Reading is what polling costs (an image is read whole): keep it to about 5% of the
+          // time, but never stop polling for more than 15 s because one read was slow.
+          const now = performance.now()
+          this.quietUntil = now + Math.min((now - started) * 19, 15_000)
         }
         const fingerprint = fingerprintOf(content)
         if (fingerprint === this.seen) return

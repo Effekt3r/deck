@@ -137,6 +137,50 @@ describe('ClipboardWatch', () => {
     watch.stop()
   })
 
+  it("blur() while not in front takes no read, and foreign text then shows on return", async () => {
+    const { clip, watch, published, counts } = setup()
+    await watch.baseline()
+    watch.focus()
+    await tick()
+    watch.blur()
+    await tick()
+    clip.now = text('copied in Safari')
+    const reads = counts.reads
+    watch.blur() // powerMonitor 'lock-screen' / 'suspend' firing while Deck is already behind
+    await tick()
+    expect(counts.reads).toBe(reads)
+    watch.focus()
+    await tick()
+    expect(published.at(-1)).toMatchObject({ kind: 'text', lines: ['copied in Safari'] })
+    watch.stop()
+  })
+
+  it('blur while a poll is still reading takes its own last look: a copy made during that read gets no card', async () => {
+    const box: { now: ClipboardContent } = { now: text('there at start') }
+    let slow = false
+    const { watch, published } = setup({
+      read: async () => {
+        const sampled = box.now // sampled when the read starts ...
+        if (slow) await new Promise((r) => setTimeout(r, 50)) // ... returned 50 ms later
+        return sampled
+      },
+    })
+    await watch.baseline()
+    watch.focus()
+    await tick()
+    slow = true
+    await tick(1000) // a poll starts a slow read
+    box.now = text('selected in the terminal') // copied during that read ...
+    watch.blur() // ... and Deck left at once
+    await tick(50)
+    slow = false
+    await tick()
+    watch.focus()
+    await tick()
+    expect(published).toEqual([])
+    watch.stop()
+  })
+
   it("add() gives the snapshot's text even if the clipboard changed since, and uses the item up", async () => {
     const { clip, watch, last } = setup()
     await watch.baseline()
@@ -188,6 +232,17 @@ describe('ClipboardWatch', () => {
     watch.focus()
     await tick()
     expect(await watch.paste(false)).toBeNull()
+    expect(last()).toMatchObject({ kind: 'image' })
+    watch.stop()
+  })
+
+  it('an image pasted in a shell tab before any look still shows as a card at the next arrival', async () => {
+    const { clip, watch, last } = setup()
+    await watch.baseline()
+    clip.now = image()
+    expect(await watch.paste(false)).toBeNull() // a shell tab: nothing pastes, nothing is consumed
+    watch.focus()
+    await tick()
     expect(last()).toMatchObject({ kind: 'image' })
     watch.stop()
   })
@@ -314,14 +369,17 @@ describe('ClipboardWatch', () => {
     watch.stop()
   })
 
-  it('a failed baseline read: the first look becomes the baseline', async () => {
-    const { clip, watch, published } = setup()
+  it('a failed baseline read: the first look is the baseline, and later changes still show', async () => {
+    const { clip, watch, published, last } = setup()
     clip.fail = true
     await watch.baseline()
     clip.fail = false
     watch.focus()
     await tick()
     expect(published).toEqual([]) // the existing clipboard, unseen by baseline, is not offered as new
+    clip.now = image()
+    await tick(1000)
+    expect(last()).toMatchObject({ kind: 'image' }) // but a later change still shows
     watch.stop()
   })
 
@@ -339,6 +397,76 @@ describe('ClipboardWatch', () => {
     expect(reads).toBe(1) // the arrival look reads at once, backoff or not
     await tick(60_000)
     expect(reads).toBeLessThanOrEqual(20) // far below the ~60 a flat 1 s poll would have cost
+    watch.stop()
+  })
+
+  it('a backoff never delays the arrival look', async () => {
+    let reads = 0
+    let slow = false
+    const { watch } = setup({
+      read: async () => {
+        reads++
+        if (slow) await new Promise((r) => setTimeout(r, 500))
+        return null
+      },
+    })
+    await watch.baseline()
+    watch.focus()
+    await tick()
+    slow = true
+    await tick(1000) // a 500 ms poll read: polls back off
+    await tick(500)
+    slow = false
+    watch.blur()
+    const before = reads
+    watch.focus() // back at once, while polls are still backed off
+    await tick()
+    expect(reads).toBe(before + 2) // the leaving look and the arrival look both read
+    watch.stop()
+  })
+
+  it('one 3 s read backs polls off for at most 15 s', async () => {
+    let slow = false
+    const { clip, watch, last } = setup({
+      read: async () => {
+        if (slow) {
+          slow = false
+          await new Promise((r) => setTimeout(r, 3000))
+        }
+        return clip.now
+      },
+    })
+    await watch.baseline()
+    watch.focus()
+    await tick()
+    slow = true
+    await tick(4000) // one 3 s read (a Universal Clipboard fetch)
+    clip.now = image()
+    await tick(16_000)
+    expect(last()).toMatchObject({ kind: 'image' })
+    watch.stop()
+  })
+
+  it('ticks while a poll is still reading are skipped, not queued', async () => {
+    let reads = 0
+    let slow = false
+    const { watch } = setup({
+      read: async () => {
+        reads++
+        if (slow) {
+          slow = false
+          await new Promise((r) => setTimeout(r, 2500))
+        }
+        return null
+      },
+    })
+    await watch.baseline() // 1
+    watch.focus()
+    await tick() // arrival: 2
+    slow = true
+    await tick(1000) // a poll starts a 2.5 s read (3); the ticks at 2 s and 3 s come while it runs
+    await tick(3000) // it ended at 3.5 s; polls back off after it
+    expect(reads).toBe(3) // without the dedupe, those two ticks would queue two more reads
     watch.stop()
   })
 
