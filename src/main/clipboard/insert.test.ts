@@ -34,4 +34,13 @@ describe('insertFor', () => {
   it("a file name with control characters: refused, it can't be pasted safely", async () => {
     expect(await insertFor({ kind: 'files', paths: ['/ok.txt', '/bad\u001b[201~name'] }, true, deps)).toEqual({ error: UNSAFE })
   })
+
+  it('files: an empty list is nothing to paste', async () => {
+    expect(await insertFor({ kind: 'files', paths: [] }, true, deps)).toBeNull()
+  })
+
+  it("an image saved to a path with control characters: refused, it can't be pasted safely", async () => {
+    const badPath = { ...deps, saveImage: async () => '/tmp/Deck clipboard/clipboard-\u001b1.png' }
+    expect(await insertFor(image, true, badPath)).toEqual({ error: UNSAFE })
+  })
 })

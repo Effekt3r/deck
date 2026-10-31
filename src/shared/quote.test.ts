@@ -87,10 +87,12 @@ describe.skipIf(!hasZsh)('quotePath round-trips through zsh', () => {
   // expansion never triggers here anyway, and single quotes block it in interactive shells too.
   const names = ["/tmp/it's here", '/tmp/$HOME `id` $(id)', '/tmp/a\\b "c"', '/tmp/*?[x]{a,b}', '/tmp/café ’‘‚‛', '/tmp/!!']
 
+  // A per-test timeout longer than the 5 s default on macOS CI (vitest.config.ts): a correct but
+  // slow shell here shouldn't fail just for being slow (SPAWN_TIMEOUT above is a hang backstop).
   it.each(names)('%s', (name) => {
     const out = execFileSync('/bin/zsh', ['-f', '-c', `print -rn -- ${quotePath(name, 'darwin')!}`], { encoding: 'utf8', ...SPAWN_TIMEOUT })
     expect(out).toBe(name)
-  })
+  }, 30_000)
 })
 
 describe.skipIf(skipPowerShell)('quotePath round-trips through PowerShell', () => {
@@ -110,5 +112,5 @@ describe.skipIf(skipPowerShell)('quotePath round-trips through PowerShell', () =
     ).trim()
     const expected = Array.from({ length: name.length }, (_, i) => name.charCodeAt(i)).join(',')
     expect(out).toBe(expected)
-  })
+  }, 30_000)
 })

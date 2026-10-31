@@ -12,13 +12,14 @@ export interface InsertDeps {
 }
 
 /** The text that inserts `content` into a terminal:
- *  - files: their quoted paths (Claude reads them; images among them attach);
+ *  - files: their quoted paths (Claude reads them);
  *  - text: as it is;
  *  - an image, in a tab running Claude: the quoted path of a saved PNG, which Claude Code
  *    attaches as [Image #N]; in a shell tab: null, nothing, as before. */
 export async function insertFor(content: ClipboardContent, claude: boolean, deps: InsertDeps): Promise<InsertResult | null> {
   switch (content.kind) {
     case 'files': {
+      if (!content.paths.length) return null // nothing to paste
       const text = quotePaths(content.paths, deps.platform)
       return text === null ? { error: UNSAFE } : { text }
     }
