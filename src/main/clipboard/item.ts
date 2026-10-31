@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto'
-import { basename, dirname } from 'node:path'
+import { createHmac, randomBytes } from 'node:crypto'
+import { basename, dirname, parse, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ClipboardPreview } from '@shared/types'
 
@@ -27,9 +27,13 @@ export function filePathsFromUriList(list: string): string[] {
   const paths: string[] = []
   for (const line of list.split(/\r?\n/)) {
     const url = line.trim()
-    if (!url.startsWith('file:')) continue
+    if (!/^file:/i.test(url)) continue
     try {
-      paths.push(fileURLToPath(url))
+      let path = fileURLToPath(url)
+      // A folder's URL ends in a separator; strip it (but not off a root) so e.g. `cp -R` copies
+      // the folder itself, not just its contents.
+      while (path.length > parse(path).root.length && path.endsWith(sep)) path = path.slice(0, -1)
+      paths.push(path)
     } catch {
       // a file: URL that isn't a local path on this OS
     }
@@ -37,14 +41,55 @@ export function filePathsFromUriList(list: string): string[] {
   return paths
 }
 
-/** Identifies content without keeping it: a different clipboard is a different fingerprint. */
+/** Keyed per run: a fingerprint kept in memory identifies content without exposing it, so even a
+ *  concealed short secret can't be brute-forced back out of it. */
+const KEY = randomBytes(32)
+
+/** Identifies content without keeping it: a different clipboard is a different fingerprint; it
+ *  means nothing outside this process. */
 export function fingerprintOf(content: ClipboardContent | null): string {
   if (!content) return 'empty'
-  const hash = createHash('sha1').update(content.kind)
+  const hash = createHmac('sha256', KEY).update(content.kind)
   if (content.kind === 'files') hash.update(content.paths.join('\0'))
   else if (content.kind === 'text') hash.update(content.concealed ? 'c' : 't').update(content.text)
   else hash.update(content.png)
   return hash.digest('hex')
+}
+
+/** A line's text cut to at most LINE_CHARS units, without splitting a surrogate pair in two. */
+function cutLine(line: string): string {
+  if (line.length <= LINE_CHARS) return line
+  let cut = LINE_CHARS
+  const code = line.charCodeAt(cut - 1)
+  if (code >= 0xd800 && code <= 0xdbff) cut-- // a high surrogate: its low half is just past the cut
+  return `${line.slice(0, cut)}…`
+}
+
+/** The text's line count and its first `max` lines, without splitting (and holding) the whole
+ *  text: a 100 MB paste cost 90 ms and 84 MB extra just to split it and discard the rest. CRLF, a
+ *  lone CR and a lone LF each count as one break; a trailing break starts no further line. */
+function firstLines(text: string, max: number): { lines: string[]; lineCount: number } {
+  const n = text.length
+  const lines: string[] = []
+  let start = 0
+  let i = 0
+  let breaks = 0
+  let lastBreakEnd = -1
+  while (i < n) {
+    const code = text.charCodeAt(i)
+    if (code === 13 || code === 10) {
+      const end = i
+      i += code === 13 && text.charCodeAt(i + 1) === 10 ? 2 : 1
+      breaks++
+      lastBreakEnd = i
+      if (lines.length < max) lines.push(text.slice(start, end))
+      start = i
+    } else {
+      i++
+    }
+  }
+  if (lines.length < max && lastBreakEnd !== n) lines.push(text.slice(start))
+  return { lines, lineCount: breaks + (lastBreakEnd === n ? 0 : 1) }
 }
 
 /** What the card shows of `content`. */
@@ -54,19 +99,13 @@ export function previewOf(content: ClipboardContent, id: string, image?: ImageIn
       return {
         id,
         kind: 'files',
-        names: content.paths.slice(0, NAMES).map((p) => basename(p)),
+        names: content.paths.slice(0, NAMES).map((p) => basename(p) || p),
         more: Math.max(0, content.paths.length - NAMES),
         folder: dirname(content.paths[0] ?? ''),
       }
     case 'text': {
-      const lines = content.text.split(/\r\n|\r|\n/)
-      if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
-      return {
-        id,
-        kind: 'text',
-        lines: lines.slice(0, LINES).map((l) => (l.length > LINE_CHARS ? `${l.slice(0, LINE_CHARS)}…` : l)),
-        lineCount: lines.length,
-      }
+      const { lines, lineCount } = firstLines(content.text, LINES)
+      return { id, kind: 'text', lines: lines.map(cutLine), lineCount }
     }
     case 'image':
       return { id, kind: 'image', width: image?.width ?? 0, height: image?.height ?? 0, thumbnail: image?.thumbnail ?? '' }
