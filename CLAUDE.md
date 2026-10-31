@@ -254,7 +254,11 @@ excludes every `build` folder.
    `package.json`, add its `CHANGELOG.md` section, merge, then
    `gh workflow run release.yml --ref main` (or push the tag `v<version>`), check
    the draft and publish it. The build jobs only upload artifacts; the release
-   job makes the one draft (two builders publishing at once each made their own).
+   job makes the one draft (two builders publishing at once each made their own),
+   creating the new draft before it deletes earlier ones. Don't merge changes to
+   `.github/workflows/` while a release builds: the Actions token can't create a
+   release on a commit whose workflows differ from main's (HTTP 403 "Resource not
+   accessible by integration"; seen 2026-10-31), so the run fails at the end.
    A Keychain-exported `.p12` uses old ciphers: OpenSSL 3 reads it only with
    `openssl pkcs12 -legacy`.
 
