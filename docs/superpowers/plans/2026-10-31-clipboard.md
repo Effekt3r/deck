@@ -1008,6 +1008,18 @@ git add src/main/clipboard/watch.ts src/main/clipboard/watch.test.ts
 git -c user.email=franco@effektstudios.com commit -m "Clipboard: the watch that decides what the card offers" -m "Claude-Session: https://claude.ai/code/session_012Tidn9qVajMb9EYY5GyX8U"
 ```
 
+**After review (follow-up commit; the code above is the first version):**
+- **`paste()`** retires a card the clipboard has moved past. Example: Cmd+C in the terminal, then Cmd+V within a second.
+- **Looks:**
+  - **All or nothing:** an undecodable image gives an "Image" card.
+  - **Reasons:** each look has a reason, `'arrived' | 'poll' | 'leaving'`. The leaving look always runs.
+  - **Duty-cycle backoff:** a slow read (a large image) spaces the next polls out, so reading stays at about 5% of the time.
+- **`focus()`** while already focused does nothing.
+- **A failed `baseline()`** makes the first look the baseline.
+- **Tests:**
+  - the pile-up test now checks that no looks are left queued;
+  - new tests for the leaving look, read failures, an undecodable image, dismissal, refocus, failed adds and the backoff.
+
 ---
 
 ### Task 5: Reading the system clipboard, IPC and the main process
@@ -1190,7 +1202,7 @@ export function imageInfo(png: Uint8Array): ImageInfo {
 - [ ] **Step 6: Write `src/main/clipboard/ipc.ts`**
 
 ```ts
-import { type BrowserWindow, ipcMain } from 'electron'
+import { type BrowserWindow, ipcMain, powerMonitor } from 'electron'
 import { IPC } from '@shared/channels'
 import type { InsertResult, Platform } from '@shared/types'
 import { imageInfo } from './image'
@@ -1234,6 +1246,15 @@ export function registerClipboardIpc(opts: { tempDir: string; platform: Platform
       void watch.baseline()
       w.on('focus', () => watch.focus())
       w.on('blur', () => watch.blur())
+      // A locked screen or a sleeping Mac sends no blur: stop looking then too.
+      const away = () => watch.blur()
+      const back = () => {
+        if (!w.isDestroyed() && w.isFocused()) watch.focus()
+      }
+      powerMonitor.on('lock-screen', away)
+      powerMonitor.on('suspend', away)
+      powerMonitor.on('unlock-screen', back)
+      powerMonitor.on('resume', back)
       if (w.isFocused()) watch.focus()
     },
     dispose() {
@@ -1730,16 +1751,22 @@ export function ClipboardCard({ item, busy, error, onAdd, onDismiss }: Clipboard
      const pasteRef = useRef<((text: string) => void) | null>(null)
      const [clip, setClip] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
      useEffect(() => setClip({ busy: false, error: null }), [clipItem?.id])
+     // An Add answered after a newer item replaced its own: its error isn't the new card's.
+     const clipIdRef = useRef(clipItem?.id)
+     useLayoutEffect(() => {
+       clipIdRef.current = clipItem?.id
+     }, [clipItem?.id])
      const addClip = useCallback((id: string) => {
        setClip({ busy: true, error: null })
+       const fail = (error: string) => setClip({ busy: false, error: clipIdRef.current === id ? error : null })
        window.deck.clipboard.add(id).then(
          (result) => {
            if ('text' in result) {
              pasteRef.current?.(result.text)
              setClip({ busy: false, error: null })
-           } else setClip({ busy: false, error: result.error })
+           } else fail(result.error)
          },
-         (err: unknown) => setClip({ busy: false, error: err instanceof Error ? err.message : String(err) }),
+         (err: unknown) => fail(err instanceof Error ? err.message : String(err)),
        )
      }, [])
      const dismissClip = useCallback((id: string) => window.deck.clipboard.dismiss(id), [])
@@ -1885,6 +1912,10 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
     Code turns into `[Image #N]`; cleared at start and quit.
   - **Testing on macOS:** a clipboard written by a process that has quit keeps only its first
     item, so test writers must stay running (Finder does).
+  - **Known limits:**
+    - **Text copied while Deck is in front shows no card**, even when it came from elsewhere: Universal Clipboard text, OCR overlays and other panels that don't take focus, Keyboard Maestro or Shortcuts. That's the price of not offering Deck's own copies; children of Deck that write the clipboard while it's in front (`pbcopy`, Claude's `/copy`) rightly show no card. Images and files always show.
+    - **The same content twice gets no card:** A → B → A while away, or copying something you already used or dismissed. Electron offers no clipboard change counter.
+    - **Polls back off when a read is slow** (about 5% of the time). A locked screen or a sleeping Mac stops them.
   - **Paste safety:**
     - Every paste goes through `pasteSafe()`, which removes the `ESC[200~`/`ESC[201~` markers.
       xterm wraps a paste in them and filters nothing, so a pasted `ESC[201~` would run the rest
@@ -1918,6 +1949,8 @@ Also add a row to the `src/main` table:
 18e. Copy a new screenshot and click **Add to Claude** several times quickly. Each click
      inserts the path, with no "Couldn't save the image" error. (Antivirus can hold a
      just-written file for a moment; Deck retries.)
+18f. With Deck in front, copy in Excel or Word several times: no "clipboard in use" failures
+     (Deck reads the clipboard about once a second while in front).
 ```
 
 `docs/DECK.md`, in M5, add `(built 2026-10-31; Windows to test)` after the clipboard bullet's title.

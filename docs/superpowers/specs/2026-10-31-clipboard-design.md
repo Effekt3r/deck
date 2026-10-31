@@ -57,7 +57,7 @@ The card always shows what Cmd+V would paste, except concealed items, which get 
 
 ### When an item is new
 
-- **When Deck reads:** when its window gains focus, and about once a second while it is in front. Never while it is in the background.
+- **When Deck reads:** when its window gains focus, about once a second while it is in front, and one last time as it leaves. Never while it is in the background. A slow read (a large image) spaces the polls out to about 5% of the time, and a locked screen or a sleeping Mac stops them.
 - **What counts as new:**
   - **On focus:** anything changed since Deck last looked. It was copied in another app.
   - **While Deck is in front:** only an image or files, e.g. a screenshot taken straight to the clipboard with ⌃⇧⌘4. Text that changes while Deck is in front is Deck's own copy (a terminal selection, Copy hash, Copy path) and never brings up a card.
