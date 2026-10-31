@@ -60,6 +60,13 @@ Windows installer; publish it once it looks right.
     It follows the end, pauses when you scroll up, and resumes from "↓ N new".
   - **Picker:** follows the folder's newest session; ▾ pins another one. Deck only
     reads Claude's files.
+  - **Clipboard:** what you just copied in another app (an image, files, text) shows
+    under the panel with **Add to Claude**, which puts it into the prompt without
+    sending. Cmd/Ctrl+V does the same in any tab: copied files paste as quoted paths
+    with a trailing space (several at once arrive as paths Claude can read), and with
+    Claude running, a copied image instead pastes as `[Image #N]`. Dropping files on
+    the terminal pastes their paths the same way. Deck looks at the clipboard only
+    while it's in front, never shows a password manager's copy, and keeps no history.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 

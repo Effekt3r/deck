@@ -139,9 +139,9 @@ deck/
    Mac signing and notarisation work (2026-10-31); Windows signing waits
    for a route.
 6. **M5** — Polish: settings UI, notifications, auto-update, and:
-   - **Clipboard card and smart paste:** the Claude panel shows what was just
-     copied (image, files, text) with "Add to Claude"; Cmd/Ctrl+V and drops
-     insert images and files as paths. Spec:
+   - **Clipboard card and smart paste** (built 2026-10-31; Windows to test): the
+     Claude panel shows what was just copied (image, files, text) with "Add to
+     Claude"; Cmd/Ctrl+V and drops insert images and files as paths. Spec:
      `docs/superpowers/specs/2026-10-31-clipboard-design.md`.
    - **Permissions guide on first launch:** walk through every permission Deck
      needs, including what Claude Code and the other tools in its tabs need
