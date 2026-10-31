@@ -131,7 +131,7 @@ reference for M2/M3; keep it working until Deck replaces it.
 | `build/installer*.bmp`, `uninstallerSidebar.bmp`, `installer.nsh`, `license.txt` | NSIS installer art, "Open in Deck" folder context menu, EULA (have Franco review) |
 | `build/trayTemplate*.png`, `tray.*` | Menu-bar / tray icons |
 | `build/entitlements.mac.plist` | Hardened-runtime entitlements (JIT, node-pty, network) |
-| `electron-builder.yml` | Mac dmg+zip (arm64/x64, notarised), Windows NSIS (x64; arm64 later), GitHub publish |
+| `electron-builder.yml` | Mac dmg+zip (Apple silicon only, notarised), Windows NSIS (x64; arm64 later), GitHub publish; each keeps only its own node-pty prebuild |
 | `.github/workflows/release.yml` | Tag `v*` or manual run → one draft release (notes from `CHANGELOG.md`); signs when secrets exist |
 
 The NSIS include passes `--open "<folder>"`: the app must handle that argument
@@ -246,7 +246,7 @@ excludes every `build` folder.
    splitter drags, View menu and ⌘⇧G / ⌘⇧A checked. **Next:** Windows 11 with
    `docs/TESTING.md` on v0.2.0, a Windows signing route (M4), then M5 (settings
    UI, notifications, auto-update).
-4. CI for macOS (arm64 + x64) and Windows x64: `release.yml` signs and notarises
+4. CI for macOS (Apple silicon only, since 2026-10-31) and Windows x64: `release.yml` signs and notarises
    the Mac build (secrets set 2026-10-31; a run fails
    without them and checks both apps' signature and ticket). Windows stays
    unsigned until there's a signing route. `ci.yml` runs typecheck + tests on

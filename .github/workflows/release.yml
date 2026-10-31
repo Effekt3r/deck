@@ -5,9 +5,10 @@
 # replaces its draft; once a version is published, runs for it build nothing
 # (publishing a draft creates its tag, which starts this workflow again).
 #
-# The Mac apps must come out signed and notarised: the run fails without the
-# macOS secrets and checks both apps before drafting (`npm run dist:mac` builds
-# unsigned locally). Windows signing switches on once its secrets exist.
+# The Mac app (Apple silicon only) must come out signed and notarised: the run
+# fails without the macOS secrets and checks the app before drafting (`npm run
+# dist:mac` builds unsigned locally). Windows signing switches on once its
+# secrets exist.
 #
 # macOS secrets:   MAC_CERT_P12_BASE64, MAC_CERT_PASSWORD
 #                  (Developer ID Application: Effekt Studios Pty Ltd (QT63GS3Q44))
@@ -146,18 +147,28 @@ jobs:
         # files (latest*.yml) are written either way.
         run: npx electron-builder ${{ matrix.target }} --publish never
 
-      - name: Check the Mac apps are signed and notarised
+      - name: Check the Mac app (signed, notarised, Apple silicon only)
         if: runner.os == 'macOS'
         shell: bash
         run: |
           set -euo pipefail
-          for app in dist/mac/Deck.app dist/mac-arm64/Deck.app; do
-            codesign --verify --deep --strict "$app"
-            info=$(codesign -dv --verbose=2 "$app" 2>&1)
-            grep -E '^(Authority=Developer ID Application|TeamIdentifier)' <<<"$info"
-            grep -q '^TeamIdentifier=QT63GS3Q44$' <<<"$info" || { echo "::error::$app isn't signed by team QT63GS3Q44"; exit 1; }
-            xcrun stapler validate "$app"
-          done
+          app=dist/mac-arm64/Deck.app
+          codesign --verify --deep --strict "$app"
+          info=$(codesign -dv --verbose=2 "$app" 2>&1)
+          grep -E '^(Authority=Developer ID Application|TeamIdentifier)' <<<"$info"
+          grep -q '^TeamIdentifier=QT63GS3Q44$' <<<"$info" || { echo "::error::$app isn't signed by team QT63GS3Q44"; exit 1; }
+          xcrun stapler validate "$app"
+          # Apple silicon only: no file in the app may be Intel-only code.
+          intel=""
+          while IFS= read -r -d '' f; do
+            archs=$(lipo -archs "$f" 2>/dev/null) || continue   # not Mach-O
+            case " $archs " in *" arm64 "* | *" arm64e "*) ;; *) intel+="${f#"$app"/} [$archs]"$'\n' ;; esac
+          done < <(find "$app" -type f -print0)
+          if [ -n "$intel" ]; then
+            echo "::error::Intel-only code in the Apple silicon app:"
+            printf '%s' "$intel"
+            exit 1
+          fi
 
       - uses: actions/upload-artifact@v4
         with:
@@ -194,8 +205,7 @@ jobs:
         run: |
           set -euo pipefail
           tag="v$VERSION"
-          for f in "Deck-$VERSION-mac-arm64.dmg" "Deck-$VERSION-mac-x64.dmg" \
-                   "Deck-$VERSION-mac-arm64.zip" "Deck-$VERSION-mac-x64.zip" \
+          for f in "Deck-$VERSION-mac-arm64.dmg" "Deck-$VERSION-mac-arm64.zip" \
                    "Deck-$VERSION-win-x64.exe" latest-mac.yml latest.yml; do
             [ -f "dist/$f" ] || { echo "::error::the builds didn't produce $f"; exit 1; }
           done

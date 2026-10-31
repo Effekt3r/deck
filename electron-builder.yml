@@ -16,17 +16,24 @@ asarUnpack:
   - "**/node_modules/node-pty/**"   # native PTY binaries must stay outside asar
 # node-pty ships N-API prebuilds for every target (darwin/win32, arm64/x64), which
 # load in Electron as they are; rebuilding from source only adds a toolchain step.
+# Each platform's `files` below keeps only the prebuild its app runs.
 npmRebuild: false
 
 # ---------------------------------------------------------------- macOS
 mac:
   category: public.app-category.developer-tools
   icon: build/icon.icns
+  # Apple silicon only (2026-10-31): macOS 27 runs only on Apple silicon, and
+  # Rosetta stops running Intel apps with macOS 28. release.yml fails if the app
+  # holds any Intel-only code.
   target:
     - target: dmg
-      arch: [arm64, x64]
+      arch: [arm64]
     - target: zip            # needed for auto-update
-      arch: [arm64, x64]
+      arch: [arm64]
+  files:
+    - "!**/node_modules/node-pty/prebuilds/darwin-x64/**"
+    - "!**/node_modules/node-pty/prebuilds/win32-*/**"
   hardenedRuntime: true
   gatekeeperAssess: false
   entitlements: build/entitlements.mac.plist
@@ -60,6 +67,12 @@ win:
   target:
     - target: nsis
       arch: [x64]            # arm64 later (node-pty has to be cross-built for it)
+  files:                     # the x64 prebuild only, without its debug symbols
+    - "!**/node_modules/node-pty/prebuilds/darwin-*/**"
+    - "!**/node_modules/node-pty/prebuilds/win32-arm64/**"
+    - "!**/node_modules/node-pty/prebuilds/**/*.pdb"
+    # node-pty's build input; the prebuild carries the conpty it loads
+    - "!**/node_modules/node-pty/third_party/**"
   # No Windows signing route yet (2026-10-30): installers are unsigned. Add
   # publisherName with the certificate — electron-updater rejects updates whose
   # signature doesn't match it, so it must not be set while unsigned.
