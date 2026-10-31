@@ -1,13 +1,16 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, type MutableRefObject, useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
+import { quotePaths } from '@shared/quote'
 import type { TerminalPatch, TerminalTab } from '../tabs/tabs'
+import { runsClaude } from '../tabs/title'
 import { keyAction } from './keys'
 import { parseOsc7, parseSetUserVar } from './osc'
+import { pasteSafe } from './paste'
 import { SearchBar } from './SearchBar'
 import { FONT_FAMILY, FONT_SIZE, theme } from './theme'
 
@@ -18,13 +21,15 @@ interface Props {
   findRequest: number
   /** Windows build number; lets xterm reflow ConPTY output on resize. */
   windowsBuild?: number
+  /** Set while mounted: pastes text into this terminal (the clipboard card's Add) and focuses it. */
+  pasteRef?: MutableRefObject<((text: string) => void) | null>
   onUpdate(id: string, patch: TerminalPatch): void
   onClose(id: string): void
 }
 
 /** One xterm and one pty per mount. Hidden tabs stay mounted (display: none)
  *  so their scrollback survives. */
-export const TerminalView = memo(function TerminalView({ tab, active, findRequest, windowsBuild, onUpdate, onClose }: Props) {
+export const TerminalView = memo(function TerminalView({ tab, active, findRequest, windowsBuild, pasteRef, onUpdate, onClose }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -35,11 +40,17 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
     callbacks.current = { onUpdate, onClose }
   })
 
+  // The paste handler, set up once per mount, needs the tab's latest process and title.
+  const tabRef = useRef(tab)
+  useEffect(() => {
+    tabRef.current = tab
+  })
+
   // Runs once per mount: the tab's id, starting cwd and command are read here only.
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const { platform, pty, app } = window.deck
+    const { platform, pty, app, clipboard } = window.deck
     const id = tab.id
     const update = (patch: TerminalPatch) => callbacks.current.onUpdate(id, patch)
     const close = () => callbacks.current.onClose(id)
@@ -142,6 +153,58 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
       }),
     ]
 
+    // Cmd/Ctrl+V: main reads the clipboard. Copied files paste as quoted paths and, with Claude
+    // running, an image as a saved PNG's path (Claude attaches it); text pastes as it is.
+    const paste = (text: string) => term.paste(pasteSafe(text))
+    const smartPaste = () => {
+      const { process: name, title: current } = tabRef.current
+      clipboard.paste({ claude: runsClaude(name, current) }).then(
+        (result) => {
+          if (!result || disposed) return
+          if ('text' in result) paste(result.text)
+          else console.warn('paste:', result.error)
+        },
+        (err: unknown) => console.warn('paste failed', err),
+      )
+    }
+    // macOS: the Edit menu's Paste arrives as a paste event on xterm's textarea; take it first.
+    const onPaste = (e: ClipboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      smartPaste()
+    }
+    // Files dropped from Finder or Explorer: their quoted paths, like pasting copied files.
+    const onDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('Files')) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+    const onDrop = (e: DragEvent) => {
+      const files = Array.from(e.dataTransfer?.files ?? [])
+      if (!files.length) return
+      e.preventDefault()
+      const paths = files.map((f) => app.pathForFile(f)).filter((p) => p !== '')
+      const text = quotePaths(paths, platform) // null: none, or a name with control characters
+      if (text === null) {
+        if (paths.length) console.warn("drop: a file name has control characters, so it isn't pasted")
+        return
+      }
+      if (!exited) {
+        paste(text)
+        term.focus()
+      }
+    }
+    host.addEventListener('paste', onPaste, true)
+    host.addEventListener('dragover', onDragOver)
+    host.addEventListener('drop', onDrop)
+    if (pasteRef) {
+      pasteRef.current = (text) => {
+        if (exited) return
+        paste(text)
+        term.focus()
+      }
+    }
+
     term.attachCustomKeyEventHandler((e) => {
       if (e.isComposing) return true
       const action = keyAction(e, platform, term.hasSelection())
@@ -154,9 +217,7 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
         if (term.hasSelection()) app.copyText(term.getSelection()) // Ctrl+Shift+C alone keeps the clipboard
         term.clearSelection()
       } else if (action === 'paste') {
-        void app.readText().then((text) => {
-          if (text && !disposed) term.paste(text)
-        })
+        smartPaste()
       } else {
         setSearch((s) => ({ open: true, focus: s.focus + 1 }))
       }
@@ -200,6 +261,10 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
       for (const off of unsubscribe) off()
       for (const d of disposables) d.dispose()
       if (ptyId && !exited) pty.kill(ptyId)
+      host.removeEventListener('paste', onPaste, true)
+      host.removeEventListener('dragover', onDragOver)
+      host.removeEventListener('drop', onDrop)
+      if (pasteRef) pasteRef.current = null
       term.dispose()
       termRef.current = null
       fitRef.current = null
