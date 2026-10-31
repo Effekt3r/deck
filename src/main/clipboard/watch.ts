@@ -88,6 +88,9 @@ export class ClipboardWatch {
       const item = this.item
       if (!item || item.preview.id !== id) return { error: 'That clipboard item is gone. Copy it again.' }
       const result = (await this.deps.insert(item.content, true)) ?? { error: 'There is nothing to add.' }
+      // dismiss() isn't serialised against add(): a × pressed during a slow read or image save
+      // must still win, not be overwritten by an insert that lands after it.
+      if (this.item !== item) return { error: 'That clipboard item is gone. Copy it again.' }
       if ('text' in result) this.set(null)
       return result
     })

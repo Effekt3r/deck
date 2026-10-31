@@ -212,6 +212,27 @@ describe('ClipboardWatch', () => {
     watch.stop()
   })
 
+  it('dismiss() during a slow add fails it instead of inserting, and the item stays dismissed', async () => {
+    let finish: (result: InsertResult) => void = () => {}
+    const { clip, watch, last, published } = setup({
+      insert: () => new Promise((resolve) => { finish = resolve }),
+    })
+    await watch.baseline()
+    clip.now = files('/a.pdf')
+    watch.focus()
+    await tick()
+    const id = last()!.id
+    const adding = watch.add(id)
+    await tick() // add()'s task has started and is now awaiting insert()
+    watch.dismiss(id)
+    expect(last()).toBeNull()
+    finish({ text: '/a.pdf' })
+    expect(await adding).toEqual({ error: 'That clipboard item is gone. Copy it again.' })
+    expect(watch.current()).toBeNull()
+    expect(published.filter((p) => p === null)).toHaveLength(1) // dismiss()'s null, not a second one from add()
+    watch.stop()
+  })
+
   it("paste() uses up the card's item, and what was pasted never shows later", async () => {
     const { clip, watch, last, published } = setup()
     await watch.baseline()
