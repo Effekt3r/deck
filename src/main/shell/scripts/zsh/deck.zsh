@@ -1,5 +1,6 @@
 # Deck: at every prompt, report the cwd (OSC 7) and the git repo and branch
-# (OSC 1337 SetUserVar). Same protocol as the WezTerm prototype.
+# (OSC 1337 SetUserVar). Same protocol as the WezTerm prototype. Also when a
+# command line changes directory: `cd x && claude` runs before the next prompt.
 __deck_setvar() {
   printf '\033]1337;SetUserVar=%s=%s\007' "$1" "$(printf '%s' "$2" | base64 | tr -d '\n')"
 }
@@ -14,5 +15,12 @@ __deck_precmd() {
   __deck_setvar GIT_BRANCH "$branch"
   printf '\033]7;file://%s%s\033\\' "${HOST:-localhost}" "${${PWD//\%/%25}// /%20}"
 }
+# The shell's own cd only: a subshell's isn't the tab's (and in $(…) the report
+# would land in the output). Straight to the terminal, as cd's output may be
+# redirected (pushd x >/dev/null); without one there is nothing to tell.
+__deck_chpwd() {
+  (( ZSH_SUBSHELL )) || { __deck_precmd > /dev/tty } 2>/dev/null
+}
 autoload -Uz add-zsh-hook
 add-zsh-hook precmd __deck_precmd
+add-zsh-hook chpwd __deck_chpwd
