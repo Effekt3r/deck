@@ -14,10 +14,11 @@ export function cardTitle(item: ClipboardPreview): string {
   }
 }
 
-/** A short type label for a file name: its extension in capitals ("PDF"), or '' for none or a long one. */
+/** A short type label for a file name: its extension in capitals ("PDF"), or '' for none, a long
+ *  one, or one with characters other than letters and digits. */
 export function fileBadge(name: string): string {
   const dot = name.lastIndexOf('.')
   if (dot <= 0 || dot === name.length - 1) return ''
   const ext = name.slice(dot + 1)
-  return ext.length <= 4 ? ext.toUpperCase() : ''
+  return /^[a-z0-9]{1,4}$/i.test(ext) ? ext.toUpperCase() : ''
 }

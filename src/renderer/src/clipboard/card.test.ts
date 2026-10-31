@@ -20,4 +20,10 @@ describe('fileBadge', () => {
     expect(fileBadge('Makefile')).toBe('')
     expect(fileBadge('.env')).toBe('')
   })
+
+  it('is only letters and digits: a longer last part or one with other characters gets none', () => {
+    expect(fileBadge('a.b c')).toBe('')
+    expect(fileBadge('archive.tar.gz')).toBe('GZ')
+    expect(fileBadge('v1.5')).toBe('5')
+  })
 })

@@ -47,22 +47,6 @@ export function App() {
   /** What was just copied, offered under the Claude panel of tabs where Claude runs. */
   const clipItem = useClipboardItem()
 
-  // Drops the terminal doesn't take (a link from a browser onto a panel) would reach Chromium's
-  // default and open the link: refuse them, except in text fields.
-  useEffect(() => {
-    const editable = (t: EventTarget | null) =>
-      t instanceof HTMLElement && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
-    const refuse = (e: DragEvent) => {
-      if (!editable(e.target)) e.preventDefault()
-    }
-    document.addEventListener('dragover', refuse)
-    document.addEventListener('drop', refuse)
-    return () => {
-      document.removeEventListener('dragover', refuse)
-      document.removeEventListener('drop', refuse)
-    }
-  }, [])
-
   // Menu commands and IPC events read the latest state through refs.
   const stateRef = useRef(state)
   const homeRef = useRef('')
@@ -228,27 +212,27 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const claudeRef = useRef<HTMLDivElement>(null)
   /** Pastes into this tab's terminal (TerminalView sets it). */
   const pasteRef = useRef<((text: string) => void) | null>(null)
-  const [clip, setClip] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
-  useEffect(() => setClip({ busy: false, error: null }), [clipItem?.id])
-  // An Add answered after a newer item replaced its own: its error isn't the new card's.
-  const clipIdRef = useRef(clipItem?.id)
-  useLayoutEffect(() => {
-    clipIdRef.current = clipItem?.id
-  }, [clipItem?.id])
+  /** Add's progress for one item: a newer item starts clean, nothing to reset. */
+  const [clip, setClip] = useState<{ id: string; busy: boolean; error: string | null } | null>(null)
+  const clipState = clip && clip.id === clipItem?.id ? clip : null
   const addClip = useCallback((id: string) => {
-    setClip({ busy: true, error: null })
-    const fail = (error: string) => setClip({ busy: false, error: clipIdRef.current === id ? error : null })
+    setClip({ id, busy: true, error: null })
+    const settle = (error: string | null) => setClip((c) => (c?.id === id ? { id, busy: false, error } : c))
     window.deck.clipboard.add(id).then(
       (result) => {
         if ('text' in result) {
           pasteRef.current?.(result.text)
-          setClip({ busy: false, error: null })
-        } else fail(result.error)
+          settle(null)
+        } else settle(result.error)
       },
-      (err: unknown) => fail(err instanceof Error ? err.message : String(err)),
+      (err: unknown) => settle(err instanceof Error ? err.message : String(err)),
     )
   }, [])
-  const dismissClip = useCallback((id: string) => window.deck.clipboard.dismiss(id), [])
+  const dismissClip = useCallback((id: string) => {
+    window.deck.clipboard.dismiss(id)
+    // × via the keyboard leaves focus on the card's button, about to unmount: give it to the terminal.
+    if (claudeRef.current?.contains(document.activeElement)) rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
+  }, [])
 
   // Hidden for the repo it was hidden in: like the prototype's q, entering another repo shows it again.
   const hiddenIn = useRef<string | null>(null)
@@ -341,7 +325,8 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
           <ClaudePanel folder={folder} snapshot={claude.snapshot} phase={claude.phase} error={claude.error}
             claudeRuns={claudeRuns} active={active} home={home} onRetry={claude.retry} />
           {claudeRuns && clipItem && (
-            <ClipboardCard item={clipItem} busy={clip.busy} error={clip.error} onAdd={addClip} onDismiss={dismissClip} />
+            <ClipboardCard item={clipItem} home={home} busy={clipState?.busy ?? false} error={clipState?.error ?? null}
+              onAdd={addClip} onDismiss={dismissClip} />
           )}
         </div>
       )}
