@@ -27,9 +27,10 @@ product name, bundle id or icon). Description/copy is ours to write.
 **Deck app: M3 done** (2026-10-31): Electron app with:
 - the Projects tab, terminal tabs and shell integration (M1, merged in PR #1);
 - the git panel (M2, PR #2);
-- the Claude panel (M3, branch `m3-claude-panel` on top of `m2-git-panel`).
+- the Claude panel (M3, PR #3, into `main` with PR #4).
 
-Signed builds (M4) and polish (M5) are next. Plans that built them:
+Mac builds are signed and notarised in CI (M4, 2026-10-31); a Windows signing
+route and polish (M5) are next. Plans that built M1–M3:
 `docs/superpowers/plans/2026-10-30-m1-electron-shell.md`, `…/2026-10-31-m2-git-panel.md`,
 `…/2026-10-31-m3-claude-panel.md`.
 
@@ -131,7 +132,7 @@ reference for M2/M3; keep it working until Deck replaces it.
 | `build/trayTemplate*.png`, `tray.*` | Menu-bar / tray icons |
 | `build/entitlements.mac.plist` | Hardened-runtime entitlements (JIT, node-pty, network) |
 | `electron-builder.yml` | Mac dmg+zip (arm64/x64, notarised), Windows NSIS (x64; arm64 later), GitHub publish |
-| `.github/workflows/release.yml` | Tag `v*` → build both platforms; signs only when secrets exist |
+| `.github/workflows/release.yml` | Tag `v*` or manual run → one draft release (notes from `CHANGELOG.md`); signs when secrets exist |
 
 The NSIS include passes `--open "<folder>"`: the app must handle that argument
 (open a tab in that folder). Bundle id `com.effektstudios.deck` is confirmed.
@@ -241,13 +242,21 @@ excludes every `build` folder.
    the dashboard scan is ported).~~ Done 2026-10-30. ~~M2 git panel. M3 Claude
    panel.~~ Done 2026-10-31. Tests build session logs with
    `src/main/claude/test-log.ts`; never copy real session logs into the repo (they
-   hold client code and prompts). **Next:** test M1–M3 on Windows 11 and look at
-   them on screen (the visual checks were pending at merge), then M4 (signed,
-   notarised builds) and M5 (settings UI, notifications, auto-update).
-4. CI for macOS (arm64 + x64) and Windows x64: `.github/workflows/release.yml`
-   exists; Mac signing + notarisation switch on when the secrets are added,
-   Windows stays unsigned until there's a signing route. `ci.yml` runs typecheck +
-   tests on macOS and Windows for pull requests.
+   hold client code and prompts). On screen (macOS, 2026-10-31): both panels,
+   splitter drags, View menu and ⌘⇧G / ⌘⇧A checked. **Next:** Windows 11 with
+   `docs/TESTING.md` on v0.2.0, a Windows signing route (M4), then M5 (settings
+   UI, notifications, auto-update).
+4. CI for macOS (arm64 + x64) and Windows x64: `release.yml` signs and notarises
+   the Mac build (secrets set 2026-10-31; a run fails
+   without them and checks both apps' signature and ticket). Windows stays
+   unsigned until there's a signing route. `ci.yml` runs typecheck + tests on
+   macOS and Windows for pull requests. **Releasing:** bump `version` in
+   `package.json`, add its `CHANGELOG.md` section, merge, then
+   `gh workflow run release.yml --ref main` (or push the tag `v<version>`), check
+   the draft and publish it. The build jobs only upload artifacts; the release
+   job makes the one draft (two builders publishing at once each made their own).
+   A Keychain-exported `.p12` uses old ciphers: OpenSSL 3 reads it only with
+   `openssl pkcs12 -legacy`.
 
 Deferred from the M1 review (`3f9feb6` fixed the important ones):
 - **Windows, untested:**

@@ -5,8 +5,9 @@ its git history on the left and what Claude is doing on the right. Spec and plan
 [`docs/DECK.md`](docs/DECK.md).
 
 **Status:** M3 — the Electron app has the Projects tab, terminal tabs with
-shell integration, the git panel and the Claude panel. Next: signed builds (M4)
-and polish (M5). The WezTerm prototype below is the reference it replaces.
+shell integration, the git panel and the Claude panel; the Mac build is signed
+and notarised (M4, Windows signing to follow). Next: polish (M5). The WezTerm
+prototype below is the reference it replaces.
 
 ## Deck app (Electron)
 
@@ -22,6 +23,12 @@ npm run dist:mac     # dist/ (dmg + zip; unsigned unless signing secrets are set
 ```
 
 If `npm run dev` says Electron failed to install, run `node node_modules/electron/install.js`.
+
+**Releases:** bump `version` in `package.json` and add its section to
+[`CHANGELOG.md`](CHANGELOG.md), then run the **release** workflow on `main`
+(`gh workflow run release.yml --ref main`) or push the tag `v<version>`. It makes
+one draft GitHub release with the Mac dmg + zip (signed and notarised) and the
+Windows installer; publish it once it looks right.
 
 - **Projects tab:** pinned folders, then repos under the scan roots, newest
   first, with branch, changes and an "open" marker. Double-click (or Enter) opens
