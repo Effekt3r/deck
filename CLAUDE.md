@@ -131,7 +131,7 @@ reference for M2/M3; keep it working until Deck replaces it.
 | `build/trayTemplate*.png`, `tray.*` | Menu-bar / tray icons |
 | `build/entitlements.mac.plist` | Hardened-runtime entitlements (JIT, node-pty, network) |
 | `electron-builder.yml` | Mac dmg+zip (arm64/x64, notarised), Windows NSIS (x64; arm64 later), GitHub publish |
-| `.github/workflows/release.yml` | Tag `v*` → build both platforms; signs only when secrets exist |
+| `.github/workflows/release.yml` | Tag `v*` or manual run → one draft release (notes from `CHANGELOG.md`); signs when secrets exist |
 
 The NSIS include passes `--open "<folder>"`: the app must handle that argument
 (open a tab in that folder). Bundle id `com.effektstudios.deck` is confirmed.
@@ -244,10 +244,16 @@ excludes every `build` folder.
    hold client code and prompts). **Next:** test M1–M3 on Windows 11 and look at
    them on screen (the visual checks were pending at merge), then M4 (signed,
    notarised builds) and M5 (settings UI, notifications, auto-update).
-4. CI for macOS (arm64 + x64) and Windows x64: `.github/workflows/release.yml`
-   exists; Mac signing + notarisation switch on when the secrets are added,
-   Windows stays unsigned until there's a signing route. `ci.yml` runs typecheck +
-   tests on macOS and Windows for pull requests.
+4. CI for macOS (arm64 + x64) and Windows x64: `release.yml` signs and notarises
+   the Mac build (secrets set 2026-10-31; first signed build v0.2.0). Windows stays
+   unsigned until there's a signing route. `ci.yml` runs typecheck + tests on
+   macOS and Windows for pull requests. **Releasing:** bump `version` in
+   `package.json`, add its `CHANGELOG.md` section, merge, then
+   `gh workflow run release.yml --ref main` (or push the tag `v<version>`), check
+   the draft and publish it. The build jobs only upload artifacts; the release
+   job makes the one draft (two builders publishing at once each made their own).
+   A Keychain-exported `.p12` uses old ciphers: OpenSSL 3 reads it only with
+   `openssl pkcs12 -legacy`.
 
 Deferred from the M1 review (`3f9feb6` fixed the important ones):
 - **Windows, untested:**

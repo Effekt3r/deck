@@ -1,7 +1,7 @@
 {
   "name": "deck",
   "productName": "Deck",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "A terminal built around Claude Code: every project in a tab, its git history on the left and what Claude is doing on the right.",
   "author": "Effekt Studios",
   "private": true,
