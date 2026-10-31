@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/channels'
-import type { DeckApi, MenuCommand, Platform } from '@shared/types'
+import type { DeckApi, GitSnapshot, MenuCommand, Platform } from '@shared/types'
 
 function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
   const listener = (_e: IpcRendererEvent, ...args: unknown[]) => cb(...(args as A))
@@ -27,6 +27,15 @@ const api: DeckApi = {
     setConfig: (config) => ipcRenderer.invoke(IPC.projectsSetConfig, config),
     togglePin: (path) => ipcRenderer.invoke(IPC.projectsTogglePin, path),
     contextMenu: (path) => ipcRenderer.invoke(IPC.projectsContextMenu, path),
+  },
+  git: {
+    subscribe: (repo) => ipcRenderer.invoke(IPC.gitSubscribe, repo),
+    unsubscribe: (repo) => ipcRenderer.send(IPC.gitUnsubscribe, repo),
+    onUpdate: (cb) => on<[string, GitSnapshot]>(IPC.gitUpdate, cb),
+    logPage: (repo, skip, limit) => ipcRenderer.invoke(IPC.gitLogPage, repo, skip, limit),
+    details: (repo, hash) => ipcRenderer.invoke(IPC.gitDetails, repo, hash),
+    targets: (repo) => ipcRenderer.invoke(IPC.gitTargets, repo),
+    setTarget: (repo, branch, target) => ipcRenderer.invoke(IPC.gitSetTarget, repo, branch, target),
   },
   app: {
     info: () => ipcRenderer.invoke(IPC.appInfo),

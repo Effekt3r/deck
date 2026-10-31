@@ -1,0 +1,118 @@
+/* Commit graph: virtualised 24 px rows, the lanes canvas on top of their gutter. */
+
+.graph {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  outline: none;
+  font-size: 12px;
+}
+.graph:focus-visible { outline: none; }
+
+.graph-content { position: relative; }
+
+.graph-canvas {
+  position: absolute;
+  left: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.graph-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 var(--gutter, 22px);
+  color: var(--text);
+  white-space: nowrap;
+  contain: layout paint;
+}
+.graph-row:hover { background: rgb(28 31 61 / 0.6); }
+.graph-row.selected { background: #1a1d3a; box-shadow: inset 2px 0 0 rgb(61 220 193 / 0.55); }
+.graph:focus .graph-row.selected { background: var(--tab-active); box-shadow: inset 2px 0 0 var(--teal); }
+
+.g-hash {
+  flex: none;
+  width: 56px;
+  padding: 0 4px;
+  border-radius: 4px;
+  color: var(--faint);
+  font: 11px/17px var(--font-mono);
+  text-align: center;
+}
+.graph-row.merge .g-hash { background: var(--amber); color: #201203; font-weight: 600; }
+
+.g-refs {
+  flex: 0 1 auto;
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+  max-width: 58%;
+  overflow: hidden;
+}
+.g-pill {
+  flex: 0 1 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 26px;
+  max-width: 128px;
+  height: 17px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 15px;
+}
+.g-pill-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.g-pill-mark { flex: none; opacity: 0.85; }
+.g-pill.current { background: var(--teal); border-color: var(--teal); color: #052620; }
+.g-pill.branch { background: rgb(61 220 193 / 0.08); border-color: rgb(61 220 193 / 0.5); color: var(--teal); }
+.g-pill.remote { border-color: var(--line-strong); color: var(--muted); }
+.g-pill.tag { background: rgb(255 159 67 / 0.08); border-color: rgb(255 159 67 / 0.5); color: var(--amber); }
+.g-pill.head { background: var(--violet); border-color: var(--violet); color: #160c34; }
+.g-pill.more { flex: none; min-width: 0; padding: 0 5px; border-color: var(--line); color: var(--faint); }
+
+.g-subject { flex: 1 1 0; min-width: 32px; overflow: hidden; text-overflow: ellipsis; }
+.graph-row.merge .g-subject { color: var(--ink); font-weight: 600; }
+
+.g-author {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--faint);
+  font-size: 11px;
+}
+.g-age {
+  flex: none;
+  min-width: 24px;
+  color: var(--faint);
+  font-size: 11px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.graph-row.selected .g-author, .graph-row.selected .g-age { color: var(--muted); }
+
+/* Narrow panel or wide graph: the subject keeps the room (GraphView decides). */
+.graph.no-author .g-author { display: none; }
+
+.graph-more {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--faint);
+  font-size: 11px;
+}

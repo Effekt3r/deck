@@ -45,7 +45,7 @@ Side panels are resizable and collapsible per tab and remember their width.
 **Git panel** (git repos only)
 - Header: current branch, merge target + commits to merge / behind, upstream
   ahead/behind, staged/changed/untracked/conflicts, in-progress merge/rebase.
-- Real graph: lanes computed from `git log --all --exclude=refs/stash
+- Real graph: lanes computed from `git log --exclude=refs/stash --all
   --date-order --format=%H%x1f%P%x1f%D%x1f%s%x1f%ct%x1f%an`, drawn on canvas/SVG
   with Sourcetree-like curves; branch/tag pills; commits that will merge
   highlighted; virtualised scrolling.
@@ -124,7 +124,7 @@ deck/
 
 1. **M0** — prototype verified on Mac (this repo). Done 2026-10-30.
 2. **M1** — Electron shell: tabs + terminal + shell integration + Projects tab. Done 2026-10-30 on macOS; Windows still to test.
-3. **M2** — Git panel with real graph + live refresh.
+3. **M2** — Git panel with real graph + live refresh. Done 2026-10-31 on macOS.
 4. **M3** — Claude panel.
 5. **M4** — Signed and notarised Mac build + signed Windows installer from CI.
 6. **M5** — Polish: settings UI, notifications, auto-update.

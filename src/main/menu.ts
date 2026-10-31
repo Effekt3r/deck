@@ -45,6 +45,8 @@ export function menuTemplate(
   const viewMenu: MenuItemConstructorOptions = {
     label: 'View',
     submenu: [
+      item('Git Panel', key('Cmd+Shift+G', 'Ctrl+Shift+G'), { type: 'toggle-git' }),
+      { type: 'separator' },
       ...(opts.packaged ? [] : ([{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }] satisfies MenuItemConstructorOptions[])),
       ...(mac ? ([{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }] satisfies MenuItemConstructorOptions[]) : []),
       { role: 'togglefullscreen' },

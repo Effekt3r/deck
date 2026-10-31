@@ -6,6 +6,7 @@ import { app, type BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electr
 import { IPC } from '@shared/channels'
 import type { AppInfo, PtyCreateOptions } from '@shared/types'
 import { buildMenu } from './menu'
+import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
 import { registerProjectsIpc } from './projects/ipc'
 import { PtyManager } from './pty/manager'
@@ -37,10 +38,14 @@ function openFolder(folder: string | null): void {
 }
 
 function hasPwsh(): Promise<boolean> {
-  return new Promise((resolve) => execFile('where', ['pwsh'], { windowsHide: true }, (err) => resolve(!err)))
+  const where = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'where.exe')
+  return new Promise((resolve) => execFile(where, ['pwsh'], { windowsHide: true }, (err) => resolve(!err)))
 }
 
 async function start(): Promise<void> {
+  // Windows runs `git`, `pwsh` and the like from the current folder before PATH, and Explorer's
+  // "Open in Deck" may start us in a folder someone downloaded. --open folders are resolved already.
+  if (process.platform === 'win32') process.chdir(homedir())
   const userData = app.getPath('userData')
   const integrationDir = await installShellIntegration(join(userData, 'shell-integration'))
   const pwsh = process.platform === 'win32' && (await hasPwsh())
@@ -94,6 +99,8 @@ async function start(): Promise<void> {
     // First run takes over the WezTerm prototype's dashboard settings.
     importFrom: join(homedir(), '.config', 'wezterm', 'projects.json'),
   })
+
+  registerGitIpc({ targetsFile: join(userData, 'git-targets.json') })
 
   Menu.setApplicationMenu(buildMenu((cmd) => send(IPC.appMenu, cmd)))
   win = createWindow()

@@ -4,8 +4,8 @@ A terminal built around Claude Code, by Effekt Studios: every project in a tab,
 its git history on the left and what Claude is doing on the right. Spec and plan:
 [`docs/DECK.md`](docs/DECK.md).
 
-**Status:** M1 — the Electron app has the Projects tab and terminal tabs with
-shell integration. The git panel (M2) and Claude panel (M3) still live in the
+**Status:** M2 — the Electron app has the Projects tab, terminal tabs with
+shell integration, and the git panel. The Claude panel (M3) still lives in the
 WezTerm prototype below.
 
 ## Deck app (Electron)
@@ -36,6 +36,13 @@ If `npm run dev` says Electron failed to install, run `node node_modules/electro
   Next/previous tab: Cmd+Shift+] / [ (Windows: Ctrl+Tab / Ctrl+Shift+Tab).
   Windows copies/pastes with Ctrl+Shift+C/V (Ctrl+C copies only with a selection).
   Nothing uses Ctrl+Alt, which is AltGr on many keyboard layouts.
+- **Git panel** (left of every tab in a git repo; Cmd/Ctrl+Shift+G hides it for
+  that repo): branch, merge target with commits to merge and behind (pick another
+  target from the ▾ menu; Deck remembers it without touching the repo), upstream,
+  work-tree counts and merge/rebase in progress, then the graph of all branches
+  with the commits that will merge highlighted. It redraws within about half a
+  second of a commit, checkout or merge. Click a commit for its message and files;
+  Copy hash. Drag the edge to resize.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 

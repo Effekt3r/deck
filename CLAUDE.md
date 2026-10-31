@@ -24,10 +24,10 @@ product name, bundle id or icon). Description/copy is ours to write.
 
 ## Current state
 
-**Deck app: M1 done** (2026-10-30, branch `m1-electron-shell`): Electron app with
-the Projects tab, terminal tabs and shell integration. Git panel (M2) and Claude
-panel (M3) are next. Plan that built it:
-`docs/superpowers/plans/2026-10-30-m1-electron-shell.md`.
+**Deck app: M2 done** (2026-10-31): Electron app with the Projects tab, terminal
+tabs, shell integration (M1, merged in PR #1) and the git panel (M2, branch
+`m2-git-panel`). The Claude panel (M3) is next. Plans that built them:
+`docs/superpowers/plans/2026-10-30-m1-electron-shell.md`, `…/2026-10-31-m2-git-panel.md`.
 
 | Path | Role |
 |---|---|
@@ -37,7 +37,8 @@ panel (M3) are next. Plan that built it:
 | `src/main/shell/` | `shellLaunch()` (which shell/args/env, pure), zsh `ZDOTDIR` wrappers + `deck.zsh`, PowerShell `deck.ps1`, installed to userData |
 | `src/main/pty/` | node-pty sessions, output batching, startup command typed when the line editor is ready |
 | `src/main/projects/` | `projects.json` (userData), scan, `.git/HEAD` branch, dirty counts, native context menu |
-| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search), `projects/` |
+| `src/main/git/` | the git runner (the only way Deck runs git), header summary, merge target, graph log, commit details, watcher + poll probe, merge-target overrides, `git:*` subscriptions |
+| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter) |
 
 Things that aren't obvious from the code:
 - The app scrubs a parent Claude Code session's variables (`CLAUDECODE`, session
@@ -65,6 +66,16 @@ Things that aren't obvious from the code:
 - `ipcMain.on` listeners check their arguments and pty calls are guarded: a throw
   in a listener shows a modal error dialog (node-pty throws on a pty whose shell
   just exited).
+- Git panel: Deck never writes to a repo or fetches. The merge-target override
+  lives in userData (`git-targets.json`), never in `.git/config`. Every git call
+  goes through `src/main/git/runner.ts`, which sets `GIT_NO_LAZY_FETCH` so a
+  partial clone's commit details don't download blobs (they did, in review). `--exclude=refs/stash` must come **before**
+  `--all`, or the stash is listed (likewise notes, prefetch and original refs, which aren't branches). The log asks for full ref names
+  (`--decorate=full`), because a local branch can be called `origin/foo`. Git dirs
+  go through realpath (`/Volumes/wyobi` vs `Wyobi`). A 3 s poll runs one probe
+  (`git status` plus key git-dir file times) and rebuilds only when it changes:
+  rebuilding the whole snapshot each poll cost ~12% of a core on
+  AccessControl_Guard.
 
 **WezTerm prototype (v0):** does 1–4 with text (TUI) panes. It's the behaviour
 reference for M2/M3; keep it working until Deck replaces it.
@@ -196,12 +207,11 @@ excludes every `build` folder.
    (no Windows signing yet), GitHub Actions, `com.effektstudios.deck`, the
    branch + chevron icon in `branding/`.
 3. ~~Scaffold Deck and build M1 (tabs, terminal, shell integration, Projects tab;
-   the dashboard scan is ported).~~ Done 2026-10-30.
-   **Next: M2 git panel**, porting the merge-target rules and graph from
-   `git_graph_pane.py`, then **M3 Claude panel**, porting the log parser from
-   `claude_activity_pane.py`, both to TypeScript with unit tests against fixtures.
-   Write fixtures by hand in the shapes above; never copy real session logs into
-   the repo (they hold client code and prompts). Test M1 on Windows 11 too.
+   the dashboard scan is ported).~~ Done 2026-10-30. ~~M2 git panel.~~ Done 2026-10-31.
+   **Next: M3 Claude panel**, porting the log parser from `claude_activity_pane.py`
+   to TypeScript with unit tests against fixtures. Write fixtures by hand in the
+   shapes above; never copy real session logs into the repo (they hold client
+   code and prompts). Test M1 and M2 on Windows 11 too.
 4. CI for macOS (arm64 + x64) and Windows x64: `.github/workflows/release.yml`
    exists; Mac signing + notarisation switch on when the secrets are added,
    Windows stays unsigned until there's a signing route. `ci.yml` runs typecheck +
@@ -230,6 +240,30 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
   whether Shift+Enter → `ESC CR` should apply only in tabs running Claude, and add
   close confirmations (M5).
 - **Tests:** a `deck.ps1` test with Homebrew `pwsh`; the zsh test covers `-i -c`, not `-l`.
+- **Accepted risk (M2 review):** `git status` runs clean/filter drivers that a
+  repo's own `.git/config` defines. It's used for the header counts, the 3 s poll
+  probe and the Projects scan. That's the same exposure as a git-aware shell prompt
+  (oh-my-zsh runs status at every prompt), and only a repo whose `.git` came from
+  someone else (e.g. an archive) carries such drivers. Also, any program's output
+  can set `GIT_REPO` with OSC 1337 and point the panel at another folder. For M4:
+  a filter-free probe (`diff-files` + `ls-files -o`), and a per-session nonce on
+  the shell-integration sequences, as VS Code does.
+- **M2 follow-ups:**
+  - **Rebuilds:** rebuild only what changed (a work-tree-only change needs just
+    `git status`, not the log); resolve merge-target candidates with one `for-each-ref`.
+  - **Tab switches and background:** keep a repo's watcher alive a few seconds after
+    a tab switch; pause polls while the window is hidden.
+  - **Paging:** an update re-reads at most 9 extra pages, so very deep scrolling
+    resets. Move the paging logic into a tested module and the page constants into `@shared`.
+  - **Graph data:** hundreds of long-lived lanes cost memory (pass-through lines per
+    row). A `\x1e`/`\x1f` in commit text drops that commit (use NUL-separated records).
+  - **Overrides:** keyed by work-tree root, so worktrees don't share pins; key by the common dir.
+  - **Splitter drag:** resizes the pty on every column; check with Claude running and
+    consider resizing at drag end.
+  - **Code tidy:** two `countStatus` with different rules (projects vs git panel);
+    `symbolic-ref` runs twice per snapshot.
+  - **Windows:** a repo path with non-ASCII characters may hit the PowerShell
+    code-page issue above as "Not a git repository".
 - **Security (M4):**
   - Check the IPC sender frame.
   - Load the renderer from a custom protocol, not `file://`.
