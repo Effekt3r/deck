@@ -241,9 +241,10 @@ excludes every `build` folder.
    the dashboard scan is ported).~~ Done 2026-10-30. ~~M2 git panel. M3 Claude
    panel.~~ Done 2026-10-31. Tests build session logs with
    `src/main/claude/test-log.ts`; never copy real session logs into the repo (they
-   hold client code and prompts). **Next:** test M1–M3 on Windows 11 and look at
-   them on screen (the visual checks were pending at merge), then M4 (signed,
-   notarised builds) and M5 (settings UI, notifications, auto-update).
+   hold client code and prompts). On screen (macOS, 2026-10-31): both panels,
+   splitter drags, View menu and ⌘⇧G / ⌘⇧A checked. **Next:** Windows 11 with
+   `docs/TESTING.md` on v0.2.0, a Windows signing route (M4), then M5 (settings
+   UI, notifications, auto-update).
 4. CI for macOS (arm64 + x64) and Windows x64: `release.yml` signs and notarises
    the Mac build (secrets set 2026-10-31; first signed build v0.2.0). Windows stays
    unsigned until there's a signing route. `ci.yml` runs typecheck + tests on
