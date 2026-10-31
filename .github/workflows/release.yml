@@ -224,14 +224,6 @@ jobs:
             echo "::error::$tag was published while this run built; its files stay as they are"
             exit 1
           fi
-          # Drafts of this version from earlier runs make way for this one. If a
-          # step below fails, this version's draft is missing or partial: don't
-          # publish it; re-run the failed job (the artifacts are kept 3 days).
-          while read -r id draft; do
-            [ "$draft" = true ] || continue
-            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
-            echo "replaced the earlier draft $id"
-          done <<<"$releases"
 
           # This version's section of CHANGELOG.md ("## 0.2.0 — date" up to the next "## ").
           notes="$RUNNER_TEMP/notes.md"
@@ -243,8 +235,20 @@ jobs:
             notes_args=(--generate-notes)
           fi
 
-          gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Deck $VERSION" \
-            "${notes_args[@]}" dist/*
+          # The new draft comes first, so a failure leaves an earlier draft as it was.
+          if ! gh release create "$tag" --draft --target "$GITHUB_SHA" --title "Deck $VERSION" \
+               "${notes_args[@]}" dist/*; then
+            echo "::error::couldn't make the draft; any earlier draft of $tag is untouched, and a partial new one is replaced by the next run. HTTP 403 \"Resource not accessible by integration\" means main's workflow files changed after this commit: the Actions token can't create a release on a commit whose workflows differ from main's, so run the release again on main."
+            exit 1
+          fi
+          # Then earlier drafts of this version make way, each checked again just
+          # before it goes, in case it was published meanwhile.
+          while read -r id draft; do
+            [ "$draft" = true ] || continue
+            [ "$(gh api "repos/$GITHUB_REPOSITORY/releases/$id" --jq .draft)" = true ] || continue
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"
+            echo "replaced the earlier draft $id"
+          done <<<"$releases"
           echo "### Draft: Deck $VERSION" >> "$GITHUB_STEP_SUMMARY"
           for f in dist/*; do
             echo "- ${f#dist/} ($(( $(stat -c %s "$f") / 1048576 )) MB)"
