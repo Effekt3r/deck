@@ -3,8 +3,21 @@ import { existsSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { quotePath, quotePaths } from './quote'
 
+// vitest can't interrupt a synchronous child process, so every spawnSync/execFileSync below gets
+// this hard timeout: a hung shell fails (or skips) instead of blocking CI.
+const SPAWN_TIMEOUT = { timeout: 20_000 }
+
 const hasZsh = process.platform !== 'win32' && existsSync('/bin/zsh')
-const pwshAvailable = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-Command', 'exit 0']).status === 0
+
+function canRun(exe: string): boolean {
+  return spawnSync(exe, ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], SPAWN_TIMEOUT).status === 0
+}
+
+/** pwsh if it runs, else, on win32 only (where Deck itself falls back the same way), Windows
+ *  PowerShell; null when nothing usable was found. Off Windows, no pwsh just skips the suite below;
+ *  on Windows, with neither usable, the suite still runs, and fails instead of skipping silently. */
+const powershellExe = canRun('pwsh') ? 'pwsh' : process.platform === 'win32' && canRun('powershell.exe') ? 'powershell.exe' : null
+const skipPowerShell = powershellExe === null && process.platform !== 'win32'
 
 describe('quotePath', () => {
   it('wraps a path in single quotes for zsh', () => {
@@ -70,24 +83,30 @@ describe('quotePaths', () => {
 // These catch what string assertions can't: run quotePath's output through the real shells it's
 // quoting for.
 describe.skipIf(!hasZsh)('quotePath round-trips through zsh', () => {
+  // '/tmp/!!' covers history-expansion punctuation: `zsh -c` is non-interactive, so '!' history
+  // expansion never triggers here anyway, and single quotes block it in interactive shells too.
   const names = ["/tmp/it's here", '/tmp/$HOME `id` $(id)', '/tmp/a\\b "c"', '/tmp/*?[x]{a,b}', '/tmp/café ’‘‚‛', '/tmp/!!']
 
   it.each(names)('%s', (name) => {
-    const out = execFileSync('/bin/zsh', ['-f', '-c', `print -rn -- ${quotePath(name, 'darwin')!}`], { encoding: 'utf8' })
+    const out = execFileSync('/bin/zsh', ['-f', '-c', `print -rn -- ${quotePath(name, 'darwin')!}`], { encoding: 'utf8', ...SPAWN_TIMEOUT })
     expect(out).toBe(name)
   })
 })
 
-describe.skipIf(!pwshAvailable)('quotePath round-trips through PowerShell', () => {
+describe.skipIf(skipPowerShell)('quotePath round-trips through PowerShell', () => {
   const names = ["C:\\x\\it's ‘a’ ‚b‛.png", 'C:\\x\\$env:USERPROFILE `n [x].png', 'C:\\x\\a;b & c.png']
 
   it.each(names)('%s', (name) => {
-    // [char[]] then [int[]] gives UTF-16 code units, so this compares code units, not bytes in some
-    // console code page.
+    // On win32, neither pwsh nor Windows PowerShell could run (checked above); fail here rather
+    // than skip, since Deck falls back the same way and a silent skip would hide that.
+    if (!powershellExe) throw new Error('no usable PowerShell (pwsh or powershell.exe) found on PATH')
+    // ToCharArray then ForEach-Object [int]$_ gives UTF-16 code units in pwsh and in Windows
+    // PowerShell 5.1 alike (overload resolution for [string]::Join(',', [int[]][char[]](…)) can
+    // differ between them), so this compares code units, not bytes in some console code page.
     const out = execFileSync(
-      'pwsh',
-      ['-NoProfile', '-NonInteractive', '-Command', `[string]::Join(',', [int[]][char[]](${quotePath(name, 'win32')!}))`],
-      { encoding: 'utf8' },
+      powershellExe,
+      ['-NoProfile', '-NonInteractive', '-Command', `((${quotePath(name, 'win32')!}).ToCharArray() | ForEach-Object { [int]$_ }) -join ','`],
+      { encoding: 'utf8', ...SPAWN_TIMEOUT },
     ).trim()
     const expected = Array.from({ length: name.length }, (_, i) => name.charCodeAt(i)).join(',')
     expect(out).toBe(expected)
