@@ -27,9 +27,10 @@ product name, bundle id or icon). Description/copy is ours to write.
 **Deck app: M3 done** (2026-10-31): Electron app with:
 - the Projects tab, terminal tabs and shell integration (M1, merged in PR #1);
 - the git panel (M2, PR #2);
-- the Claude panel (M3, branch `m3-claude-panel` on top of `m2-git-panel`).
+- the Claude panel (M3, PR #3, into `main` with PR #4).
 
-Signed builds (M4) and polish (M5) are next. Plans that built them:
+Mac builds are signed and notarised in CI (M4, 2026-10-31); a Windows signing
+route and polish (M5) are next. Plans that built M1–M3:
 `docs/superpowers/plans/2026-10-30-m1-electron-shell.md`, `…/2026-10-31-m2-git-panel.md`,
 `…/2026-10-31-m3-claude-panel.md`.
 
@@ -246,7 +247,8 @@ excludes every `build` folder.
    `docs/TESTING.md` on v0.2.0, a Windows signing route (M4), then M5 (settings
    UI, notifications, auto-update).
 4. CI for macOS (arm64 + x64) and Windows x64: `release.yml` signs and notarises
-   the Mac build (secrets set 2026-10-31; first signed build v0.2.0). Windows stays
+   the Mac build (secrets set 2026-10-31; a run fails
+   without them and checks both apps' signature and ticket). Windows stays
    unsigned until there's a signing route. `ci.yml` runs typecheck + tests on
    macOS and Windows for pull requests. **Releasing:** bump `version` in
    `package.json`, add its `CHANGELOG.md` section, merge, then

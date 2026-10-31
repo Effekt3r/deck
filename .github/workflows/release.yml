@@ -5,8 +5,9 @@
 # replaces its draft; once a version is published, runs for it build nothing
 # (publishing a draft creates its tag, which starts this workflow again).
 #
-# Signing switches on automatically when the secrets below exist; without them
-# the builds are unsigned (fine for internal testing).
+# The Mac apps must come out signed and notarised: the run fails without the
+# macOS secrets and checks both apps before drafting (`npm run dist:mac` builds
+# unsigned locally). Windows signing switches on once its secrets exist.
 #
 # macOS secrets:   MAC_CERT_P12_BASE64, MAC_CERT_PASSWORD
 #                  (Developer ID Application: Effekt Studios Pty Ltd (QT63GS3Q44))
@@ -31,6 +32,7 @@ concurrency:
 jobs:
   prepare:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
       published: ${{ steps.version.outputs.published }}
@@ -52,6 +54,15 @@ jobs:
           if [ -n "$published" ]; then
             echo "::notice::v$version is published already; nothing to build (raise the version for a new release)"
           fi
+          # An existing tag fixes the release's commit: GitHub ignores --target then,
+          # and the release would ship this run's build under another commit's tag.
+          # (gh api exits non-zero for a missing tag; its error text isn't used.)
+          if [ -z "$published" ] && [ "$GITHUB_REF_TYPE" != tag ] &&
+             tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/tags/v$version" --jq .sha 2>/dev/null) &&
+             [ "$tag_sha" != "$GITHUB_SHA" ]; then
+            echo "::error::tag v$version is at ${tag_sha:0:7}, this run is ${GITHUB_SHA:0:7}: run on the tag, move the tag, or raise the version"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "published=$([ -n "$published" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
@@ -67,10 +78,28 @@ jobs:
           - os: windows-latest
             target: --win
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60     # a Mac build with notarisation takes ~10 min; the default is 6 h
     env:
-      HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 != '' }}
       HAS_WIN_CERT: ${{ secrets.WIN_CERT_P12_BASE64 != '' }}
     steps:
+      - name: Mac signing secrets
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          missing=""
+          for name in MAC_CERT_P12_BASE64 MAC_CERT_PASSWORD APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_ISSUER; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Mac releases are signed and notarised; missing secrets:$missing"
+            exit 1
+          fi
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -85,7 +114,7 @@ jobs:
       - run: npm run build
 
       - name: macOS signing material
-        if: runner.os == 'macOS' && env.HAS_MAC_CERT == 'true'
+        if: runner.os == 'macOS'
         env:
           MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}
           APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
@@ -106,21 +135,29 @@ jobs:
         shell: bash
         env:
           CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CERT_PASSWORD || secrets.WIN_CERT_PASSWORD }}
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ env.HAS_MAC_CERT }}
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ runner.os == 'macOS' }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        # Only the release job publishes, once both platforms have built: two
+        # builders publishing at once each made their own draft. The update
+        # files (latest*.yml) are written either way.
+        run: npx electron-builder ${{ matrix.target }} --publish never
+
+      - name: Check the Mac apps are signed and notarised
+        if: runner.os == 'macOS'
+        shell: bash
         run: |
-          extra=""
-          if [ "${{ runner.os }}" = "macOS" ] && [ -z "${{ secrets.APPLE_API_KEY_ID }}" ]; then
-            extra="-c.mac.notarize=false"      # unsigned / not notarised build
-          fi
-          # Only the release job publishes, once both platforms have built: two
-          # builders publishing at once each made their own draft. The update
-          # files (latest*.yml) are written either way.
-          npx electron-builder ${{ matrix.target }} --publish never $extra
+          set -euo pipefail
+          for app in dist/mac/Deck.app dist/mac-arm64/Deck.app; do
+            codesign --verify --deep --strict "$app"
+            info=$(codesign -dv --verbose=2 "$app" 2>&1)
+            grep -E '^(Authority=Developer ID Application|TeamIdentifier)' <<<"$info"
+            grep -q '^TeamIdentifier=QT63GS3Q44$' <<<"$info" || { echo "::error::$app isn't signed by team QT63GS3Q44"; exit 1; }
+            xcrun stapler validate "$app"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
@@ -138,6 +175,7 @@ jobs:
   release:
     needs: [prepare, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: write
     steps:
@@ -168,7 +206,9 @@ jobs:
             echo "::error::$tag was published while this run built; its files stay as they are"
             exit 1
           fi
-          # Drafts of this version from earlier runs make way for this one.
+          # Drafts of this version from earlier runs make way for this one. If a
+          # step below fails, this version's draft is missing or partial: don't
+          # publish it; re-run the failed job (the artifacts are kept 3 days).
           while read -r id draft; do
             [ "$draft" = true ] || continue
             gh api -X DELETE "repos/$GITHUB_REPOSITORY/releases/$id"

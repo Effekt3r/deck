@@ -96,7 +96,8 @@ deck/
   (QT63GS3Q44)**, then notarise with an App Store Connect API key
   (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`). The node-pty native
   binaries must be signed too; electron-builder handles that. The certificate and
-  key are CI secrets since 2026-10-31; v0.2.0 was the first signed, notarised build.
+  key are CI secrets since 2026-10-31; a release run fails without them and checks
+  both apps' signature and notarisation ticket before it drafts the release.
 - **Windows:** NSIS installer, x64 (arm64 later). Unsigned for now (no signing
   route yet). Later: Azure Trusted Signing (electron-builder `azureSignOptions`)
   or an OV/EV certificate on a cloud HSM; check Trusted Signing accepts a South
@@ -131,6 +132,6 @@ deck/
 3. **M2** — Git panel with real graph + live refresh. Done 2026-10-31 on macOS.
 4. **M3** — Claude panel. Done 2026-10-31 on macOS.
 5. **M4** — Signed and notarised Mac build + signed Windows installer from CI.
-   Mac signing and notarisation work (v0.2.0, 2026-10-31); Windows signing waits
+   Mac signing and notarisation work (2026-10-31); Windows signing waits
    for a route.
 6. **M5** — Polish: settings UI, notifications, auto-update.
