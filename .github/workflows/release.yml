@@ -157,7 +157,6 @@ jobs:
           info=$(codesign -dv --verbose=2 "$app" 2>&1)
           grep -E '^(Authority=Developer ID Application|TeamIdentifier)' <<<"$info"
           grep -q '^TeamIdentifier=QT63GS3Q44$' <<<"$info" || { echo "::error::$app isn't signed by team QT63GS3Q44"; exit 1; }
-          xcrun stapler validate "$app"
           # Apple silicon only: no file in the app may be Intel-only code.
           intel=""
           while IFS= read -r -d '' f; do
@@ -169,6 +168,15 @@ jobs:
             printf '%s' "$intel"
             exit 1
           fi
+          # The stapled notarisation ticket. Validating it asks Apple's servers,
+          # which a runner sometimes can't reach ("network connection was lost",
+          # error 68), so it runs last and gets three tries.
+          for attempt in 1 2 3; do
+            if xcrun stapler validate "$app"; then break; fi
+            if [ "$attempt" = 3 ]; then echo "::error::the notarisation ticket didn't validate"; exit 1; fi
+            echo "::warning::stapler validate failed (attempt $attempt); trying again"
+            sleep $((attempt * 20))
+          done
 
       - uses: actions/upload-artifact@v4
         with:
