@@ -1519,6 +1519,18 @@ git add src/renderer/src/terminal/TerminalView.tsx src/renderer/src/terminal/pas
 git -c user.email=franco@effektstudios.com commit -m "Terminal: smart paste and file drops through main" -m "Claude-Session: https://claude.ai/code/session_012Tidn9qVajMb9EYY5GyX8U"
 ```
 
+**After review (follow-up commits; the code above is the first version):**
+- **`pasteSafe`:**
+  - It also drops ^C, ^Z and ^\. zsh's line editor keeps the tty's signal keys on, so a pasted ^C discarded the rest of the paste's framing and ran what followed as typed keys. Checked with zsh 5.9.
+  - It removes the markers in one linear pass. The replace-until-stable loop took 5 s on a crafted 375 KB clipboard.
+- **Cmd+V:**
+  - It does nothing in a tab whose shell has exited.
+  - Empty text isn't pasted.
+- **File drops:**
+  - A file drag is always accepted, so it never falls through to Chromium's default.
+  - Pasted and dropped paths end with a space, as Terminal.app does. Claude Code still attaches `'/x.png' ` as `[Image #N]`. Two image paths in one paste stay text in Claude, which is Claude's behaviour.
+- **`pasteRef`** is a `RefObject`. Cleanup clears it only if it still holds this mount's handle.
+
 ---
 
 ### Task 7: The clipboard card
@@ -1750,6 +1762,22 @@ export function ClipboardCard({ item, busy, error, onAdd, onDismiss }: Clipboard
    ```ts
      /** What was just copied, offered under the Claude panel of tabs where Claude runs. */
      const clipItem = useClipboardItem()
+
+     // Drops the terminal doesn't take (a link from a browser onto a panel) would reach Chromium's
+     // default and open the link: refuse them, except in text fields.
+     useEffect(() => {
+       const editable = (t: EventTarget | null) =>
+         t instanceof HTMLElement && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
+       const refuse = (e: DragEvent) => {
+         if (!editable(e.target)) e.preventDefault()
+       }
+       document.addEventListener('dragover', refuse)
+       document.addEventListener('drop', refuse)
+       return () => {
+         document.removeEventListener('dragover', refuse)
+         document.removeEventListener('drop', refuse)
+       }
+     }, [])
    ```
 
 3. In the `terminals.map(…)` JSX, add `clipItem={clipItem}` to `<Workspace …>`.
@@ -1898,6 +1926,11 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
 
   Then start a real `claude` in a scratch folder, paste the PNG and PDF pair, and check that the image shows as `[Image #N]`.
 
+- [ ] **Step 6a+: Paste safety and drops.**
+  - **Signal characters:** paste text containing ^C into a zsh tab. Put it on the clipboard with `printf 'echo hi\003touch /tmp/deckclip/PWNED\r' | pbcopy`. Nothing runs, and no `PWNED` file appears.
+  - **A link dragged from Safari:** drop it onto the terminal and onto a panel. Nothing opens.
+  - **Ordering:** with a 5K screenshot on the clipboard, press Cmd+V and then Return at once. The path arrives before the Return.
+
 - [ ] **Step 6b: The cost of looking.** Keep Deck in front for 30 s each time and compare the main process's CPU with nothing new on the clipboard:
   - with a 100 MB text on the clipboard;
   - with a 5K screenshot PNG (`pb hold-png`).
@@ -1952,6 +1985,8 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
       xterm wraps a paste in them and filters nothing, so a pasted `ESC[201~` would run the rest
       as typed keys.
     - `quotePath()` refuses paths with control characters, because no quoting makes them safe.
+    - `pasteSafe()` also drops ^C, ^Z and ^\: zsh keeps the tty's signal keys on, so a pasted ^C would end the bracketed paste and run what follows.
+  - **Claude Code attaches an image only when a paste is one image path,** optionally quoted and with a trailing space. Several files pasted at once reach Claude as paths it can read.
 ```
 
 In the deferred "Security (M4)" list, change "Check the IPC sender frame." to:
@@ -1993,6 +2028,7 @@ Also add a row to the `src/main` table:
 18h. A copy marked only "not for clipboard history" shows no card. In Windows PowerShell:
      `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.DataObject; $d.SetText('s3cret'); $d.SetData('CanIncludeInClipboardHistory', [IO.MemoryStream]::new([byte[]](0,0,0,0))); [System.Windows.Forms.Clipboard]::SetDataObject($d, $true)`
 18i. With RDP or Parallels clipboard sharing on, a card doesn't vanish or come back by itself.
+18j. Shift+Insert pastes the same way as Ctrl+V (files as paths, an image as [Image #N] with Claude).
 ```
 
 `docs/DECK.md`, in M5, add `(built 2026-10-31; Windows to test)` after the clipboard bullet's title.
