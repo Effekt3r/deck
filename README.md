@@ -4,9 +4,9 @@ A terminal built around Claude Code, by Effekt Studios: every project in a tab,
 its git history on the left and what Claude is doing on the right. Spec and plan:
 [`docs/DECK.md`](docs/DECK.md).
 
-**Status:** M2 — the Electron app has the Projects tab, terminal tabs with
-shell integration, and the git panel. The Claude panel (M3) still lives in the
-WezTerm prototype below.
+**Status:** M3 — the Electron app has the Projects tab, terminal tabs with
+shell integration, the git panel and the Claude panel. Next: signed builds (M4)
+and polish (M5). The WezTerm prototype below is the reference it replaces.
 
 ## Deck app (Electron)
 
@@ -43,6 +43,16 @@ If `npm run dev` says Electron failed to install, run `node node_modules/electro
   with the commits that will merge highlighted. It redraws within about half a
   second of a commit, checkout or merge. Click a commit for its message and files;
   Copy hash. Drag the edge to resize.
+- **Claude panel** (right of every tab where Claude runs or has a session;
+  Cmd/Ctrl+Shift+A hides it): what Claude is doing, read from its session log.
+  - **Status:** working, a running tool, waiting on you, idle, quiet, exited or an
+    API error, with running agents and background tasks.
+  - **Session:** model, context size, branch, permission mode, PR and title.
+  - **Work:** the to-do list and sub-agents with their current step.
+  - **Feed:** prompts, collapsible thinking, replies as markdown and tool calls.
+    It follows the end, pauses when you scroll up, and resumes from "↓ N new".
+  - **Picker:** follows the folder's newest session; ▾ pins another one. Deck only
+    reads Claude's files.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 
