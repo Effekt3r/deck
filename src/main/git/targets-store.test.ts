@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { TargetsStore } from './targets-store'
@@ -38,6 +38,15 @@ describe('TargetsStore', () => {
     await Promise.all(Array.from({ length: 20 }, (_, i) => store.set('/r', `b${i}`, `t${i}`)))
     const reloaded = new TargetsStore(f)
     for (let i = 0; i < 20; i++) expect(await reloaded.get('/r', `b${i}`)).toBe(`t${i}`)
+  })
+
+  it("never saves over a store it couldn't read", async () => {
+    const file = join(makeDir(), 'git-targets.json')
+    mkdirSync(file) // reading it fails with EISDIR, not "missing"
+    const store = new TargetsStore(file)
+    await expect(store.get('/r', 'feature')).rejects.toThrow()
+    await expect(store.set('/r', 'feature', 'origin/dev')).rejects.toThrow()
+    expect(statSync(file).isDirectory()).toBe(true)
   })
 
   it('treats a broken or odd file as empty and replaces it on the next set', async () => {

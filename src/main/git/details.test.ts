@@ -1,7 +1,9 @@
+import { readdirSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import type { GitFileChange } from '@shared/types'
 import { readDetails } from './details'
-import { branch, checkout, commit, makeRepo, merge, removeRepos, run, runDated } from './test-repo'
+import { branch, checkout, commit, makeDir, makeRepo, merge, removeRepos, run, runDated } from './test-repo'
 
 afterAll(removeRepos)
 
@@ -68,5 +70,20 @@ describe('readDetails', () => {
     expect(await readDetails(repo, run(repo, 'rev-parse', 'HEAD^{tree}'))).toBeNull()
     expect(await readDetails(repo, '--output=x')).toBeNull()
     expect(await readDetails(repo, 'HEAD')).toBeNull()
+  })
+
+  it('never fetches missing blobs in a partial clone; the counts are just unavailable', async () => {
+    const origin = makeRepo()
+    commit(origin, 'base', { 'a.txt': 'one\n', 'b.txt': 'two\n' })
+    const head = commit(origin, 'edit', { 'a.txt': 'one\nmore\n' })
+    run(origin, 'config', 'uploadpack.allowFilter', 'true')
+    const clone = join(makeDir(), 'clone')
+    run(origin, 'clone', '-q', '--no-checkout', '--filter=blob:none', `file://${origin}`, clone)
+    const packs = () => readdirSync(join(clone, '.git', 'objects', 'pack')).filter((f) => f.endsWith('.pack')).length
+    const before = packs()
+    const details = await readDetails(clone, head)
+    expect(packs()).toBe(before) // nothing fetched or written
+    expect(details?.files.map((f) => `${f.status} ${f.path}`)).toEqual(['M a.txt'])
+    expect(details?.countsUnavailable).toBe(true)
   })
 })

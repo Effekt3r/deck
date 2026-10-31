@@ -13,12 +13,17 @@ describe('git runner', () => {
     expect(env).not.toHaveProperty('GIT_WORK_TREE')
     expect(env).not.toHaveProperty('GIT_INDEX_FILE')
     expect(gitEnv()).toMatchObject({ GIT_OPTIONAL_LOCKS: '0', GIT_TERMINAL_PROMPT: '0' })
+    // Partial clones: never fetch missing objects (no network, no writes into .git, no
+    // credential helper popping up a sign-in window).
+    expect(gitEnv()).toMatchObject({ GIT_NO_LAZY_FETCH: '1', GCM_INTERACTIVE: 'never' })
   })
 
   it('runs with fsmonitor off and paths unquoted', async () => {
     const repo = makeRepo()
     commit(repo, 'init', { 'café.txt': 'x' })
     expect(await git(repo, ['config', 'core.fsmonitor'])).toBe('false\n')
+    expect(await git(repo, ['config', 'color.ui'])).toBe('false\n')
+    expect(await git(repo, ['config', 'i18n.logOutputEncoding'])).toBe('UTF-8\n')
     expect(await git(repo, ['ls-files'])).toBe('café.txt\n')
   })
 

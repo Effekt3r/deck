@@ -23,6 +23,10 @@ export function gitEnv(base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv
   // Never take index.lock while Claude commits in the terminal; never wait on a credential prompt.
   env.GIT_OPTIONAL_LOCKS = '0'
   env.GIT_TERMINAL_PROMPT = '0'
+  // Partial clones: a diff would otherwise fetch missing blobs from the remote, writing into
+  // .git and maybe raising a credential prompt (git 2.44+; older versions ignore it).
+  env.GIT_NO_LAZY_FETCH = '1'
+  env.GCM_INTERACTIVE = 'never' // Git Credential Manager must never open a sign-in window
   return env
 }
 
@@ -37,7 +41,8 @@ export function git(repo: string, args: string[], opts: { timeoutMs?: number } =
   return new Promise((resolve, reject) => {
     const child = execFile(
       'git',
-      ['-C', repo, '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', ...args],
+      ['-C', repo, '-c', 'core.fsmonitor=false', '-c', 'core.quotePath=false', '-c', 'color.ui=false',
+        '-c', 'i18n.logOutputEncoding=UTF-8', ...args],
       {
         env: gitEnv(),
         encoding: 'utf8',

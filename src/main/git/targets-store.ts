@@ -44,7 +44,11 @@ export class TargetsStore {
   constructor(private readonly file: string) {}
 
   private load(): Promise<Targets> {
-    this.cache ??= readFile(this.file, 'utf8').then(parse, () => new Map())
+    this.cache ??= readFile(this.file, 'utf8').then(parse, (err: NodeJS.ErrnoException) => {
+      if (err.code === 'ENOENT') return new Map()
+      this.cache = null // try again next time; never save over a file we couldn't read
+      throw err
+    })
     return this.cache
   }
 
@@ -65,10 +69,24 @@ export class TargetsStore {
       await mkdir(dirname(this.file), { recursive: true })
       const tmp = `${this.file}.${process.pid}.tmp`
       await writeFile(tmp, serialise(next), 'utf8')
-      await rename(tmp, this.file)
+      await renameRetrying(tmp, this.file)
       this.cache = Promise.resolve(next)
     })
     this.queue = result.catch(() => undefined)
     return result
+  }
+}
+
+/** Windows: a virus scanner or indexer briefly holding the target makes rename fail with
+ *  EPERM/EBUSY; a few short retries get past it. */
+async function renameRetrying(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await rename(from, to)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (attempt >= 4 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw err
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)))
+    }
   }
 }

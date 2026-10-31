@@ -143,18 +143,20 @@ function Files({ current, merge }: { current: Loaded | null; merge: boolean }) {
 
   if (!current) return <p className="cd-note">Loading changes…</p>
   if (current.error) return <p className="cd-note error">Couldn't read this commit: {current.error}</p>
-  if (!files) return <p className="cd-note">This commit isn't in the repository any more.</p>
+  // main answers null both for a commit that's gone and for git failing (e.g. a timeout)
+  if (!files) return <p className="cd-note">Couldn't read this commit: it may no longer exist, or git didn't answer.</p>
+  const noCounts = current.details?.countsUnavailable === true
   return (
     <>
       <div className="cd-files-head">
         <span>{files.length === 1 ? '1 file' : `${files.length} files`}</span>
-        {totals.add > 0 && <span className="cd-add">+{totals.add}</span>}
-        {totals.del > 0 && <span className="cd-del">−{totals.del}</span>}
+        {!noCounts && totals.add > 0 && <span className="cd-add">+{totals.add}</span>}
+        {!noCounts && totals.del > 0 && <span className="cd-del">−{totals.del}</span>}
         {merge && <span className="cd-against">against the first parent</span>}
       </div>
       {files.length === 0 && <p className="cd-note">No changes.</p>}
       <ul className="cd-files">
-        {files.slice(0, MAX_FILES).map((f) => <FileRow key={`${f.status}:${f.oldPath ?? ''}:${f.path}`} file={f} />)}
+        {files.slice(0, MAX_FILES).map((f) => <FileRow key={`${f.status}:${f.oldPath ?? ''}:${f.path}`} file={f} noCounts={noCounts} />)}
       </ul>
       {files.length > MAX_FILES && <p className="cd-note">…and {files.length - MAX_FILES} more files.</p>}
     </>
@@ -165,7 +167,7 @@ const STATUS: Record<string, string> = {
   A: 'Added', M: 'Modified', D: 'Deleted', R: 'Renamed', C: 'Copied', T: 'Type changed', U: 'Unmerged',
 }
 
-function FileRow({ file }: { file: GitFileChange }) {
+function FileRow({ file, noCounts }: { file: GitFileChange; noCounts: boolean }) {
   const status = file.status.charAt(0) || '?'
   const cut = file.path.lastIndexOf('/') + 1 // git prints '/' on every platform
   const title = `${STATUS[status] ?? status}: ${file.oldPath ? `${file.oldPath} → ` : ''}${file.path}`
@@ -178,7 +180,9 @@ function FileRow({ file }: { file: GitFileChange }) {
         <span className="cd-base">{file.path.slice(cut)}</span>
       </span>
       <span className="cd-stat">
-        {file.additions === null || file.deletions === null
+        {noCounts
+          ? <span className="cd-bin" title="Line counts need file contents this partial clone doesn't have locally">—</span>
+          : file.additions === null || file.deletions === null
           ? <span className="cd-bin">bin</span>
           : (
             <>

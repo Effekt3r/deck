@@ -38,14 +38,22 @@ export function watchRepo(
 ): () => void {
   const { debounceMs = 300, pollMs = 3000, probe } = opts
   let stopped = false
+  // The probe's last result; the baseline is taken at start. A failed probe counts as a change.
+  let last: Promise<string | null> = probe ? probe().catch(() => null) : Promise.resolve(null)
   let timer: NodeJS.Timeout | undefined
   const fire = () => {
     if (!stopped) onChange()
   }
+  // A file event rebuilds; the probe's baseline moves with it, or the next poll would see the
+  // same change again and rebuild a second time.
+  const fireForEvent = () => {
+    if (probe && !stopped) last = probe().catch(() => null)
+    fire()
+  }
   const changed = () => {
     if (stopped) return
     clearTimeout(timer)
-    timer = setTimeout(fire, debounceMs)
+    timer = setTimeout(fireForEvent, debounceMs)
     timer.unref()
   }
 
@@ -70,8 +78,6 @@ export function watchRepo(
   // A worktree's refs and packed-refs live in the main repo's git dir.
   if (pathKey(gitDir) !== pathKey(commonDir)) add(commonDir, false, (name) => name === 'packed-refs')
 
-  // The baseline is taken at start; a failed probe counts as a change.
-  let last: Promise<string | null> = probe ? probe().catch(() => null) : Promise.resolve(null)
   let probing = false
   const tick = async () => {
     if (!probe) return fire()

@@ -82,6 +82,18 @@ describe('watchRepo', () => {
     stop()
   })
 
+  it('a change seen by the file watcher is not rebuilt again by the next poll', async () => {
+    const repo = makeRepo()
+    commit(repo, 'c1')
+    const dirs = await gitDirs(repo)
+    if (!dirs) throw new Error('not a repo')
+    const { counter, stop } = await watching(repo, { debounceMs: 50, pollMs: 400, probe: () => repoProbe(dirs) })
+    commit(repo, 'c2')
+    await sleep(1300) // the event, then three polls
+    expect(counter.calls).toBe(1)
+    stop()
+  })
+
   it('repoProbe changes with the work tree and HEAD, and not otherwise', async () => {
     const repo = makeRepo()
     commit(repo, 'c1')

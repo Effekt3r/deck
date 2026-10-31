@@ -57,7 +57,9 @@ function parseLog(out: string): GitCommit[] {
 export async function readLog(repo: string, skip: number, limit: number): Promise<GitCommit[]> {
   const out = await git(repo, [
     // --exclude applies to the --all after it. log.showSignature would mix gpg output into the records.
-    'log', '--exclude=refs/stash', '--all', '--date-order', '--decorate=full', '--no-show-signature',
+    // Excludes apply to the --all after them. notes, prefetch (git maintenance) and original
+    // (filter-branch) refs aren't branches; their commits would show as lanes without a name.
+    'log', '--exclude=refs/stash', '--exclude=refs/notes/*', '--exclude=refs/prefetch/*', '--exclude=refs/original/*', '--all', '--date-order', '--decorate=full', '--no-show-signature',
     `--skip=${skip}`, `--max-count=${limit}`, `--format=${FORMAT}`, '--',
   ])
   return parseLog(out)

@@ -40,6 +40,7 @@ export function registerGitIpc(deps: { targetsFile: string }): void {
       })
       // A reload starts a renderer that has subscribed to nothing yet.
       wc.on('did-start-loading', () => hub.drop(id))
+      wc.on('render-process-gone', () => hub.drop(id))
     }
     return {
       id,

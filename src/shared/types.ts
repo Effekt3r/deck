@@ -134,6 +134,8 @@ export interface GitCommitDetails {
   message: string
   /** Against the first parent; a root commit against the empty tree. */
   files: GitFileChange[]
+  /** Line counts couldn't be computed (e.g. a partial clone without the blobs locally). */
+  countsUnavailable?: boolean
 }
 
 export interface DeckApi {
@@ -160,7 +162,8 @@ export interface DeckApi {
     contextMenu(path: string): Promise<ProjectAction | null>
   }
   git: {
-    /** Starts watching; resolves with the current state, or null when `repo` isn't a git repo. */
+    /** Starts watching; resolves with the current state, or null when `repo` isn't a git repo.
+     *  Rejects when git fails before a first snapshot exists (the subscription stays and updates follow). */
     subscribe(repo: string): Promise<GitSnapshot | null>
     unsubscribe(repo: string): void
     /** A newer snapshot of a subscribed repo. */

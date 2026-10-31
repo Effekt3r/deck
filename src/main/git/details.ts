@@ -59,5 +59,7 @@ export async function readDetails(repo: string, hash: string): Promise<GitCommit
     hash: full, parents, author, email, time: Number(ct) * 1000,
     message: message.join(SEP).trimEnd(),
     files: parseFiles(nameStatus ?? '', numstat ?? ''),
+    // --numstat needs the blobs; a partial clone may not have them (and must not fetch them).
+    ...(nameStatus !== null && numstat === null ? { countsUnavailable: true } : {}),
   }
 }
