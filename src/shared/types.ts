@@ -56,6 +56,7 @@ export type MenuCommand =
   | { type: 'projects' }
   | { type: 'find' }
   | { type: 'toggle-git' }
+  | { type: 'toggle-claude' }
 
 export type ProjectAction = 'claude' | 'shell'
 
@@ -138,6 +139,84 @@ export interface GitCommitDetails {
   countsUnavailable?: boolean
 }
 
+export type ClaudeState =
+  | 'working' // a turn is open, no tool pending
+  | 'tool' // a tool is running (detail: its name)
+  | 'waiting' // AskUserQuestion / ExitPlanMode pending (detail: tool name)
+  | 'maybe-waiting' // a tool pending and the log silent > 8 s outside bypass mode (a permission prompt?)
+  | 'idle' // the turn ended
+  | 'quiet' // a turn open but the log silent > 10 min (killed? stuck?)
+  | 'exited' // Claude quit (cost-state)
+  | 'error' // the last thing was an API error (detail: its text)
+
+export interface ClaudeStatus {
+  state: ClaudeState
+  detail?: string
+  /** Sub-agents still running. */
+  agents: number
+  /** Background shell tasks still running. */
+  background: number
+}
+
+export interface ClaudeSessionSummary {
+  id: string
+  /** Absolute path of the .jsonl log. */
+  path: string
+  /** Custom title (/rename) > AI title > first prompt (first line, 80 chars) > ''. */
+  title: string
+  /** Log last written, ms since epoch. */
+  modified: number
+}
+
+export interface ClaudeTodo {
+  status: string // 'pending' | 'in_progress' | 'completed' | …
+  text: string
+}
+
+export interface ClaudeAgent {
+  toolUseId: string
+  type: string
+  description: string
+  done: boolean
+  failed: boolean
+  /** Its latest tool call or reply, while running. */
+  step?: string
+}
+
+export type ClaudeFeedItem =
+  | { kind: 'prompt'; text: string }
+  | { kind: 'thinking'; text: string } // '' when the log kept only the signature
+  | { kind: 'reply'; text: string } // markdown
+  | { kind: 'tool'; id: string; name: string; summary: string; state: 'running' | 'done' | 'error'; error?: string }
+  | { kind: 'notice'; text: string; tone: 'info' | 'error' }
+
+export interface ClaudeSnapshot {
+  session: ClaudeSessionSummary & {
+    /** e.g. 'claude-opus-5-5' ('' until the first reply). */
+    model: string
+    contextTokens: number
+    branch: string
+    /** Permission mode: 'default', 'bypassPermissions', 'plan', 'acceptEdits', 'auto' or ''. */
+    mode: string
+    /** e.g. 'PR #31', or null. */
+    pr: string | null
+  }
+  status: ClaudeStatus
+  todos: ClaudeTodo[]
+  agents: ClaudeAgent[]
+  /** Oldest first, at most 300 items; long texts are cut. */
+  feed: ClaudeFeedItem[]
+  /** 'newest' follows the folder's newest session; 'pinned' stays on the one picked. */
+  following: 'newest' | 'pinned'
+}
+
+/** The session a tab's panel showed (its last snapshot), handed back when the tab subscribes again. */
+export interface ClaudeResume {
+  sessionId: string
+  /** It was pinned (snapshot.following === 'pinned'). */
+  pinned: boolean
+}
+
 export interface DeckApi {
   platform: Platform
   pty: {
@@ -175,6 +254,19 @@ export interface DeckApi {
     targets(repo: string): Promise<string[]>
     /** Override the merge target of `branch` (null: back to automatic). */
     setTarget(repo: string, branch: string, target: string | null): Promise<void>
+  }
+  claude: {
+    /** Follows the newest session for `folder` (and its worktrees). null: none yet; updates follow when one starts.
+     *  Only the active tab subscribes, and the folder's follow state is set from `resume`, the session this tab
+     *  showed: pinned, it stays pinned; else it is followed until a newer session takes over (once it has been
+     *  quiet for 15 s). No resume, or a session that isn't the folder's: the newest. */
+    subscribe(folder: string, resume?: ClaudeResume | null): Promise<ClaudeSnapshot | null>
+    unsubscribe(folder: string): void
+    onUpdate(cb: (folder: string, snapshot: ClaudeSnapshot | null) => void): () => void
+    /** The folder's sessions, newest first (for the picker). */
+    sessions(folder: string): Promise<ClaudeSessionSummary[]>
+    /** Follow one session (by id), or the newest again (null). */
+    follow(folder: string, sessionId: string | null): Promise<void>
   }
   app: {
     info(): Promise<AppInfo>

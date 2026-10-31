@@ -46,6 +46,7 @@ export function menuTemplate(
     label: 'View',
     submenu: [
       item('Git Panel', key('Cmd+Shift+G', 'Ctrl+Shift+G'), { type: 'toggle-git' }),
+      item('Claude Panel', key('Cmd+Shift+A', 'Ctrl+Shift+A'), { type: 'toggle-claude' }),
       { type: 'separator' },
       ...(opts.packaged ? [] : ([{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }] satisfies MenuItemConstructorOptions[])),
       ...(mac ? ([{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }] satisfies MenuItemConstructorOptions[]) : []),

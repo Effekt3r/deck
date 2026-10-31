@@ -31,7 +31,7 @@ describe('keyAction', () => {
     expect(keyAction(k('Tab', { shiftKey: true }), 'win32', false)).toBeNull()
   })
   it("Windows: Deck's own Ctrl+Shift shortcuts go to the menu, not the shell", () => {
-    for (const key of ['T', 'W', 'O', 'G']) {
+    for (const key of ['T', 'W', 'O', 'G', 'A']) {
       expect(keyAction(k(key, { ctrlKey: true, shiftKey: true, code: `Key${key}` }), 'win32', false)).toBe('menu')
     }
     // Tab N: Shift makes the US key '!', the physical key stays Digit1.

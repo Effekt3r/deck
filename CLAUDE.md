@@ -24,10 +24,14 @@ product name, bundle id or icon). Description/copy is ours to write.
 
 ## Current state
 
-**Deck app: M2 done** (2026-10-31): Electron app with the Projects tab, terminal
-tabs, shell integration (M1, merged in PR #1) and the git panel (M2, branch
-`m2-git-panel`). The Claude panel (M3) is next. Plans that built them:
-`docs/superpowers/plans/2026-10-30-m1-electron-shell.md`, `…/2026-10-31-m2-git-panel.md`.
+**Deck app: M3 done** (2026-10-31): Electron app with:
+- the Projects tab, terminal tabs and shell integration (M1, merged in PR #1);
+- the git panel (M2, PR #2);
+- the Claude panel (M3, branch `m3-claude-panel` on top of `m2-git-panel`).
+
+Signed builds (M4) and polish (M5) are next. Plans that built them:
+`docs/superpowers/plans/2026-10-30-m1-electron-shell.md`, `…/2026-10-31-m2-git-panel.md`,
+`…/2026-10-31-m3-claude-panel.md`.
 
 | Path | Role |
 |---|---|
@@ -38,7 +42,8 @@ tabs, shell integration (M1, merged in PR #1) and the git panel (M2, branch
 | `src/main/pty/` | node-pty sessions, output batching, startup command typed when the line editor is ready |
 | `src/main/projects/` | `projects.json` (userData), scan, `.git/HEAD` branch, dirty counts, native context menu |
 | `src/main/git/` | the git runner (the only way Deck runs git), header summary, merge target, graph log, commit details, watcher + poll probe, merge-target overrides, `git:*` subscriptions |
-| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter) |
+| `src/main/claude/` | session-log locator, incremental tail, the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions |
+| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker) |
 
 Things that aren't obvious from the code:
 - The app scrubs a parent Claude Code session's variables (`CLAUDECODE`, session
@@ -76,6 +81,32 @@ Things that aren't obvious from the code:
   (`git status` plus key git-dir file times) and rebuilds only when it changes:
   rebuilding the whole snapshot each poll cost ~12% of a core on
   AccessControl_Guard.
+- Claude panel:
+  - **Parser:** `claude_activity_pane.py` stays the reference;
+    `src/main/claude/session.ts` ports it, and replaying all local logs through
+    both must give the same final state.
+  - **Which session:** the tab's folder is `tab.cwd` (where Claude was started;
+    zsh also reports it on `cd`, so `cd x && claude` watches `x`; PowerShell
+    reports only at the prompt). Each tab remembers the session its panel showed
+    and whether it was pinned (`TerminalTab.claudeSession`), and sends it back with
+    `claude.subscribe` on every tab switch: a pin stays pinned; an unpinned session
+    stays until it has been quiet for 15 s while a newer one exists, so two
+    sessions in one folder don't flip-flop. New tabs, and Claude starting in a tab,
+    follow the newest. Known limit: with two Claudes in one folder, a newly started
+    one takes over a tab only once the shown session has been quiet for 15 s.
+  - **Ordering:** the renderer ignores updates that arrive before its subscribe
+    answer, so a push still on its way for another tab can't win.
+  - **Tools with no result:** they end as `interrupted` (interrupt, API error,
+    exit) or `done` (normal turn end).
+  - **Memory:** kept text is copied (`own()` in `describe.ts`). V8's string slices
+    keep the whole original alive: 98 MB for 200 cut 500 KB texts.
+  - **Updates:** a 1 s tick re-evaluates status from cached state without reading
+    files, which is how "waiting on you?" appears without new log lines.
+  - **Snapshot size:** capped at 300 feed items with long texts cut.
+  - **Markdown:** becomes React elements, never HTML.
+  - **Config dir:** `CLAUDE_CONFIG_DIR` is read from the main process's
+    environment, so one set only in shell profiles isn't seen when Deck starts
+    from Finder.
 
 **WezTerm prototype (v0):** does 1–4 with text (TUI) panes. It's the behaviour
 reference for M2/M3; keep it working until Deck replaces it.
@@ -207,11 +238,12 @@ excludes every `build` folder.
    (no Windows signing yet), GitHub Actions, `com.effektstudios.deck`, the
    branch + chevron icon in `branding/`.
 3. ~~Scaffold Deck and build M1 (tabs, terminal, shell integration, Projects tab;
-   the dashboard scan is ported).~~ Done 2026-10-30. ~~M2 git panel.~~ Done 2026-10-31.
-   **Next: M3 Claude panel**, porting the log parser from `claude_activity_pane.py`
-   to TypeScript with unit tests against fixtures. Write fixtures by hand in the
-   shapes above; never copy real session logs into the repo (they hold client
-   code and prompts). Test M1 and M2 on Windows 11 too.
+   the dashboard scan is ported).~~ Done 2026-10-30. ~~M2 git panel. M3 Claude
+   panel.~~ Done 2026-10-31. Tests build session logs with
+   `src/main/claude/test-log.ts`; never copy real session logs into the repo (they
+   hold client code and prompts). **Next:** test M1–M3 on Windows 11 and look at
+   them on screen (the visual checks were pending at merge), then M4 (signed,
+   notarised builds) and M5 (settings UI, notifications, auto-update).
 4. CI for macOS (arm64 + x64) and Windows x64: `.github/workflows/release.yml`
    exists; Mac signing + notarisation switch on when the secrets are added,
    Windows stays unsigned until there's a signing route. `ci.yml` runs typecheck +

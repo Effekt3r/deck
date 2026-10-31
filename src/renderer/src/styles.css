@@ -156,9 +156,12 @@ input, textarea { user-select: text; }
 
 /* ---------------------------------------------------------------- workspace */
 
-/* A terminal tab: git panel | splitter | terminal. */
+/* A terminal tab: git panel | splitter | terminal | splitter | Claude panel. When the
+   window is too narrow for all three, the panels give way (down to their minimums)
+   before the terminal goes below 280 px (TERMINAL_MIN in App.tsx). */
 .workspace { position: absolute; inset: 0; display: flex; background: var(--bg); }
-.git-pane { flex: none; display: flex; flex-direction: column; min-width: 240px; max-width: 55%; min-height: 0; }
+.git-pane { flex: 0 1 auto; display: flex; flex-direction: column; min-width: 240px; max-width: 55%; min-height: 0; }
+.claude-pane { flex: 0 1 auto; display: flex; flex-direction: column; min-width: 260px; max-width: 45%; min-height: 0; }
 
 .splitter { position: relative; z-index: 10; flex: none; background: var(--line); touch-action: none; }
 .splitter[aria-orientation='vertical'] { width: 1px; cursor: col-resize; }
@@ -177,7 +180,7 @@ body.resizing-row, body.resizing-row * { cursor: row-resize !important; }
 .terminal-view {
   position: relative;
   flex: 1;
-  min-width: 0;
+  min-width: 280px;
   display: flex;
   padding: 6px 2px 2px 10px;
   background: var(--bg);
