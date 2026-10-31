@@ -1,5 +1,5 @@
 import { basename, resolve } from 'node:path'
-import type { ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
+import type { ClaudeResume, ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
 import { pathKey } from '../projects/config'
 import { cut } from './describe'
 import type { SessionFile } from './locator'
@@ -23,11 +23,12 @@ export interface LogReader {
 
 /** Everything that touches the file system; the app passes the real ones, tests fakes. */
 export interface ClaudeDeps {
-  /** The folder's session logs, newest first, and the project folders they are in. */
-  scan(folder: string): Promise<{ sessions: SessionFile[]; dirs: string[] }>
+  /** The folder's session logs, newest first, the project folders they are in, and the folder's real
+   *  path (tool paths in the log start with it). */
+  scan(folder: string): Promise<{ sessions: SessionFile[]; dirs: string[]; real?: string }>
   open(path: string): LogReader
   /** Running sub-agents' current steps. */
-  steps(sessionPath: string, state: SessionState, project: string, cache: StepCache): Promise<Map<string, string>>
+  steps(sessionPath: string, state: SessionState, cache: StepCache): Promise<Map<string, string>>
   /** A log's title without parsing all of it (for the picker). */
   title(path: string): Promise<string>
   /** Watches folders, not recursively; null when none could be watched. */
@@ -64,6 +65,8 @@ interface Parsed {
   key: string
   path: string
   project: string
+  /** The project's real path when it was opened. */
+  real: string
   reader: LogReader
   state: SessionState
   stepCache: StepCache
@@ -101,7 +104,14 @@ interface Watched {
   /** subscribe() calls waiting on the first snapshot: they keep it open. */
   pending: number
   closed: boolean
+  /** The folder's real path, from the latest scan. */
+  real: string
   sessions: SessionFile[]
+  /** The session followed whatever is newer (follow(id), or a subscribe resuming a pin); null: the newest. */
+  pinned: string | null
+  /** A subscribe's follow state, applied with the next scan that works: the session the tab showed, or
+   *  null for the newest. undefined: nothing waiting. */
+  resume: ClaudeResume | null | undefined
   current: SessionFile | null
   log: Parsed | null
   steps: Map<string, string>
@@ -140,23 +150,27 @@ const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve))
  * Who follows which folder's Claude session: one watcher per folder however many clients
  * subscribe; snapshots are pushed only when they changed. Follows the newest session (switching
  * only once the followed one has been quiet, so two sessions in one folder don't flip-flop) or the
- * one pinned with follow().
+ * one pinned with follow(). That follow state is the folder's while it is watched, but it belongs to
+ * a tab: only the active tab subscribes, so each subscribe() sets it from what that tab showed.
  */
 export class ClaudeSubscriptions {
   private readonly subs = new Map<string, Sub>()
   private readonly folders = new Map<string, Watched>()
   /** Parsed logs by path, least recently used first. */
   private readonly parsed = new Map<string, Parsed>()
-  /** Pinned session per folder; kept across unsubscribe so a tab switch doesn't lose it. */
-  private readonly pins = new Map<string, string>()
   private readonly timing: Timing
 
   constructor(private readonly deps: ClaudeDeps, timing: Partial<Timing> = {}) {
     this.timing = { ...TIMING, ...timing }
   }
 
-  /** The folder's current snapshot (null: no session yet); pushes follow until unsubscribe(). */
-  async subscribe(client: Client, folder: string): Promise<ClaudeSnapshot | null> {
+  /**
+   * The folder's current snapshot (null: no session yet); pushes follow until unsubscribe(). `resume`
+   * (the session the subscribing tab showed) sets the folder's follow state: pinned, it is pinned;
+   * else it is the session followed, until a newer one takes over by the quiet rule; null, or a
+   * session that isn't the folder's (any more): the newest.
+   */
+  async subscribe(client: Client, folder: string, resume: ClaudeResume | null = null): Promise<ClaudeSnapshot | null> {
     const key = subKey(client.id, folder)
     let sub = this.subs.get(key)
     if (!sub) {
@@ -165,14 +179,17 @@ export class ClaudeSubscriptions {
     }
     sub.count++
     const watched = sub.watched ?? this.watch(folder)
+    watched.resume = resume
     watched.pending++
     try {
       await this.run(watched, { scan: true })
     } finally {
       watched.pending--
     }
-    // Attached only now, so the snapshot just built isn't also pushed to this client. An
-    // unsubscribe that arrived meanwhile has already made `sub` gone.
+    // Attached only now, so the snapshot just built isn't also pushed to this client, and nothing
+    // reaches it before this answer (the renderer drops what comes before: it was sent to the
+    // subscription before, maybe another tab's). An unsubscribe that arrived meanwhile has already
+    // made `sub` gone.
     if (!sub.gone && !sub.watched) {
       sub.watched = watched
       watched.subs.add(sub)
@@ -209,15 +226,15 @@ export class ClaudeSubscriptions {
     const watched = this.folders.get(folderKey(folder))
     if (!watched || watched.closed) return
     if (sessionId === null) {
-      this.pins.delete(watched.key)
+      watched.pinned = null
+      watched.resume = undefined // a choice made now wins over a subscribe's that is still waiting
       await this.run(watched, { scan: true, force: true })
       return
     }
     const scanned = await this.deps.scan(watched.folder).catch(() => null)
     if (!scanned?.sessions.some((s) => s.id === sessionId) || watched.closed) return
-    this.pins.delete(watched.key)
-    this.pins.set(watched.key, sessionId)
-    if (this.pins.size > 100) this.pins.delete(this.pins.keys().next().value as string)
+    watched.pinned = sessionId
+    watched.resume = undefined
     await this.run(watched, { scan: true })
   }
 
@@ -226,10 +243,10 @@ export class ClaudeSubscriptions {
     const existing = this.folders.get(key)
     if (existing) return existing
     const w: Watched = {
-      key, folder, subs: new Set(), pending: 0, closed: false, sessions: [], current: null, log: null,
-      steps: new Map(), stepsKey: '[]', stepsFor: '', dirsKey: '', stopDirs: null, agentsDir: '', stopAgents: null,
-      snapshot: null, json: null, sig: '', running: null, want: null, debounced: null, debounceTimer: undefined,
-      debounceSince: 0, timers: [],
+      key, folder, subs: new Set(), pending: 0, closed: false, real: folder, sessions: [], pinned: null,
+      resume: undefined, current: null, log: null, steps: new Map(), stepsKey: '[]', stepsFor: '', dirsKey: '',
+      stopDirs: null, agentsDir: '', stopAgents: null, snapshot: null, json: null, sig: '', running: null,
+      want: null, debounced: null, debounceTimer: undefined, debounceSince: 0, timers: [],
     }
     w.timers.push(
       unref(setInterval(() => void this.run(w, { scan: true }), this.timing.rescanMs)),
@@ -245,18 +262,23 @@ export class ClaudeSubscriptions {
     if (w.closed) return Promise.resolve()
     w.want = merge(w.want, want)
     w.running ??= (async () => {
-      while (w.want && !w.closed) {
-        const next = w.want
-        w.want = null
-        try {
-          await this.update(w, next)
-        } catch {
-          // deps are guarded; the next change or rescan tries again
+      try {
+        while (w.want && !w.closed) {
+          const next = w.want
+          w.want = null
+          try {
+            await this.update(w, next)
+          } catch {
+            // deps are guarded; the next change or rescan tries again
+          }
         }
+      } finally {
+        // As the loop ends, not a microtask later (a .finally()): a run() in between would still
+        // find it set, and its want would wait for the next rescan. (The loop awaits before it
+        // can get here, so `running` has been assigned by then.)
+        w.running = null
       }
-    })().finally(() => {
-      w.running = null
-    })
+    })()
     return w.running
   }
 
@@ -290,14 +312,23 @@ export class ClaudeSubscriptions {
     if (want.scan || !w.current) {
       const scanned = await this.deps.scan(w.folder).catch(() => null)
       if (w.closed) return
+      let followed = w.current
       if (scanned) {
         w.sessions = scanned.sessions
+        if (scanned.real) w.real = scanned.real
         this.watchDirs(w, scanned.dirs)
+        // A subscribe's follow state, checked against this list (it waits for a scan that worked).
+        if (w.resume !== undefined) {
+          const r = w.resume
+          w.resume = undefined
+          const listed = r ? scanned.sessions.find((s) => s.id === r.sessionId) : undefined
+          w.pinned = listed && r?.pinned ? listed.id : null
+          followed = listed ?? null
+        }
         // A pinned session whose log is gone: back to following the newest.
-        const pinned = this.pins.get(w.key)
-        if (pinned && !scanned.sessions.some((s) => s.id === pinned)) this.pins.delete(w.key)
+        if (w.pinned && !scanned.sessions.some((s) => s.id === w.pinned)) w.pinned = null
       }
-      this.pick(w, want.force)
+      this.pick(w, want.force, followed)
     }
     const log = w.log
     if (!log) return this.publish(w)
@@ -310,7 +341,7 @@ export class ClaudeSubscriptions {
       this.unwatchAgents(w)
     } else {
       if (want.scan || want.steps || running !== w.stepsFor) {
-        w.steps = await this.deps.steps(log.path, log.state, w.folder, log.stepCache).catch(() => w.steps)
+        w.steps = await this.deps.steps(log.path, log.state, log.stepCache).catch(() => w.steps)
         if (w.closed || w.log !== log) return
         w.stepsFor = running
       }
@@ -320,52 +351,59 @@ export class ClaudeSubscriptions {
     this.publish(w)
   }
 
-  /** Applies the follow rules to the latest scan. */
-  private pick(w: Watched, force: boolean): void {
+  /** Applies the follow rules to the latest scan. `followed`: the session followed so far (the open
+   *  one, or the one a subscribe resumed), which a newer one replaces only once it has been quiet. */
+  private pick(w: Watched, force: boolean, followed: SessionFile | null): void {
     const list = w.sessions
-    const pinned = this.pins.get(w.key)
-    const same = (s: SessionFile | null | undefined) => (s && w.current ? logKey(s.path) === logKey(w.current.path) : false)
+    const same = (a: SessionFile | null | undefined, b: SessionFile | null | undefined) =>
+      a && b ? logKey(a.path) === logKey(b.path) : false
     // The followed log as this scan saw it (its time is fresher than the last read's).
-    const fresh = w.current ? list.find((s) => same(s)) : undefined
+    const fresh = followed ? list.find((s) => same(s, followed)) : undefined
     let target: SessionFile | null
-    if (pinned) {
-      target = list.find((s) => s.id === pinned) ?? w.current // (not listed: the scan failed)
+    if (w.pinned) {
+      target = list.find((s) => s.id === w.pinned) ?? followed // (not listed: the scan failed)
     } else if (!list.length) {
       target = null
     } else {
       const newest = list[0]
-      const quiet = w.current ? this.deps.now() - Math.max(fresh?.modified ?? 0, this.modifiedOf(w)) : Infinity
+      const quiet = followed ? this.deps.now() - this.written(followed, fresh) : Infinity
       // Other tabs or worktrees may run Claude here too: stay on the session being followed until
       // it has been quiet for a while.
-      if (!w.current || force || same(newest) || quiet > this.timing.switchAfterQuietMs) target = newest
-      else target = fresh ?? w.current
+      if (!followed || force || same(newest, followed) || quiet > this.timing.switchAfterQuietMs) target = newest
+      else target = fresh ?? followed
     }
-    if (target && same(target)) {
+    // Open already (a resumed session may not be: then it is opened below, not published as none).
+    if (target && w.log && same(target, w.current)) {
       w.current = target // fresher modification time
       return
     }
     const previous = w.log
     w.current = target
-    w.log = target ? this.acquire(target.path, w.folder) : null
+    w.log = target ? this.acquire(target.path, w.folder, w.real) : null
     this.releaseLog(previous) // after acquiring, so going back and forth never evicts the target
     w.steps = new Map()
     w.stepsFor = ''
     this.unwatchAgents(w)
   }
 
+  /** When `s` was last written, as far as anything here knows: a scan, or the last read of its log. */
+  private written(s: SessionFile, fresh: SessionFile | undefined): number {
+    return Math.max(fresh?.modified ?? 0, s.modified, this.parsed.get(logKey(s.path))?.reader.modified ?? 0)
+  }
+
   private modifiedOf(w: Watched): number {
     return Math.max(w.current?.modified ?? 0, w.log?.reader.modified ?? 0)
   }
 
-  private acquire(path: string, project: string): Parsed {
+  private acquire(path: string, project: string, real: string): Parsed {
     const key = logKey(path)
     let p = this.parsed.get(key)
     if (p) {
       this.parsed.delete(key) // most recently used last
     } else {
       p = {
-        key, path, project, reader: this.deps.open(path), state: new SessionState(project), stepCache: new StepCache(),
-        users: 0, reading: Promise.resolve(), loaded: false,
+        key, path, project, real, reader: this.deps.open(path), state: new SessionState(project, real),
+        stepCache: new StepCache(), users: 0, reading: Promise.resolve(), loaded: false,
       }
     }
     this.parsed.set(key, p)
@@ -393,7 +431,7 @@ export class ClaudeSubscriptions {
       for (;;) {
         const { entries, reset, more } = await p.reader.read(this.timing.chunkBytes)
         if (reset) {
-          p.state = new SessionState(p.project)
+          p.state = new SessionState(p.project, p.real)
           p.stepCache = new StepCache()
         }
         for (const e of entries) p.state.ingest(e)
@@ -415,7 +453,7 @@ export class ClaudeSubscriptions {
     if (p && current) {
       const modified = this.modifiedOf(w)
       const quiet = Math.max(0, this.deps.now() - modified)
-      const following = this.pins.has(w.key) ? 'pinned' : 'newest'
+      const following = w.pinned ? 'pinned' : 'newest'
       const sig = [p.key, p.state.version, modified, following, w.stepsKey, JSON.stringify(claudeStatus(p.state, quiet))].join('\0')
       if (sig === w.sig) return
       w.sig = sig

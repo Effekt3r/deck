@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { join, sep } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { describeTool, firstLine, shortPath, tag, toolLabel } from './describe'
+import { describeTool, firstLine, head, own, shortPath, tag, toolLabel } from './describe'
 
 const P = join(homedir(), 'Development', 'app')
 
@@ -14,6 +14,23 @@ describe('shortPath', () => {
     expect(shortPath(join(homedir(), 'notes.md'), P)).toBe(join('~', 'notes.md'))
     expect(shortPath('/etc/hosts', P)).toBe('/etc/hosts')
     expect(shortPath(`${P}-other/x`, P)).toBe(`~${`${P}-other/x`.slice(homedir().length)}`)
+  })
+
+  it("is also relative inside the project's real path (Claude's cwd when the folder is a symlink)", () => {
+    const real = join(sep, 'Volumes', 'Disk', 'app')
+    expect(shortPath(join(real, 'src', 'a.ts'), P, real)).toBe(join('src', 'a.ts'))
+    expect(shortPath(join(P, 'b.ts'), P, real)).toBe('b.ts')
+    expect(describeTool('Read', { file_path: join(real, 'c.ts') }, P, real)).toBe('c.ts')
+  })
+})
+
+describe('own', () => {
+  it('is the same text (a copy that no longer holds the text it was cut from)', () => {
+    const big = `${'✻ first line, with an emoji 🙂\n'}${'x'.repeat(100_000)}`
+    expect(own(firstLine(big))).toBe('✻ first line, with an emoji 🙂')
+    expect(own(head(big, 30))).toBe(head(big, 30))
+    expect(own('')).toBe('')
+    expect(own('a')).toBe('a')
   })
 })
 

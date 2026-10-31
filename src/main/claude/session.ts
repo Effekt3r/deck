@@ -1,10 +1,11 @@
 import type { ClaudeFeedItem, ClaudeTodo } from '@shared/types'
-import { AGENT_TOOLS, asText, describeTool, firstLine, head, isRecord, tag, toolLabel } from './describe'
+import { AGENT_TOOLS, asText, describeTool, firstLine, head, isRecord, own, tag, toolLabel } from './describe'
 
 /** Feed items kept (oldest dropped), as the prototype's MAX_EVENTS. */
 export const MAX_FEED = 600
 // Longest text kept per item. The snapshot cuts shorter (prompts 2,000, replies 8,000), so this only
-// bounds memory: a cached 15 MB log keeps a few MB at most.
+// bounds memory, and only because what is kept is copied (own()): a cut string would keep its whole
+// original alive. 600 items of at most 10,000 characters.
 const MAX_TEXT = 10_000
 
 // User text that is never a prompt: command output and reminders.
@@ -25,7 +26,7 @@ export interface AgentInfo {
 type ToolItem = Extract<ClaudeFeedItem, { kind: 'tool' }>
 
 const str = (x: unknown): string => (typeof x === 'string' ? x : '')
-const clip = (s: string) => head(s, MAX_TEXT)
+const clip = (s: string) => own(head(s, MAX_TEXT))
 
 /** Python's truthiness (the prototype tests `if e.get(k)`): empty lists and objects are false. */
 function truthy(x: unknown): boolean {
@@ -86,7 +87,8 @@ export class SessionState {
   /** Bumped by every entry: a snapshot built at the same version is the same. */
   version = 0
 
-  constructor(readonly project: string) {}
+  /** `realProject`: the project's real path, which tool paths in the log start with (describeTool). */
+  constructor(readonly project: string, readonly realProject = project) {}
 
   /** Oldest first, at most MAX_FEED items. */
   get feed(): ClaudeFeedItem[] {
@@ -126,7 +128,7 @@ export class SessionState {
     } else if (t === 'cost-state') {
       // Written as Claude exits; its background work dies with it.
       this.exited = true
-      this.endTurn()
+      this.endTurn(true)
       this.background.clear()
       for (const a of this.agents.values()) a.done = true
     }
@@ -217,7 +219,7 @@ export class SessionState {
       this.add({ kind: 'prompt', text: clip(`! ${tag(text, 'bash-input')}`) }) // runs in the shell, no turn
     } else if (text.startsWith('[Request interrupted')) {
       this.notice('interrupted', 'error')
-      this.endTurn()
+      this.endTurn(true)
     } else if (legacy && text.startsWith('<') && text.slice(0, 40).includes('>') && !text.startsWith('<pasted')) {
       // Older logs: hook output and reminders arrived as user text.
     } else {
@@ -228,14 +230,26 @@ export class SessionState {
   private prompt(text: string): void {
     if (!text) return
     this.add({ kind: 'prompt', text: clip(text) })
-    if (!this.firstPrompt && text !== '[image]') this.firstPrompt = firstLine(text, 80)
+    if (!this.firstPrompt && text !== '[image]') this.firstPrompt = own(firstLine(text, 80))
     this.inTurn = true
     this.error = ''
   }
 
-  private endTurn(): void {
+  /**
+   * Nothing is still running once a turn is over, so a tool still waiting for its result gets a final
+   * state. `cutOff`: an interrupt, an API error or Claude quitting ended the turn, so the tool never
+   * finished (error 'interrupted'); after a normal end (end_turn, turn_duration) it is done, its result
+   * just wasn't logged. A result that comes after all still sets its state.
+   */
+  private endTurn(cutOff = false): void {
     this.inTurn = false
-    this.pending.clear() // nothing is still running once a turn is over
+    for (const id of this.pending.keys()) {
+      const item = this.tools.get(id)
+      if (item?.state !== 'running') continue
+      item.state = cutOff ? 'error' : 'done'
+      if (cutOff) item.error = 'interrupted'
+    }
+    this.pending.clear()
   }
 
   private result(b: Record<string, unknown>, info: unknown): void {
@@ -258,7 +272,7 @@ export class SessionState {
     if (b.is_error) {
       let text = b.content
       if (Array.isArray(text)) text = text.filter(isRecord).map((x) => str(x.text)).join(' ')
-      const error = firstLine(asText(text).replace(/<\/?tool_use_error>/g, ''), 300)
+      const error = own(firstLine(asText(text).replace(/<\/?tool_use_error>/g, ''), 300))
       if (item) {
         item.state = 'error'
         item.error = error
@@ -267,6 +281,7 @@ export class SessionState {
       }
     } else if (item) {
       item.state = 'done'
+      delete item.error // 'interrupted' by a turn end that came before this result
     }
   }
 
@@ -291,9 +306,9 @@ export class SessionState {
     if (e.isApiErrorMessage) {
       // A synthetic reply (model <synthetic>): rate limit, overload, …
       const text = content.filter(isRecord).map((b) => str(b.text)).join(' ')
-      this.error = firstLine(text, 120) || asText(e.error) || 'API error'
+      this.error = own(firstLine(text, 120)) || asText(e.error) || 'API error'
       this.notice(this.error, 'error')
-      this.endTurn()
+      this.endTurn(true)
       return
     }
     this.inTurn = true
@@ -323,13 +338,14 @@ export class SessionState {
     const input = isRecord(b.input) ? b.input : {}
     const id = str(b.id)
     this.pending.set(id, name)
-    const item: ToolItem = { kind: 'tool', id, name: toolLabel(name), summary: clip(describeTool(name, input, this.project)), state: 'running' }
+    const summary = clip(describeTool(name, input, this.project, this.realProject))
+    const item: ToolItem = { kind: 'tool', id, name: toolLabel(name), summary, state: 'running' }
     this.add(item)
     this.tools.set(id, item)
     if (AGENT_TOOLS.has(name)) {
       this.agents.set(id, {
         type: str(input.subagent_type) || 'agent',
-        description: str(input.description) || firstLine(input.prompt, 60),
+        description: str(input.description) || own(firstLine(input.prompt, 60)),
         id: null,
         done: false,
         failed: false,

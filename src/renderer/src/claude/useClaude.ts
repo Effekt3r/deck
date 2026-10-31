@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from 'react'
-import type { ClaudeSnapshot } from '@shared/types'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { ClaudeResume, ClaudeSnapshot } from '@shared/types'
 import { errorText } from '../git/format'
 
 export interface ClaudeFeedState {
@@ -13,30 +13,40 @@ export interface ClaudeFeedState {
   error: string | null
 }
 
-/** Follows the newest Claude session for `folder` while `enabled` (the tab is shown and
- *  its panel isn't hidden). The last snapshot stays meanwhile. */
-export function useClaudeSession(folder: string, enabled: boolean): ClaudeFeedState & { retry(): void } {
+/** Follows Claude's session for `folder` while `enabled` (the tab is shown and its panel
+ *  isn't hidden): `resume`, the session the tab showed before, or the newest (null). The
+ *  last snapshot stays meanwhile. */
+export function useClaudeSession(folder: string, enabled: boolean, resume: ClaudeResume | null): ClaudeFeedState & { retry(): void } {
   const [state, setState] = useState<ClaudeFeedState>({ folder, snapshot: null, phase: 'loading', error: null })
   const [attempt, setAttempt] = useState(0)
+  // Read when subscribing, never a reason to: it changes with the sessions the panel shows.
+  const resumeRef = useRef(resume)
+  useLayoutEffect(() => {
+    resumeRef.current = resume
+  })
 
   useEffect(() => {
     if (!enabled || !folder) return
     const claude = window.deck.claude
     let live = true
-    let updated = false // an update is newer than the subscribe answer that may still be on its way
+    // Main pushes to this subscription only after answering it. What arrives for the folder
+    // before was sent to the one before: this tab's, or another tab's in the same folder, which
+    // showed its own session.
+    let answered = false
     const accept = (snapshot: unknown) => setState({ folder, snapshot: usable(snapshot), phase: 'ready', error: null })
     const off = claude.onUpdate((f, snapshot) => {
-      if (!live || f !== folder) return
-      updated = true
-      accept(snapshot)
+      if (live && answered && f === folder) accept(snapshot)
     })
     setState((s) => (s.folder === folder && s.phase !== 'error' ? s : { ...s, phase: 'loading', error: null }))
-    claude.subscribe(folder).then(
+    claude.subscribe(folder, resumeRef.current).then(
       (snapshot) => {
-        if (live && !updated) accept(snapshot)
+        if (!live) return
+        answered = true
+        accept(snapshot)
       },
       (err: unknown) => {
-        if (!live || updated) return
+        if (!live) return
+        answered = true // updates may still follow
         setState((s) => ({ folder, snapshot: s.folder === folder ? s.snapshot : null, phase: 'error', error: errorText(err) }))
       },
     )

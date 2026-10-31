@@ -85,9 +85,21 @@ Things that aren't obvious from the code:
   - **Parser:** `claude_activity_pane.py` stays the reference;
     `src/main/claude/session.ts` ports it, and replaying all local logs through
     both must give the same final state.
-  - **Which session:** the tab's folder is `tab.cwd` (where Claude was started).
-    A newer session takes over only once the followed one has been quiet for 15 s,
-    so two sessions in one folder don't flip-flop.
+  - **Which session:** the tab's folder is `tab.cwd` (where Claude was started;
+    zsh also reports it on `cd`, so `cd x && claude` watches `x`; PowerShell
+    reports only at the prompt). Each tab remembers the session its panel showed
+    and whether it was pinned (`TerminalTab.claudeSession`), and sends it back with
+    `claude.subscribe` on every tab switch: a pin stays pinned; an unpinned session
+    stays until it has been quiet for 15 s while a newer one exists, so two
+    sessions in one folder don't flip-flop. New tabs, and Claude starting in a tab,
+    follow the newest. Known limit: with two Claudes in one folder, a newly started
+    one takes over a tab only once the shown session has been quiet for 15 s.
+  - **Ordering:** the renderer ignores updates that arrive before its subscribe
+    answer, so a push still on its way for another tab can't win.
+  - **Tools with no result:** they end as `interrupted` (interrupt, API error,
+    exit) or `done` (normal turn end).
+  - **Memory:** kept text is copied (`own()` in `describe.ts`). V8's string slices
+    keep the whole original alive: 98 MB for 200 cut 500 KB texts.
   - **Updates:** a 1 s tick re-evaluates status from cached state without reading
     files, which is how "waiting on you?" appears without new log lines.
   - **Snapshot size:** capped at 300 feed items with long texts cut.

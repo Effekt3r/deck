@@ -38,7 +38,7 @@ const api: DeckApi = {
     setTarget: (repo, branch, target) => ipcRenderer.invoke(IPC.gitSetTarget, repo, branch, target),
   },
   claude: {
-    subscribe: (folder) => ipcRenderer.invoke(IPC.claudeSubscribe, folder),
+    subscribe: (folder, resume) => ipcRenderer.invoke(IPC.claudeSubscribe, folder, resume ?? null),
     unsubscribe: (folder) => ipcRenderer.send(IPC.claudeUnsubscribe, folder),
     onUpdate: (cb) => on<[string, ClaudeSnapshot | null]>(IPC.claudeUpdate, cb),
     sessions: (folder) => ipcRenderer.invoke(IPC.claudeSessions, folder),

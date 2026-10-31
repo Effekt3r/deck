@@ -1,7 +1,7 @@
 import { isAbsolute } from 'node:path'
 import { ipcMain, type WebContents } from 'electron'
 import { IPC } from '@shared/channels'
-import type { ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
+import type { ClaudeResume, ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
 import { scanFolder } from './locator'
 import { agentSteps } from './subagents'
 import { type Client, ClaudeSubscriptions } from './subscriptions'
@@ -14,6 +14,12 @@ import { watchDirs } from './watch'
 const isFolder = (x: unknown): x is string => typeof x === 'string' && x !== '' && x.length < 4096 && isAbsolute(x)
 // Session ids are log file names (UUIDs); they're looked up in the folder's list, never joined into a path.
 const isSessionId = (x: unknown): x is string => typeof x === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(x)
+/** The tab's session to resume; anything else is none (the newest). Only the two fields are kept. */
+function resumeOf(x: unknown): ClaudeResume | null {
+  if (typeof x !== 'object' || x === null) return null
+  const { sessionId, pinned } = x as Record<string, unknown>
+  return isSessionId(sessionId) && typeof pinned === 'boolean' ? { sessionId, pinned } : null
+}
 
 /** `claude:*` handlers. Read-only: Deck never writes to Claude's files. `env` (tests) decides
  *  where Claude's home is ($CLAUDE_CONFIG_DIR). */
@@ -49,8 +55,8 @@ export function registerClaudeIpc(opts: { env?: NodeJS.ProcessEnv } = {}): void 
     }
   }
 
-  ipcMain.handle(IPC.claudeSubscribe, (e, folder: unknown): Promise<ClaudeSnapshot | null> | null =>
-    isFolder(folder) ? hub.subscribe(client(e.sender), folder).catch(() => null) : null)
+  ipcMain.handle(IPC.claudeSubscribe, (e, folder: unknown, resume: unknown): Promise<ClaudeSnapshot | null> | null =>
+    isFolder(folder) ? hub.subscribe(client(e.sender), folder, resumeOf(resume)).catch(() => null) : null)
   // An `on` listener that throws shows an error dialog, so this one only acts on valid arguments.
   ipcMain.on(IPC.claudeUnsubscribe, (e, folder: unknown) => {
     if (isFolder(folder)) hub.unsubscribe(e.sender.id, folder)

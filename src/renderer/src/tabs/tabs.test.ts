@@ -43,6 +43,20 @@ describe('tabsReducer', () => {
     expect(tabsReducer(s, { type: 'update', id: 'a', patch: { vars: { GIT_REPO: '/r', GIT_BRANCH: 'dev' } } })).not.toBe(s)
     expect(tabsReducer(s, { type: 'update', id: 'gone', patch: { title: 'x' } })).toBe(s)
   })
+  it("keeps the Claude session a tab's panel showed: by content, as every snapshot repeats it; cleared when Claude starts", () => {
+    const fresh = open(initialTabs, 'a')
+    expect(fresh.tabs[1]).not.toHaveProperty('claudeSession') // a new tab follows the newest
+    const s = tabsReducer(fresh, { type: 'update', id: 'a', patch: { claudeSession: { id: 's1', pinned: true } } })
+    expect(s.tabs[1]).toMatchObject({ claudeSession: { id: 's1', pinned: true } })
+    expect(tabsReducer(s, { type: 'update', id: 'a', patch: { claudeSession: { id: 's1', pinned: true } } })).toBe(s)
+    expect(tabsReducer(s, { type: 'update', id: 'a', patch: { claudeSession: { id: 's1', pinned: false } } })).not.toBe(s)
+    expect(tabsReducer(s, { type: 'update', id: 'a', patch: { claudeSession: { id: 's2', pinned: true } } })).not.toBe(s)
+    const cleared = tabsReducer(s, { type: 'update', id: 'a', patch: { claudeSession: undefined } })
+    expect(cleared.tabs[1]).toMatchObject({ claudeSession: undefined })
+    expect(tabsReducer(cleared, { type: 'update', id: 'a', patch: { claudeSession: undefined } })).toBe(cleared)
+    expect(tabsReducer(fresh, { type: 'update', id: 'a', patch: { claudeSession: undefined } })).toBe(fresh)
+  })
+
   it('activates known tabs only', () => {
     const s = open(open(initialTabs, 'a'), 'b')
     expect(tabsReducer(s, { type: 'activate', id: 'a' }).active).toBe('a')

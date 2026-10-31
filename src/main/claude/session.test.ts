@@ -159,15 +159,32 @@ describe('SessionState: assistant output', () => {
     expect(s.pending.get('t1')).toBe('mcp__github__get_issue')
   })
 
-  it('an interrupt is an error notice and ends the turn, with its pending tools', () => {
+  it('an interrupt is an error notice and ends the turn; a tool still waiting for its result was interrupted', () => {
     const s = parse(newLog().prompt('go')
       .toolUse('t1', 'Bash', { command: 'sleep 100' })
       .toolResult('t1', { isError: true, content: '[Request interrupted by user for tool use]' })
       .toolUse('t2', 'Bash', { command: 'sleep 200' })
       .interrupt(true))
-    expect(s.feed.at(-1)).toEqual({ kind: 'notice', text: 'interrupted', tone: 'error' })
+    expect(s.feed.slice(1)).toEqual([
+      { kind: 'tool', id: 't1', name: 'Bash', summary: 'sleep 100', state: 'error', error: '[Request interrupted by user for tool use]' },
+      { kind: 'tool', id: 't2', name: 'Bash', summary: 'sleep 200', state: 'error', error: 'interrupted' },
+      { kind: 'notice', text: 'interrupted', tone: 'error' },
+    ])
     expect(s.inTurn).toBe(false)
     expect(s.pending.size).toBe(0)
+  })
+
+  it('an API error ends the turn: a tool still waiting for its result was interrupted', () => {
+    const s = parse(newLog().prompt('go').toolUse('t1', 'Read', { file_path: join(FOLDER, 'a.ts') }).apiError('API Error: Overloaded'))
+    expect(s.feed.find((i) => i.kind === 'tool')).toMatchObject({ id: 't1', state: 'error', error: 'interrupted' })
+  })
+
+  it('a result that comes after the turn ended still sets its state', () => {
+    const log = newLog().prompt('go').toolUse('t1', 'Bash', { command: 'make' }).interrupt()
+    const f = feeder(log)
+    expect(f.update().feed[1]).toMatchObject({ state: 'error', error: 'interrupted' })
+    log.toolResult('t1')
+    expect(f.update().feed[1]).toEqual({ kind: 'tool', id: 't1', name: 'Bash', summary: 'make', state: 'done' })
   })
 
   it('compaction: the summary it restarts from is skipped; the boundary is a notice', () => {
@@ -242,9 +259,14 @@ describe('SessionState: turns and session fields', () => {
     expect(f.update().inTurn).toBe(false)
   })
 
-  it('pending tools are cleared when the turn ends', () => {
-    const s = parse(newLog().prompt('a').toolUse('t1', 'Bash', { command: 'x' }).turnDuration())
+  it('pending tools are cleared when the turn ends; after a normal end, one without a result is done', () => {
+    const s = parse(newLog().prompt('a').toolUse('t1', 'Bash', { command: 'x' }).turnDuration()
+      .prompt('b').toolUse('t2', 'Glob', { pattern: '*.md' }).reply('fine', { stopReason: 'end_turn' }))
     expect(s.pending.size).toBe(0)
+    expect(s.feed.filter((i) => i.kind === 'tool')).toEqual([
+      { kind: 'tool', id: 't1', name: 'Bash', summary: 'x', state: 'done' },
+      { kind: 'tool', id: 't2', name: 'Glob', summary: '*.md', state: 'done' },
+    ])
   })
 
   it('cost-state: exited, and background work ended with it; a resumed session is not exited', () => {
@@ -260,6 +282,7 @@ describe('SessionState: turns and session fields', () => {
     expect(s.exited).toBe(true)
     expect(s.inTurn).toBe(false)
     expect(s.pending.size).toBe(0)
+    expect(s.feed.find((i) => i.kind === 'tool' && i.id === 't3')).toMatchObject({ state: 'error', error: 'interrupted' })
     expect(s.background.size).toBe(0)
     expect([...s.agents.values()].every((a) => a.done)).toBe(true)
     log.prompt('resumed')

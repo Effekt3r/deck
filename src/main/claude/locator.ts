@@ -27,26 +27,23 @@ export function encodeFolder(path: string): string {
   return path.replace(/[^A-Za-z0-9]/g, '-')
 }
 
-/** Lower-cased encodings of the folder as given and as the file system resolves it (symlinks). Claude
- *  encodes process.cwd(), i.e. the on-disk case (/Volumes/wyobi/X logs to -Volumes-Wyobi-X). */
-async function folderKeys(folder: string): Promise<string[]> {
+/**
+ * The project folders that hold `folder`'s logs (its own and its Claude worktrees'), those logs, newest
+ * first, and the folder's real path (symlinks resolved, on-disk case: Claude's process.cwd(), which the
+ * paths in its log start with). Never throws: an unreadable or missing Claude home has no sessions.
+ */
+export async function scanFolder(folder: string, env: NodeJS.ProcessEnv = process.env): Promise<{ dirs: string[]; sessions: SessionFile[]; real: string }> {
+  const projects = join(claudeHome(env), 'projects')
   const given = resolve(folder)
   const real = await realpath(given).catch(() => given)
-  return [...new Set([given, real].map((p) => encodeFolder(p).toLowerCase()))]
-}
-
-/**
- * The project folders that hold `folder`'s logs (its own and its Claude worktrees'), and those logs,
- * newest first. Never throws: an unreadable or missing Claude home has no sessions.
- */
-export async function scanFolder(folder: string, env: NodeJS.ProcessEnv = process.env): Promise<{ dirs: string[]; sessions: SessionFile[] }> {
-  const projects = join(claudeHome(env), 'projects')
-  const keys = await folderKeys(folder)
+  // Lower-cased encodings of both: Claude encodes process.cwd(), i.e. the on-disk case
+  // (/Volumes/wyobi/X logs to -Volumes-Wyobi-X).
+  const keys = [...new Set([given, real].map((p) => encodeFolder(p).toLowerCase()))]
   let entries: Dirent[]
   try {
     entries = await readdir(projects, { withFileTypes: true })
   } catch {
-    return { dirs: [], sessions: [] }
+    return { dirs: [], sessions: [], real }
   }
   const dirs = entries
     .filter((d) => d.isDirectory() && keys.some((k) => {
@@ -69,7 +66,7 @@ export async function scanFolder(folder: string, env: NodeJS.ProcessEnv = proces
   }))
   // Newest first; ties by path, descending, as the prototype's sort of (mtime, path) tuples.
   const sessions = lists.flat().sort((a, b) => b.modified - a.modified || (a.path < b.path ? 1 : a.path > b.path ? -1 : 0))
-  return { dirs, sessions }
+  return { dirs, sessions, real }
 }
 
 /** Logs for `folder` and its Claude worktrees (<encoded>--claude-worktrees-*), newest first. Folder names

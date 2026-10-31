@@ -2,7 +2,7 @@ import { mkdirSync, symlinkSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { claudeHome, encodeFolder, findSessions, projectDirs } from './locator'
+import { claudeHome, encodeFolder, findSessions, projectDirs, scanFolder } from './locator'
 import { makeClaudeHome, makeFolder, removeClaudeHomes, sessionLog } from './test-log'
 
 afterAll(removeClaudeHomes)
@@ -65,6 +65,14 @@ describe('findSessions', () => {
     symlinkSync(real, link)
     sessionLog(home, real, 'via-real').reply('hi')
     expect((await findSessions(link, { CLAUDE_CONFIG_DIR: home })).map((s) => s.id)).toEqual(['via-real'])
+    expect((await scanFolder(link, { CLAUDE_CONFIG_DIR: home })).real).toBe(real) // tool paths start with it
+  })
+
+  it("reports the folder's real path, or the folder itself when it doesn't resolve", async () => {
+    const home = makeClaudeHome()
+    const real = makeFolder()
+    expect((await scanFolder(`${real}${sep}`, { CLAUDE_CONFIG_DIR: home })).real).toBe(real)
+    expect((await scanFolder(abs('no', 'such', 'folder'), { CLAUDE_CONFIG_DIR: join(home, 'missing') })).real).toBe(abs('no', 'such', 'folder'))
   })
 
   it('is empty when Claude has no projects folder or none for this folder', async () => {

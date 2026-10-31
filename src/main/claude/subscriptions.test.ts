@@ -1,7 +1,8 @@
+import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, resolve, sep } from 'node:path'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClaudeSnapshot } from '@shared/types'
-import { type Client, type ClaudeDeps, ClaudeSubscriptions, type LogReader } from './subscriptions'
+import { type Client, type ClaudeDeps, ClaudeSubscriptions, type LogReader, TIMING } from './subscriptions'
 import { type LogWriter, makeClaudeHome, readEntries, removeClaudeHomes, sessionLog } from './test-log'
 
 const FOLDER = resolve(sep, 'Users', 'me', 'app')
@@ -22,7 +23,9 @@ function setup() {
   const logs: LogWriter[] = []
   const mtime = new Map<string, number>()
   const opened: string[] = []
-  const reads = { count: 0 }
+  const reads = { count: 0, maxBytes: [] as (number | undefined)[] }
+  /** Entries one read returns at most; `more` then says there are others (a log read in chunks). */
+  const chunk = { entries: Infinity }
   const watchers: { dirs: string[]; onChange: (name: string | null) => void; stopped: boolean }[] = []
   const steps = new Map<string, string>()
   const deps: ClaudeDeps = {
@@ -34,15 +37,21 @@ function setup() {
     open: vi.fn((path: string): LogReader => {
       opened.push(path)
       let seen = 0
+      // As JsonlTail: what was appended since the last read; a deleted log has nothing new; one
+      // that got shorter was rewritten and is read again from the start (reset).
       const reader = {
-        modified: 0, // as JsonlTail: the time seen at the last read
-        async read() {
+        modified: 0, // the time seen at the last read
+        async read(maxBytes?: number) {
           reads.count++
+          reads.maxBytes.push(maxBytes)
+          if (!existsSync(path)) return { entries: [], reset: false, more: false }
           reader.modified = mtime.get(path) ?? 0
           const all = readEntries(path)
-          const entries = all.slice(seen)
-          seen = all.length
-          return { entries, reset: false, more: false }
+          const reset = all.length < seen
+          if (reset) seen = 0
+          const entries = all.slice(seen, seen + chunk.entries)
+          seen += entries.length
+          return { entries, reset, more: seen < all.length }
         },
       }
       return reader
@@ -70,6 +79,16 @@ function setup() {
     fill(log)
     mtime.set(log.path, Date.now())
   }
+  /** The log is deleted: no longer listed, not readable. */
+  const remove = (log: LogWriter) => {
+    logs.splice(logs.indexOf(log), 1)
+    rmSync(log.path)
+  }
+  /** The log is written again from scratch (shorter than before). */
+  const rewrite = (log: LogWriter, fill: (log: LogWriter) => void) => {
+    writeFileSync(log.path, '')
+    write(log, fill)
+  }
   /** Fires the folder watchers (a file event) and lets the debounce run. */
   const change = async (name: string | null) => {
     for (const w of watchers) if (!w.stopped) w.onChange(name)
@@ -78,7 +97,7 @@ function setup() {
   const client = (id: number) => ({ id, send: vi.fn<Client['send']>() })
   const advance = (ms: number) => vi.advanceTimersByTimeAsync(ms)
   const watching = () => watchers.filter((w) => !w.stopped).length
-  return { hub, deps, session, write, change, client, advance, opened, reads, steps, watching }
+  return { hub, deps, session, write, remove, rewrite, change, client, advance, opened, reads, chunk, steps, watching }
 }
 
 const lastSent = (c: { send: { mock: { calls: Parameters<Client['send']>[] } } }): ClaudeSnapshot | null | undefined =>
@@ -194,33 +213,179 @@ describe('ClaudeSubscriptions', () => {
     expect(a.send).toHaveBeenCalledTimes(sent)
   })
 
-  it('a pin survives the panel unsubscribing and subscribing again (tab switches)', async () => {
+  it("a pin is the tab's: subscribing with it keeps it; without it (another tab, a new one) the newest", async () => {
     const { hub, session, client, advance } = setup()
     session('s1', (l) => l.prompt('older'))
     await advance(1000)
     session('s2', (l) => l.prompt('newer'))
-    const a = client(1)
-    await hub.subscribe(a, FOLDER)
+    const app = client(1)
+    await hub.subscribe(app, FOLDER)
     await hub.follow(FOLDER, 's1')
+    expect(lastSent(app)).toMatchObject({ session: { id: 's1' }, following: 'pinned' })
     hub.unsubscribe(1, FOLDER)
-    expect(await hub.subscribe(a, FOLDER)).toMatchObject({ session: { id: 's1' }, following: 'pinned' })
+    expect(await hub.subscribe(app, FOLDER)).toMatchObject({ session: { id: 's2' }, following: 'newest' })
+    hub.unsubscribe(1, FOLDER)
+    await advance(60_000) // however quiet it is
+    expect(await hub.subscribe(app, FOLDER, { sessionId: 's1', pinned: true })).toMatchObject({ session: { id: 's1' }, following: 'pinned' })
+    await advance(30_000)
+    expect(lastSent(app)?.session.id).toBe('s1') // no push of s2 since
   })
 
-  it('a pinned session whose log is gone is dropped for the newest', async () => {
+  it("two tabs in one folder, both running Claude: switching shows each tab's session, not the newest", async () => {
+    const { hub, session, write, client, advance } = setup()
+    const a = session('a', (l) => l.prompt('in tab A'))
+    const b = session('b', (l) => l.prompt('in tab B'))
+    const app = client(1)
+    const show = async (sessionId: string) => {
+      hub.unsubscribe(1, FOLDER) // the tab switched from
+      return hub.subscribe(app, FOLDER, { sessionId, pinned: false })
+    }
+    expect((await hub.subscribe(app, FOLDER, { sessionId: 'a', pinned: false }))?.session.id).toBe('a')
+    for (let i = 0; i < 3; i++) {
+      await advance(3000)
+      write(a, (l) => l.reply(`a${i}`, { stopReason: 'tool_use' })) // a is the newest
+      expect(await show('b')).toMatchObject({ session: { id: 'b' }, following: 'newest' }) // written 3 s ago
+      await advance(3000)
+      write(b, (l) => l.reply(`b${i}`, { stopReason: 'tool_use' })) // b is the newest
+      expect((await show('a'))?.session.id).toBe('a')
+    }
+    // Still the 15 s rule: once a has been quiet that long, the newest takes over.
+    await advance(16_000)
+    expect(lastSent(app)?.session.id).toBe('b')
+  })
+
+  it('a resumed session that is not, or no longer, one of the folder\'s: the newest', async () => {
     const { hub, deps, session, client, advance } = setup()
     session('s1', (l) => l.prompt('older'))
     await advance(1000)
     session('s2', (l) => l.prompt('newer'))
-    const a = client(1)
-    await hub.subscribe(a, FOLDER)
-    await hub.follow(FOLDER, 's1')
-    hub.unsubscribe(1, FOLDER)
     const scan = vi.mocked(deps.scan).getMockImplementation()!
     vi.mocked(deps.scan).mockImplementation(async (folder) => {
       const r = await scan(folder)
       return { ...r, sessions: r.sessions.filter((s) => s.id !== 's1') } // s1.jsonl deleted
     })
-    expect(await hub.subscribe(a, FOLDER)).toMatchObject({ session: { id: 's2' }, following: 'newest' })
+    const app = client(1)
+    for (const sessionId of ['s1', 'another-folders-session']) {
+      for (const pinned of [true, false]) {
+        expect(await hub.subscribe(app, FOLDER, { sessionId, pinned })).toMatchObject({ session: { id: 's2' }, following: 'newest' })
+        hub.unsubscribe(1, FOLDER)
+      }
+    }
+  })
+
+  it('a subscribe sets the follow state of a folder that is watched already, and opens that log', async () => {
+    const { hub, session, write, client, advance } = setup()
+    const s1 = session('s1', (l) => l.prompt('older'))
+    await advance(1000)
+    session('s2', (l) => l.prompt('newer'))
+    const a = client(1)
+    const b = client(2)
+    expect((await hub.subscribe(a, FOLDER))?.session.id).toBe('s2')
+    write(s1, (l) => l.reply('busy', { stopReason: 'tool_use' })) // newest now, but b resumes it unpinned anyway
+    await advance(1000)
+    expect(await hub.subscribe(b, FOLDER, { sessionId: 's1', pinned: false })).toMatchObject({
+      session: { id: 's1' }, following: 'newest', feed: [{ kind: 'prompt', text: 'older' }, { kind: 'reply', text: 'busy' }],
+    })
+    expect(lastSent(a)?.session.id).toBe('s1') // only the active tab subscribes: the latest wins
+    hub.unsubscribe(2, FOLDER)
+    expect(await hub.subscribe(b, FOLDER, { sessionId: 's2', pinned: true })).toMatchObject({ session: { id: 's2' }, following: 'pinned' })
+  })
+
+  it("follow() wins over a subscribe's resume that hasn't been applied yet", async () => {
+    const { hub, deps, session, client, advance } = setup()
+    session('s1', (l) => l.prompt('older'))
+    await advance(1000)
+    session('s2', (l) => l.prompt('newer'))
+    let open!: () => void
+    const gate = new Promise<void>((resolve) => (open = resolve))
+    const scan = vi.mocked(deps.scan).getMockImplementation()!
+    vi.mocked(deps.scan).mockImplementationOnce(async (folder) => {
+      await gate
+      return scan(folder)
+    })
+    const subscribed = hub.subscribe(client(1), FOLDER, { sessionId: 's1', pinned: true })
+    const followed = hub.follow(FOLDER, null) // e.g. Claude started in the tab while its scan ran
+    open()
+    await followed
+    expect(await subscribed).toMatchObject({ session: { id: 's2' }, following: 'newest' })
+  })
+
+  // A scan that misses the followed log (deleted, or a read that failed for a moment) doesn't switch
+  // at once: like any followed session, it gives way once it has been quiet for 15 s.
+  it('a pinned session whose log is deleted is unpinned; the newest takes over once it has been quiet', async () => {
+    const { hub, session, remove, client, advance } = setup()
+    const s1 = session('s1', (l) => l.prompt('older'))
+    await advance(1000)
+    session('s2', (l) => l.prompt('newer'))
+    const a = client(1)
+    await hub.subscribe(a, FOLDER, { sessionId: 's1', pinned: true })
+    remove(s1)
+    await advance(2000)
+    expect(lastSent(a)).toMatchObject({ session: { id: 's1' }, following: 'newest' })
+    await advance(14_000) // the rescan after s1 has been quiet for more than 15 s
+    expect(lastSent(a)).toMatchObject({ session: { id: 's2' }, following: 'newest' })
+  })
+
+  it('a followed (not pinned) log that is deleted: the newest takes over once it has been quiet', async () => {
+    const { hub, session, remove, client, advance } = setup()
+    session('s1', (l) => l.prompt('older'))
+    await advance(1000)
+    const s2 = session('s2', (l) => l.prompt('newest, then deleted'))
+    const a = client(1)
+    expect((await hub.subscribe(a, FOLDER))?.session.id).toBe('s2')
+    remove(s2)
+    await advance(14_000)
+    expect(a.send).not.toHaveBeenCalled() // reading the deleted log changed nothing
+    await advance(2000)
+    expect(lastSent(a)).toMatchObject({ session: { id: 's1' }, following: 'newest', feed: [{ kind: 'prompt', text: 'older' }] })
+  })
+
+  it('a long log is read in chunks, to its end, before the snapshot', async () => {
+    const { hub, session, client, reads, chunk } = setup()
+    session('s1', (l) => l.prompt('go').toolUse('t1', 'Bash', { command: 'ls' }).toolResult('t1').reply('done'))
+    chunk.entries = 3 // 4 entries: two reads
+    expect(await hub.subscribe(client(1), FOLDER)).toMatchObject({
+      status: { state: 'idle' },
+      feed: [
+        { kind: 'prompt', text: 'go' },
+        { kind: 'tool', id: 't1', name: 'Bash', summary: 'ls', state: 'done' },
+        { kind: 'reply', text: 'done' },
+      ],
+    })
+    expect(reads.count).toBe(2)
+    expect(reads.maxBytes).toEqual([TIMING.chunkBytes, TIMING.chunkBytes])
+  })
+
+  it('a rewritten log is parsed again from the start', async () => {
+    const { hub, session, rewrite, change, client } = setup()
+    const s1 = session('s1', (l) => l.prompt('first version').reply('one'))
+    const a = client(1)
+    expect((await hub.subscribe(a, FOLDER))?.feed).toHaveLength(2)
+    rewrite(s1, (l) => l.prompt('second'))
+    await change(basename(s1.path))
+    expect(lastSent(a)).toMatchObject({ status: { state: 'working' }, feed: [{ kind: 'prompt', text: 'second' }] })
+  })
+
+  it('a run asked for just as the previous one ends is not dropped', async () => {
+    const { hub, session, change, client, advance } = setup()
+    const s1 = session('s1', (l) => l.customTitle('Older'))
+    await advance(1000)
+    session('s2', (l) => l.prompt('newer'))
+    const a = client(1)
+    await hub.subscribe(a, FOLDER, { sessionId: 's1', pinned: true })
+    // The push ends an update; two microtasks later its loop has ended, and before the fix the
+    // promise still counted as running for one more: this follow(null) was dropped.
+    let followed: Promise<void> | undefined
+    a.send.mockImplementationOnce(() => {
+      queueMicrotask(() => queueMicrotask(() => {
+        followed = hub.follow(FOLDER, null)
+      }))
+    })
+    s1.prompt('busy') // read, but s2 stays the newest
+    await change(basename(s1.path))
+    expect(followed).toBeDefined()
+    await followed
+    expect(lastSent(a)).toMatchObject({ session: { id: 's2' }, following: 'newest' })
   })
 
   it('the status tick pushes maybe-waiting without a log change, and reads no files', async () => {

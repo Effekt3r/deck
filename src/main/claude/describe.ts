@@ -1,4 +1,3 @@
-import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 
 export const AGENT_TOOLS = new Set(['Task', 'Agent'])
@@ -46,6 +45,16 @@ export function cut(s: string, n: number): string {
   return s.length <= n ? s : `${head(s, n - 1)}…`
 }
 
+/**
+ * `s` as a string of its own, for text that is kept. In V8 a cut string (slice, split, trim, and so
+ * head() and firstLine()) is a view that keeps the whole original alive: a 300-character first line of
+ * a 2 MB tool output held the 2 MB. Prepending a character makes a cons string, which slice() first
+ * copies into a flat one (measured: ~350 B kept per such line instead of the whole text).
+ */
+export function own(s: string): string {
+  return ` ${s}`.slice(1)
+}
+
 /** The first line of the trimmed text, at most n characters (prototype: first_line). */
 export function firstLine(s: unknown, n = 200): string {
   const line = asText(s).trim().split(LINE_BREAK, 1)[0] ?? ''
@@ -66,28 +75,13 @@ export function toolLabel(name: string): string {
   return name.startsWith('mcp__') ? name.slice(5).replace('__', ':') : name
 }
 
-// The project's real path, looked up once per project (paths in the log are under Claude's cwd,
-// which is the real path when the folder was reached through a symlink).
-const realPaths = new Map<string, string>()
-function realPathOf(project: string): string {
-  let real = realPaths.get(project)
-  if (real === undefined) {
-    try {
-      real = realpathSync.native(project)
-    } catch {
-      real = project
-    }
-    if (realPaths.size > 100) realPaths.clear()
-    realPaths.set(project, real)
-  }
-  return real
-}
-
-/** A path relative to the project when inside it (any case, either separator), else with ~ for home. */
-export function shortPath(p: unknown, project: string): string {
+/** A path relative to the project when inside it (any case, either separator), else with ~ for home.
+ *  `real`: the project's real path. Paths in the log are under Claude's cwd, which is the real path
+ *  when the folder was reached through a symlink (the locator resolves it, without blocking). */
+export function shortPath(p: unknown, project: string, real = project): string {
   if (typeof p !== 'string') return asText(p)
   const low = p.toLowerCase()
-  for (const base of new Set([realPathOf(project), project])) {
+  for (const base of new Set([real, project])) {
     const b = base.replace(/[/\\]+$/, '')
     const lb = b.toLowerCase()
     if (low.startsWith(`${lb}/`) || low.startsWith(`${lb}\\`)) return p.slice(b.length + 1)
@@ -97,10 +91,10 @@ export function shortPath(p: unknown, project: string): string {
   return p
 }
 
-/** One-line summary of a tool call (prototype: describe_tool). */
-export function describeTool(name: string, input: unknown, project: string): string {
+/** One-line summary of a tool call (prototype: describe_tool). `real`: the project's real path (shortPath). */
+export function describeTool(name: string, input: unknown, project: string, real = project): string {
   const inp = isRecord(input) ? input : {}
-  const path = (k: string) => shortPath(inp[k] ?? '', project)
+  const path = (k: string) => shortPath(inp[k] ?? '', project, real)
   if (name === 'Bash') return asText(inp.description) || firstLine(inp.command)
   if (FILE_TOOLS.has(name)) return path('file_path') || path('notebook_path')
   if (name === 'Grep' || name === 'Glob') return asText(inp.pattern) + (truthy(inp.path) ? `  in ${path('path')}` : '')

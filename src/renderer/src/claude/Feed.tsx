@@ -7,7 +7,7 @@ interface FeedProps {
   /** Oldest first. */
   items: ClaudeFeedItem[]
   showThinking: boolean
-  /** A turn is open: running tools pulse. (A tool an interrupt left running doesn't.) */
+  /** A turn is open: running tools pulse. (One a killed Claude left running doesn't.) */
   live: boolean
 }
 

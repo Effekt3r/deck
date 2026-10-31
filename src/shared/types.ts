@@ -210,6 +210,13 @@ export interface ClaudeSnapshot {
   following: 'newest' | 'pinned'
 }
 
+/** The session a tab's panel showed (its last snapshot), handed back when the tab subscribes again. */
+export interface ClaudeResume {
+  sessionId: string
+  /** It was pinned (snapshot.following === 'pinned'). */
+  pinned: boolean
+}
+
 export interface DeckApi {
   platform: Platform
   pty: {
@@ -249,8 +256,11 @@ export interface DeckApi {
     setTarget(repo: string, branch: string, target: string | null): Promise<void>
   }
   claude: {
-    /** Follows the newest session for `folder` (and its worktrees). null: none yet; updates follow when one starts. */
-    subscribe(folder: string): Promise<ClaudeSnapshot | null>
+    /** Follows the newest session for `folder` (and its worktrees). null: none yet; updates follow when one starts.
+     *  Only the active tab subscribes, and the folder's follow state is set from `resume`, the session this tab
+     *  showed: pinned, it stays pinned; else it is followed until a newer session takes over (once it has been
+     *  quiet for 15 s). No resume, or a session that isn't the folder's: the newest. */
+    subscribe(folder: string, resume?: ClaudeResume | null): Promise<ClaudeSnapshot | null>
     unsubscribe(folder: string): void
     onUpdate(cb: (folder: string, snapshot: ClaudeSnapshot | null) => void): () => void
     /** The folder's sessions, newest first (for the picker). */

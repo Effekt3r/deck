@@ -34,33 +34,43 @@ describe('agentSteps', () => {
       .toolUse('s1', 'Grep', { pattern: 'class Session', path: join(FOLDER, 'src') })
     log.subagent('ag2', 't2').prompt('Look around', { origin: null })
       .toolUse('s2', 'Read', { file_path: join(FOLDER, 'a.ts') }).toolResult('s2').reply('Found it.\nDetails follow')
-    const steps = await agentSteps(log.path, parse(log), FOLDER)
+    const steps = await agentSteps(log.path, parse(log))
     expect(steps).toEqual(new Map([['t1', `Grep: class Session  in src`], ['t2', 'Found it.']]))
+  })
+
+  it("paths are short against the session's project or its real path (a folder reached through a symlink)", async () => {
+    const real = resolve(sep, 'Volumes', 'Disk', 'app')
+    const log = withAgents()
+    log.subagent('ag1', 't1').toolUse('s1', 'Read', { file_path: join(real, 'src', 'a.ts') })
+    log.subagent('ag2', 't2').toolUse('s2', 'Edit', { file_path: join(FOLDER, 'b.ts') })
+    const s = new SessionState(FOLDER, real)
+    for (const e of readEntries(log.path)) s.ingest(e)
+    expect(await agentSteps(log.path, s)).toEqual(new Map([['t1', `Read: ${join('src', 'a.ts')}`], ['t2', 'Edit: b.ts']]))
   })
 
   it("an agent's log is also found by its agent id when there is no meta.json", async () => {
     const log = withAgents()
     log.subagent('ag1', 'unused', { withMeta: false }).toolUse('s1', 'mcp__github__get_issue', { summary: 'Issue 7' })
-    expect(await agentSteps(log.path, parse(log), FOLDER)).toEqual(new Map([['t1', 'github:get_issue: Issue 7']]))
+    expect(await agentSteps(log.path, parse(log))).toEqual(new Map([['t1', 'github:get_issue: Issue 7']]))
   })
 
   it('an agent that has only its prompt has no step yet; a tool without a summary is just its name', async () => {
     const log = withAgents()
     log.subagent('ag1', 't1').prompt('Survey the code\nin detail', { origin: null })
     log.subagent('ag2', 't2').prompt('Look', { origin: null }).toolUse('s1', 'ListAgents', {})
-    expect(await agentSteps(log.path, parse(log), FOLDER)).toEqual(new Map([['t2', 'ListAgents']]))
+    expect(await agentSteps(log.path, parse(log))).toEqual(new Map([['t2', 'ListAgents']]))
   })
 
   it('finished agents and agents without a log have no step', async () => {
     const log = withAgents().notification({ taskId: 'ag1', toolUseId: 't1', status: 'completed', summary: 'done' })
     log.subagent('ag1', 't1').reply('finished work')
-    expect(await agentSteps(log.path, parse(log), FOLDER)).toEqual(new Map())
+    expect(await agentSteps(log.path, parse(log))).toEqual(new Map())
   })
 
   it('never builds a path from an agent id that could leave the folder', async () => {
     const log = sessionLog(home, FOLDER).toolUse('t1', 'Agent', { description: 'x' })
       .toolResult('t1', { toolUseResult: { status: 'async_launched', agentId: '../../escape' } })
-    expect(await agentSteps(log.path, parse(log), FOLDER)).toEqual(new Map())
+    expect(await agentSteps(log.path, parse(log))).toEqual(new Map())
   })
 
   it('with a cache, an unchanged agent log is not read again', async () => {
@@ -68,12 +78,12 @@ describe('agentSteps', () => {
     const sub = log.subagent('ag1', 't1').reply('first step', { stopReason: 'tool_use' })
     const cache = new StepCache()
     const s = parse(log)
-    expect((await agentSteps(log.path, s, FOLDER, cache)).get('t1')).toBe('first step')
+    expect((await agentSteps(log.path, s, cache)).get('t1')).toBe('first step')
     expect(cache.reads).toBe(1)
-    await agentSteps(log.path, s, FOLDER, cache)
+    await agentSteps(log.path, s, cache)
     expect(cache.reads).toBe(1)
     sub.reply('second step', { stopReason: 'tool_use' })
-    expect((await agentSteps(log.path, s, FOLDER, cache)).get('t1')).toBe('second step')
+    expect((await agentSteps(log.path, s, cache)).get('t1')).toBe('second step')
     expect(cache.reads).toBe(2)
   })
 })

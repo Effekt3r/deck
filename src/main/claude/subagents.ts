@@ -1,6 +1,6 @@
 import { open, readdir, readFile, stat } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
-import { asText, describeTool, firstLine, isRecord, toolLabel } from './describe'
+import { asText, describeTool, firstLine, isRecord, own, toolLabel } from './describe'
 import type { SessionState } from './session'
 
 /** How much of the end of a sub-agent's log is read for its step. */
@@ -28,7 +28,7 @@ export function subagentsDir(sessionPath: string): string {
 }
 
 /** The latest tool call or reply in a log's text, newest line first (prototype: last_step). */
-function stepIn(text: string, project: string): string {
+function stepIn(text: string, project: string, real: string): string {
   const lines = text.split('\n')
   for (let i = lines.length - 1; i >= 0; i--) {
     let e: unknown
@@ -44,7 +44,7 @@ function stepIn(text: string, project: string): string {
       if (!isRecord(b)) continue
       if (b.type === 'tool_use') {
         const name = asText(b.name)
-        const summary = describeTool(name, b.input, project)
+        const summary = describeTool(name, b.input, project, real)
         return summary ? `${toolLabel(name)}: ${summary}` : toolLabel(name)
       }
       if (b.type === 'text' && typeof b.text === 'string' && b.text.trim()) return firstLine(b.text)
@@ -53,8 +53,9 @@ function stepIn(text: string, project: string): string {
   return ''
 }
 
-/** The latest tool call or reply in a sub-agent's log; '' when there is none (yet). */
-export async function lastStep(path: string, project: string, cache?: StepCache): Promise<string> {
+/** The latest tool call or reply in a sub-agent's log; '' when there is none (yet). `real`: the
+ *  project's real path (describeTool). */
+export async function lastStep(path: string, project: string, cache?: StepCache, real = project): Promise<string> {
   let size: number
   let modified: number
   try {
@@ -80,7 +81,7 @@ export async function lastStep(path: string, project: string, cache?: StepCache)
   } catch {
     return ''
   }
-  const step = stepIn(text, project)
+  const step = own(stepIn(text, project, real)) // cached: a cut line would keep its whole entry
   if (cache) {
     cache.reads++
     cache.steps.set(path, { size, modified, step })
@@ -92,9 +93,10 @@ export async function lastStep(path: string, project: string, cache?: StepCache)
 /**
  * What each running sub-agent is doing now, by Agent tool_use id (prototype: subagent_steps). Its
  * log is <session>/subagents/agent-<agentId>.jsonl; agent-<agentId>.meta.json names the tool call
- * that started it (toolUseId). Agents without a step yet are left out.
+ * that started it (toolUseId). Agents without a step yet are left out. Paths are shortened like the
+ * session's own tool calls (its project and real path).
  */
-export async function agentSteps(sessionPath: string, s: SessionState, project: string, cache?: StepCache): Promise<Map<string, string>> {
+export async function agentSteps(sessionPath: string, s: SessionState, cache?: StepCache): Promise<Map<string, string>> {
   const out = new Map<string, string>()
   const running = [...s.agents].filter(([, a]) => !a.done)
   if (!running.length) return out
@@ -121,7 +123,7 @@ export async function agentSteps(sessionPath: string, s: SessionState, project: 
   for (const [toolUseId, a] of running) {
     const log = logs.get(toolUseId) ?? (a.id && SAFE_ID.test(a.id) ? join(base, `agent-${a.id}.jsonl`) : null)
     if (!log) continue
-    const step = await lastStep(log, project, cache)
+    const step = await lastStep(log, s.project, cache, s.realProject)
     if (step) out.set(toolUseId, step)
   }
   return out

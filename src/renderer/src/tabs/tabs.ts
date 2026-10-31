@@ -24,6 +24,10 @@ export interface TerminalTab {
   gitHidden?: boolean
   /** The Claude panel was closed in this tab (View → Claude Panel). */
   claudeHidden?: boolean
+  /** The session its Claude panel showed last, and whether it was pinned: subscribing again (a tab
+   *  switch) resumes it, as main's follow state is per folder. Unset: none yet, or Claude was started
+   *  in the tab since (it follows the newest session, Claude's own). */
+  claudeSession?: { id: string; pinned: boolean }
 }
 
 export type Tab = ProjectsTab | TerminalTab
@@ -87,11 +91,18 @@ function activate(state: TabsState, index: number): TabsState {
   return tab && tab.id !== state.active ? { ...state, active: tab.id } : state
 }
 
-/** Whether applying the patch would change the tab; vars compare by content. */
+/** Whether applying the patch would change the tab; vars and claudeSession compare by content. */
 function changes(tab: TerminalTab, patch: TerminalPatch): boolean {
-  return (Object.keys(patch) as (keyof TerminalPatch)[]).some((k) =>
-    k === 'vars' ? !sameVars(tab.vars, patch.vars ?? {}) : !Object.is(tab[k], patch[k]),
-  )
+  return (Object.keys(patch) as (keyof TerminalPatch)[]).some((k) => {
+    if (k === 'vars') return !sameVars(tab.vars, patch.vars ?? {})
+    if (k === 'claudeSession') return !sameSession(tab.claudeSession, patch.claudeSession)
+    return !Object.is(tab[k], patch[k])
+  })
+}
+
+/** Every snapshot repeats the session it shows. */
+function sameSession(a: TerminalTab['claudeSession'], b: TerminalTab['claudeSession']): boolean {
+  return a === b || (a !== undefined && b !== undefined && a.id === b.id && a.pinned === b.pinned)
 }
 
 function sameVars(a: Record<string, string>, b: Record<string, string>): boolean {

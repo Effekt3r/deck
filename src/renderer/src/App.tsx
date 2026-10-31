@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
 import type { AppInfo, MenuCommand, ProjectAction } from '@shared/types'
 import { ClaudePanel } from './claude/ClaudePanel'
+import { shownSession, toResume } from './claude/resume'
 import { useClaudeSession } from './claude/useClaude'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
@@ -190,10 +191,11 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const repo = tab.vars.GIT_REPO ?? ''
   const showGit = repo !== '' && !tab.gitHidden
   // Claude logs under the folder it was started in: the tab's cwd, which stays put while
-  // it runs (no prompts, so no OSC 7).
+  // it runs (no prompts, so no OSC 7; zsh reports a cd within the command line at once).
   const folder = tab.cwd || repo
   const claudeRuns = runsClaude(tab.process, tab.title)
-  const claude = useClaudeSession(folder, active && tab.claudeHidden !== true)
+  const claudeLive = active && tab.claudeHidden !== true
+  const claude = useClaudeSession(folder, claudeLive, toResume(tab.claudeSession))
   // claudeHidden: true = hidden with View → Claude Panel; false = shown with it, even
   // with nothing to show yet; unset = shown when there is something to show.
   const showClaude = tab.claudeHidden !== true && (tab.claudeHidden === false || claudeRuns || claude.snapshot !== null)
@@ -218,6 +220,27 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     toggleSeen.current = claudeToggle
     onUpdate(tab.id, { claudeHidden: showClaude })
   }, [claudeToggle]) // showClaude, tab.id and onUpdate as of this render
+
+  // The session the panel shows is the tab's: main's follow state is per folder, so subscribing
+  // again (a tab switch) hands it back, rather than taking what another tab there followed. (The
+  // same session again changes nothing: the reducer compares it by content.)
+  useEffect(() => {
+    const shown = claude.folder === folder ? shownSession(claude.snapshot) : undefined
+    if (shown) onUpdate(tab.id, { claudeSession: shown })
+  }, [claude.snapshot, claude.folder, folder, tab.id, onUpdate])
+
+  // Claude starting in the tab: from now on its panel follows the newest session, which will
+  // be Claude's own, not one this tab showed before; a pin it holds now is let go at once.
+  const ranClaude = useRef(claudeRuns)
+  useEffect(() => {
+    if (claudeRuns === ranClaude.current) return
+    ranClaude.current = claudeRuns
+    if (!claudeRuns) return
+    onUpdate(tab.id, { claudeSession: undefined })
+    if (claudeLive && claude.folder === folder && claude.snapshot?.following === 'pinned') {
+      window.deck.claude.follow(folder, null).catch(() => {}) // its snapshot arrives as an update
+    }
+  }, [claudeRuns]) // the rest as of this render
 
   // Like the git panel's: the choice holds in the repo (or folder) it was made in.
   const claudeKey = repo || folder

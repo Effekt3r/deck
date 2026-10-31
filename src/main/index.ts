@@ -7,6 +7,7 @@ import { IPC } from '@shared/channels'
 import type { AppInfo, PtyCreateOptions } from '@shared/types'
 import { buildMenu } from './menu'
 import { registerClaudeIpc } from './claude/ipc'
+import { externalUrl } from './external'
 import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
 import { registerProjectsIpc } from './projects/ipc'
@@ -83,8 +84,9 @@ async function start(): Promise<void> {
     windowsBuild: process.platform === 'win32' ? Number(release().split('.')[2]) || undefined : undefined,
   }))
   ipcMain.on(IPC.appOpenExternal, (_e, url: unknown) => {
-    // Web and mail links only; never file:// or custom schemes from terminal output.
-    if (typeof url === 'string' && /^(https?:\/\/|mailto:)/i.test(url)) void shell.openExternal(url)
+    // Web and mail links only, mailto: without its ?headers (see externalUrl).
+    const safe = externalUrl(url)
+    if (safe) void shell.openExternal(safe)
   })
   ipcMain.on(IPC.appCopyText, (_e, text: unknown) => {
     if (typeof text === 'string') clipboard.writeText(text)

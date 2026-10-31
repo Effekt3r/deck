@@ -61,6 +61,22 @@ describe('claude IPC', () => {
     emit(wc, IPC.claudeUnsubscribe, folder)
   })
 
+  it('subscribe resumes the session a tab showed; a malformed resume counts as none (the newest)', async () => {
+    const folder = makeFolder()
+    const older = sessionLog(home, folder).aiTitle('Older').touch(Date.now() - 60_000)
+    const newest = sessionLog(home, folder).prompt('Newest')
+    const wc = new FakeContents()
+    for (const bad of [42, 'x', [], { sessionId: older.sessionId }, { sessionId: '../x', pinned: true },
+      { sessionId: older.sessionId, pinned: 'yes' }, { sessionId: 7, pinned: true }]) {
+      expect(await invoke(wc, IPC.claudeSubscribe, folder, bad)).toMatchObject({ session: { id: newest.sessionId }, following: 'newest' })
+      emit(wc, IPC.claudeUnsubscribe, folder)
+    }
+    expect(await invoke(wc, IPC.claudeSubscribe, folder, { sessionId: older.sessionId, pinned: true, extra: 1 })).toMatchObject({
+      session: { id: older.sessionId, title: 'Older' }, following: 'pinned',
+    })
+    emit(wc, IPC.claudeUnsubscribe, folder)
+  })
+
   it('subscribes, pushes what Claude appends, lists sessions, pins and unpins, stops after unsubscribe', async () => {
     const folder = makeFolder()
     const log = sessionLog(home, folder).prompt('Hello there')
