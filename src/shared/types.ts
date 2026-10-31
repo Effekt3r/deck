@@ -222,6 +222,7 @@ export type ClipboardPreview =
   | {
       id: string
       kind: 'image'
+      /** In pixels. */
       width: number
       height: number
       /** A small PNG of it, as a data: URL. */
@@ -302,12 +303,16 @@ export interface DeckApi {
   clipboard: {
     /** The item the card offers now, or null. */
     current(): Promise<ClipboardPreview | null>
-    /** The card's item changed: a new copy, or null once it was used, dismissed or replaced. */
+    /** The card's item changed: a new copy, or null once it was used or dismissed, or the clipboard
+     *  moved to something that gets no card. */
     onItem(cb: (item: ClipboardPreview | null) => void): () => void
-    /** The text that inserts this item: the snapshot the card shows, even if the clipboard changed since. */
+    /** The text that inserts this item: the snapshot the card shows, even if the clipboard changed
+     *  since. A successful add uses the item up; an id that's gone gives { error }. */
     add(id: string): Promise<InsertResult>
-    /** What Cmd/Ctrl+V inserts now; null: nothing (an image in a shell tab). Pasting the card's item uses it up. */
+    /** What Cmd/Ctrl+V inserts now: { text }, or { error } when the clipboard can't be read or saved;
+     *  null: nothing (an empty clipboard, or an image in a shell tab). Pasting the card's item uses it up. */
     paste(opts: { claude: boolean }): Promise<InsertResult | null>
+    /** Hide the card's item `id`. */
     dismiss(id: string): void
   }
   app: {

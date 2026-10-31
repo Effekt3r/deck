@@ -59,7 +59,7 @@ const api: DeckApi = {
       try {
         return webUtils.getPathForFile(file)
       } catch {
-        return '' // not a File (or not one from disk)
+        return '' // not a File; a File that isn't on disk gives '' without throwing
       }
     },
     onOpenFolder: (cb) => on<[string]>(IPC.appOpenFolder, cb),
