@@ -19,7 +19,7 @@ Get what Franco copies (screenshots, documents, text) into the tab's Claude sess
 - **Where:** at the bottom of the Claude panel, in a tab where Claude is running (`runsClaude(tab.process, tab.title)`). It appears when the clipboard holds a new item; see [When an item is new](#when-an-item-is-new).
 - **What it shows:**
   - **image:** a thumbnail (at most 240 px wide) and its size, e.g. "Image · 1440×900";
-  - **files:** up to three names with an icon each (folder, image, PDF, other), "+N more", and the first file's folder;
+  - **files:** up to three names, each with a type badge from its extension ("PDF", "PNG"), "+N more", and the first file's folder;
   - **text:** the first three lines, each cut at 120 characters, and "N lines".
 - **Add to Claude** inserts the item into the prompt as a bracketed paste. It never presses Enter.
 - **×** dismisses the item.
@@ -79,10 +79,11 @@ The card always shows what Cmd+V would paste, except concealed items, which get 
 
 | File | Role |
 |---|---|
-| `read.ts` | `readClipboard(): ClipboardContent \| null`, the only code that calls Electron's `clipboard`. The platform specifics live here: file lists, image bytes, concealed formats. |
-| `item.ts` (pure) | Picks the item from the content (files, then text, then image), builds its preview, fingerprints it. |
+| `read.ts` | `readClipboard(): ClipboardContent \| null`, the only code that calls Electron's `clipboard`. It picks the content (files, then text, then image) and spots concealed copies. Electron 45's clipboard is async: one item whose `text/uri-list` lists every copied file. |
+| `item.ts` (pure) | The content types, `text/uri-list` parsing, the preview, the fingerprint. |
+| `image.ts` | Size and thumbnail of an image (Electron's `nativeImage`). |
 | `watch.ts` | Window `focus`/`blur` and the 1 s poll while focused; fingerprint comparison and the "new" rules; holds the current item and whether it was used. |
-| `paste.ts` (pure) | Turns an item into the text to insert: POSIX quoting (`'…'`, with `'` written `'\''`) for zsh, PowerShell quoting (`'…'`, with `'` written `''`) on Windows; paths separated by spaces; an image becomes its temp path. |
+| `insert.ts` | Turns an item into the text to insert: quoted paths (`src/shared/quote.ts`: `'…'` with `'\''` for zsh, `'…'` with `''` for PowerShell), the text, or an image's saved path. |
 | `temp.ts` | `<app temp>/Deck clipboard/<sha1>.png`, written on first use; emptied at startup and on quit. |
 | `ipc.ts` | Wires it to the window. |
 
@@ -98,6 +99,8 @@ type InsertResult = { text: string } | { error: string }
 
 interface DeckApi {
   clipboard: {
+    /** The item the card offers now (for a renderer that starts listening late). */
+    current(): Promise<ClipboardPreview | null>
     /** The current new item, or null when there is none (used, dismissed, replaced by nothing new). */
     onItem(cb: (item: ClipboardPreview | null) => void): () => void
     /** The text that inserts this item (the snapshot, even if the clipboard changed since). */
@@ -107,7 +110,8 @@ interface DeckApi {
     dismiss(id: string): void
   }
   app: {
-    /** Absolute path of a dropped file (preload: webUtils.getPathForFile). */
+    /** Absolute path of a dropped file (preload: webUtils.getPathForFile). Replaces readText,
+     *  which nothing uses once paste goes through clipboard.paste. */
     pathForFile(file: File): string
   }
 }
@@ -115,7 +119,7 @@ interface DeckApi {
 
 ### Renderer
 
-- **`claude/ClipboardCard.tsx` with a `useClipboard()` hook:** shows the preview. Add calls `clipboard.add(id)`, then pastes the text into the tab's terminal.
+- **`clipboard/ClipboardCard.tsx` with a `useClipboardItem()` hook** (in `src/renderer/src/clipboard/`, rendered under the Claude panel by `App.tsx`'s Workspace): shows the preview. Add calls `clipboard.add(id)`, then pastes the text into the tab's terminal.
 - **`terminal/TerminalView.tsx`:**
   - **Paste:** catches it before xterm, then calls `clipboard.paste({ claude })` and pastes the result with `term.paste()`, which wraps it in bracketed paste when the program asked for that.
     - macOS: the DOM `paste` event that the Edit menu's Paste fires, in the capture phase.
@@ -133,7 +137,7 @@ Verified 2026-10-31: Claude Code 2.1.283 on macOS turns a pasted `'/path/shot on
 
 1. **Windows, file lists:** read more than one copied file through Electron. `FileNameW` gives only the first. The fallback is Chromium's paste event (`clipboardData.files` with `webUtils.getPathForFile`).
 2. **Windows, image paths:** Claude Code attaches an image from a pasted, quoted Windows path (`'C:\…\shot.png'`). If it doesn't, use double quotes there.
-3. **macOS, concealed items:** `clipboard.availableFormats()` lists the concealed and transient types. If not, use `clipboard.has()`.
+3. **macOS, concealed items:** verified 2026-10-31. Electron 45 has no `availableFormats()`; the concealed type is among the item's raw types, and `clipboard.has()` sees it.
 4. **macOS, paste interception:** the Edit menu's Paste reaches the terminal as a DOM `paste` event that can be cancelled before xterm handles it.
 
 ## Testing
