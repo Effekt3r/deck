@@ -6,6 +6,7 @@ import { app, type BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electr
 import { IPC } from '@shared/channels'
 import type { AppInfo, PtyCreateOptions } from '@shared/types'
 import { buildMenu } from './menu'
+import { registerClaudeIpc } from './claude/ipc'
 import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
 import { registerProjectsIpc } from './projects/ipc'
@@ -101,6 +102,7 @@ async function start(): Promise<void> {
   })
 
   registerGitIpc({ targetsFile: join(userData, 'git-targets.json') })
+  registerClaudeIpc()
 
   Menu.setApplicationMenu(buildMenu((cmd) => send(IPC.appMenu, cmd)))
   win = createWindow()
