@@ -7,14 +7,16 @@ const text = (t: string, concealed = false): ClipboardContent => ({ kind: 'text'
 const files = (...paths: string[]): ClipboardContent => ({ kind: 'files', paths })
 const image = (b = 1): ClipboardContent => ({ kind: 'image', png: new Uint8Array([b, 2, 3]) })
 
-/** A watch over a fake clipboard (`clip.now`), recording everything it published. */
+/** A watch over a fake clipboard (`clip.now`), recording everything it published. Setting
+ *  `clip.fail` makes every read throw, as a busy clipboard API would, until cleared. */
 function setup(overrides: Partial<WatchDeps> = {}) {
-  const clip: { now: ClipboardContent | null } = { now: text('there at start') }
+  const clip: { now: ClipboardContent | null; fail: boolean } = { now: text('there at start'), fail: false }
   const published: (ClipboardPreview | null)[] = []
   const counts = { reads: 0 }
   const watch = new ClipboardWatch({
     read: async () => {
       counts.reads++
+      if (clip.fail) throw new Error('busy')
       return clip.now
     },
     imageInfo: () => ({ width: 1440, height: 900, thumbnail: 'data:image/png;base64,AA==' }),
@@ -121,6 +123,20 @@ describe('ClipboardWatch', () => {
     expect(counts.reads).toBe(reads)
   })
 
+  it('a terminal copy just before leaving does not show when Deck comes back', async () => {
+    const { clip, watch, published } = setup()
+    await watch.baseline()
+    watch.focus()
+    await tick(300)
+    clip.now = text('selected in the terminal')
+    watch.blur()
+    await tick()
+    watch.focus()
+    await tick()
+    expect(published).toEqual([])
+    watch.stop()
+  })
+
   it("add() gives the snapshot's text even if the clipboard changed since, and uses the item up", async () => {
     const { clip, watch, last } = setup()
     await watch.baseline()
@@ -138,6 +154,18 @@ describe('ClipboardWatch', () => {
   it('add() with an item that is gone says so', async () => {
     const { watch } = setup()
     expect(await watch.add('nope')).toEqual({ error: 'That clipboard item is gone. Copy it again.' })
+  })
+
+  it('add() keeps the item when insert fails', async () => {
+    const { clip, watch, last } = setup({ insert: async () => ({ error: 'disk full' }) })
+    await watch.baseline()
+    clip.now = image()
+    watch.focus()
+    await tick()
+    const id = last()!.id
+    expect(await watch.add(id)).toEqual({ error: 'disk full' })
+    expect(watch.current()).toMatchObject({ kind: 'image' })
+    watch.stop()
   })
 
   it("paste() uses up the card's item, and what was pasted never shows later", async () => {
@@ -175,6 +203,26 @@ describe('ClipboardWatch', () => {
     watch.stop()
   })
 
+  it('paste() after a change no look has seen retires the card', async () => {
+    const { clip, watch, last } = setup()
+    await watch.baseline()
+    clip.now = image()
+    watch.focus()
+    await tick()
+    expect(last()).toMatchObject({ kind: 'image' })
+    clip.now = text('copied')
+    expect(await watch.paste(true)).toEqual({ text: 'copied' })
+    expect(last()).toBeNull()
+    watch.stop()
+  })
+
+  it("paste() when the clipboard can't be read reports why", async () => {
+    const { clip, watch } = setup()
+    await watch.baseline()
+    clip.fail = true
+    expect(await watch.paste(true)).toEqual({ error: "Couldn't read the clipboard: busy" })
+  })
+
   it('dismiss() hides the card', async () => {
     const { clip, watch, last } = setup()
     await watch.baseline()
@@ -183,6 +231,114 @@ describe('ClipboardWatch', () => {
     await tick()
     watch.dismiss(last()!.id)
     expect(last()).toBeNull()
+    watch.stop()
+  })
+
+  it('a dismissed card stays dismissed across later polls and a blur/refocus with the same clipboard', async () => {
+    const { clip, watch, last } = setup()
+    await watch.baseline()
+    clip.now = files('/a.pdf')
+    watch.focus()
+    await tick()
+    watch.dismiss(last()!.id)
+    expect(last()).toBeNull()
+    await tick(3000) // the clipboard hasn't changed: later polls see the same fingerprint
+    expect(watch.current()).toBeNull()
+    watch.blur()
+    await tick()
+    watch.focus()
+    await tick()
+    expect(watch.current()).toBeNull()
+    watch.stop()
+  })
+
+  it('polling restarts after blur then focus', async () => {
+    const { clip, watch, last } = setup()
+    await watch.baseline()
+    watch.focus()
+    await tick()
+    watch.blur()
+    await tick()
+    watch.focus()
+    await tick()
+    clip.now = image()
+    await tick(1000)
+    expect(last()).toMatchObject({ kind: 'image' })
+    watch.stop()
+  })
+
+  it('focus() twice without blur keeps one interval and ignores a text change between them', async () => {
+    const { clip, watch, counts, published, last } = setup()
+    await watch.baseline()
+    watch.focus()
+    await tick(200)
+    const reads = counts.reads
+    clip.now = text('own copy')
+    watch.focus() // e.g. a platform emitting focus twice
+    await tick()
+    expect(counts.reads).toBe(reads) // the repeat focus did nothing: no extra read
+    expect(published).toEqual([])
+    clip.now = image()
+    await tick(1000) // the one interval it armed still polls normally afterwards
+    expect(last()).toMatchObject({ kind: 'image' })
+    watch.stop()
+  })
+
+  it('read() throwing in a poll recovers on the next poll', async () => {
+    const { clip, watch, last } = setup()
+    await watch.baseline()
+    watch.focus()
+    await tick()
+    clip.fail = true
+    clip.now = image()
+    await tick(1000)
+    expect(last()).toBeUndefined() // the failed read published nothing
+    clip.fail = false
+    await tick(1000)
+    expect(last()).toMatchObject({ kind: 'image' })
+    watch.stop()
+  })
+
+  it('imageInfo throwing still offers the image, without size or thumbnail', async () => {
+    const { clip, watch, last } = setup({
+      imageInfo: () => {
+        throw new Error('corrupt png')
+      },
+    })
+    await watch.baseline()
+    watch.focus()
+    await tick()
+    clip.now = image()
+    await tick(1000)
+    expect(last()).toMatchObject({ kind: 'image', width: 0, height: 0, thumbnail: '' })
+    watch.stop()
+  })
+
+  it('a failed baseline read: the first look becomes the baseline', async () => {
+    const { clip, watch, published } = setup()
+    clip.fail = true
+    await watch.baseline()
+    clip.fail = false
+    watch.focus()
+    await tick()
+    expect(published).toEqual([]) // the existing clipboard, unseen by baseline, is not offered as new
+    watch.stop()
+  })
+
+  it('backs off polling after a slow read, but the arrival look still runs at once', async () => {
+    let reads = 0
+    const { watch } = setup({
+      read: async () => {
+        reads++
+        await new Promise((r) => setTimeout(r, 200))
+        return image()
+      },
+    })
+    watch.focus()
+    await tick(0)
+    expect(reads).toBe(1) // the arrival look reads at once, backoff or not
+    await tick(60_000)
+    expect(reads).toBeLessThanOrEqual(20) // far below the ~60 a flat 1 s poll would have cost
     watch.stop()
   })
 
@@ -205,5 +361,8 @@ describe('ClipboardWatch', () => {
     expect(most).toBe(1)
     expect(reads).toBeLessThanOrEqual(5)
     watch.stop()
+    const before = reads
+    await tick(30_000)
+    expect(reads - before).toBeLessThanOrEqual(1) // stop() leaves at most one look still queued
   })
 })
