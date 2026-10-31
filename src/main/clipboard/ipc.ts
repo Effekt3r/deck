@@ -23,7 +23,7 @@ export function registerClipboardIpc(opts: { tempDir: string; platform: Platform
     imageInfo,
     insert: (content, claude) => insertFor(content, claude, { platform: opts.platform, saveImage: (png) => temp.save(png) }),
     publish: (item) => {
-      if (win && !win.isDestroyed()) win.webContents.send(IPC.clipboardItem, item)
+      if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(IPC.clipboardItem, item)
     },
   })
 
@@ -38,6 +38,7 @@ export function registerClipboardIpc(opts: { tempDir: string; platform: Platform
 
   return {
     attach(w) {
+      if (win) throw new Error('registerClipboardIpc: attach() runs once')
       win = w
       void watch.baseline()
       w.on('focus', () => watch.focus())
