@@ -41,12 +41,12 @@ export function filePathsFromUriList(list: string): string[] {
   return paths
 }
 
-/** Keyed per run: a fingerprint kept in memory identifies content without exposing it, so even a
- *  concealed short secret can't be brute-forced back out of it. */
+/** A key made once per run; see fingerprintOf. */
 const KEY = randomBytes(32)
 
-/** Identifies content without keeping it: a different clipboard is a different fingerprint; it
- *  means nothing outside this process. */
+/** Identifies content without keeping it: a different clipboard is a different fingerprint. Keyed
+ *  per run, so a fingerprint that leaks on its own (a log, a report) means nothing outside this
+ *  process. */
 export function fingerprintOf(content: ClipboardContent | null): string {
   if (!content) return 'empty'
   const hash = createHmac('sha256', KEY).update(content.kind)
@@ -65,31 +65,29 @@ function cutLine(line: string): string {
   return `${line.slice(0, cut)}…`
 }
 
-/** The text's line count and its first `max` lines, without splitting (and holding) the whole
- *  text: a 100 MB paste cost 90 ms and 84 MB extra just to split it and discard the rest. CRLF, a
- *  lone CR and a lone LF each count as one break; a trailing break starts no further line. */
+/** The text's line count and its first `max` lines, counted with indexOf scans, without splitting
+ *  or copying the whole text. CRLF, a lone CR and a lone LF each count as one break; a trailing
+ *  break starts no further line. */
 function firstLines(text: string, max: number): { lines: string[]; lineCount: number } {
-  const n = text.length
   const lines: string[] = []
+  let count = 0
   let start = 0
-  let i = 0
-  let breaks = 0
-  let lastBreakEnd = -1
-  while (i < n) {
-    const code = text.charCodeAt(i)
-    if (code === 13 || code === 10) {
-      const end = i
-      i += code === 13 && text.charCodeAt(i + 1) === 10 ? 2 : 1
-      breaks++
-      lastBreakEnd = i
-      if (lines.length < max) lines.push(text.slice(start, end))
-      start = i
-    } else {
-      i++
-    }
+  let cr = text.indexOf('\r')
+  let lf = text.indexOf('\n')
+  while (cr !== -1 || lf !== -1) {
+    const at = cr === -1 ? lf : lf === -1 ? cr : Math.min(cr, lf)
+    const next = at === cr && lf === at + 1 ? at + 2 : at + 1 // CRLF is one break
+    if (lines.length < max) lines.push(text.slice(start, at))
+    count++
+    start = next
+    if (cr !== -1 && cr < next) cr = text.indexOf('\r', next)
+    if (lf !== -1 && lf < next) lf = text.indexOf('\n', next)
   }
-  if (lines.length < max && lastBreakEnd !== n) lines.push(text.slice(start))
-  return { lines, lineCount: breaks + (lastBreakEnd === n ? 0 : 1) }
+  if (count === 0 || start < text.length) {
+    if (lines.length < max) lines.push(text.slice(start))
+    count++
+  }
+  return { lines, lineCount: count }
 }
 
 /** What the card shows of `content`. */

@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
@@ -68,16 +68,45 @@ describe('TempImages', () => {
     expect([...readFileSync(a)]).toEqual([9, 9, 9])
   })
 
-  // chmod-based permission denial isn't meaningful on Windows (and ACLs there work differently).
-  it.skipIf(process.platform === 'win32')('clear() does not throw when the folder cannot be written to', async () => {
-    const dir = join(root, 'locked')
+  // chmod-based permission denial isn't meaningful on Windows (and ACLs there work differently),
+  // or for root, which chmod doesn't restrict.
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    'clear() does not throw when the folder cannot be written to',
+    async () => {
+      const dir = join(root, 'locked')
+      const temp = new TempImages(dir)
+      await temp.save(new Uint8Array([3]))
+      chmodSync(dir, 0o500) // read + execute, no write: unlink (and rmdir) inside it fail
+      try {
+        expect(() => temp.clear()).not.toThrow()
+      } finally {
+        chmodSync(dir, 0o700) // so afterAll's rmSync can still remove it
+      }
+    },
+  )
+
+  it('clear() removes a leftover .tmp file matching the new name pattern too', () => {
+    const dir = join(root, 'leftover-tmp')
+    mkdirSync(dir, { recursive: true })
+    const tmp = join(dir, 'clipboard-0123456789abcdef.png.00000000-0000-4000-8000-000000000000.tmp')
+    writeFileSync(tmp, 'half-written')
+    new TempImages(dir).clear()
+    expect(existsSync(tmp)).toBe(false)
+    expect(existsSync(dir)).toBe(false)
+  })
+
+  it('save() leaves no .tmp file behind', async () => {
+    const dir = join(root, 'no-tmp-left')
     const temp = new TempImages(dir)
-    await temp.save(new Uint8Array([3]))
-    chmodSync(dir, 0o500) // read + execute, no write: unlink (and rmdir) inside it fail
-    try {
-      expect(() => temp.clear()).not.toThrow()
-    } finally {
-      chmodSync(dir, 0o700) // so afterAll's rmSync can still remove it
-    }
+    await temp.save(new Uint8Array([1, 2, 3]))
+    expect(readdirSync(dir).some((name) => name.endsWith('.tmp'))).toBe(false)
+  })
+
+  it.skipIf(process.platform === 'win32')('a new folder gets mode 0700 and a new file 0600', async () => {
+    const dir = join(root, 'perms')
+    const temp = new TempImages(dir)
+    const file = await temp.save(new Uint8Array([1, 2, 3]))
+    expect(statSync(dir).mode & 0o777).toBe(0o700)
+    expect(statSync(file).mode & 0o777).toBe(0o600)
   })
 })
