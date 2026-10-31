@@ -18,4 +18,20 @@ describe('pasteSafe', () => {
   it('leaves other text alone', () => {
     expect(pasteSafe('plain text\nwith lines')).toBe('plain text\nwith lines')
   })
+
+  it("drops ^C, ^Z and ^\\, which the tty acts on even inside a paste", () => {
+    expect(pasteSafe('echo hi\u0003rm -rf ~\r')).toBe('echo hirm -rf ~\r')
+    expect(pasteSafe('a\u001ab\u001cc')).toBe('abc')
+  })
+
+  it('drops a marker that removing ^C puts together', () => {
+    expect(pasteSafe('\u001b[20\u00031~x')).toBe('x')
+  })
+
+  it('handles deeply nested markers in linear time', () => {
+    const s = '\u001b[2'.repeat(50_000) + '\u001b[201~' + '01~'.repeat(50_000) + 'x'
+    const start = performance.now()
+    expect(pasteSafe(s)).toBe('x')
+    expect(performance.now() - start).toBeLessThan(500)
+  })
 })
