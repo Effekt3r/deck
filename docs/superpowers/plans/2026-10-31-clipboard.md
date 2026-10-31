@@ -25,7 +25,9 @@ Checked on macOS on 2026-10-31 with throwaway scripts; none of them is in the re
   - Finder's copy of several files gives a `text/uri-list` with every file, one `file://` URL per line.
   - The raw `NSFilenamesPboardType` holds only the first file, so don't use it.
   - **Test artifact:** if the program that wrote the clipboard has quit, macOS keeps only its first item. Test writers must stay running, as Finder does.
-- **Password managers** add `org.nspasteboard.ConcealedType`. It is listed among the raw types, and `clipboard.has(rawFormat)` sees it.
+- **Password managers** add `org.nspasteboard.ConcealedType`, which is listed among the raw types.
+  - `clipboard.has(x)` is `read()` plus a search, per Electron 45.2's source. It never sees more than `types` and costs a full listing, so read the types instead.
+  - **A read that can't open the clipboard resolves with empty data rather than rejecting.** On Windows that happens when another app holds the clipboard (RDP, Office, clipboard history). So a listed type that comes back empty is a failed read.
 - **Images:**
   - A screenshot-style PNG (515 KB) reads as `image/png` in about 6 ms; a TIFF-backed image in about 30 ms (Chromium converts it). Hashing it takes under 1 ms.
   - An Excel- or Word-style copy carries both `text/plain` and `image/png`.
@@ -1301,6 +1303,18 @@ git add src/main
 git -c user.email=franco@effektstudios.com commit -m "Clipboard: read the system clipboard, IPC, main process wiring" -m "Claude-Session: https://claude.ai/code/session_012Tidn9qVajMb9EYY5GyX8U"
 ```
 
+**After review (follow-up commits; the code above is the first version):**
+- **`readClipboard()`:**
+  - A type that is listed but comes back empty throws "The clipboard is in use by another app." The watch then retries at the next look, rather than dropping or re-offering a card.
+  - It re-reads the type list once after reading the text, instead of three `has()` calls.
+  - Concealed markers now also cover 1Password's own type, `de.petermaurer.TransientPasteboardType` and Windows' `Clipboard Viewer Ignore`.
+  - A short `CanIncludeInClipboardHistory` value counts as concealed (fail closed).
+- **The thumbnail** is bounded in height too (280 px).
+- **`ipc.ts`:**
+  - It checks the window's `webContents` before sending.
+  - `attach()` runs once.
+  - A new `ipc.test.ts` covers argument checks, lock/suspend/resume/unlock, and a destroyed window.
+
 ---
 
 ### Task 6: Smart paste and drops in the terminal
@@ -1890,6 +1904,8 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
 
   Each should stay well under 5% of a core. The git poll's 12% is the warning sign.
 
+  Also record the worst main-thread stall: in dev, log `perf_hooks.monitorEventLoopDelay()`'s max every 10 s. Do it with a full-screen Retina screenshot, a 5K screenshot and the 100 MB text. A stall over about 50 ms shows as stutter in terminal output; if you see one, poll less often while the clipboard holds an image.
+
 - [ ] **Step 6c: Lock and unlock.** With Deck in front, lock the screen (⌃⌘Q), wait 5 s, then unlock.
   - Polling stops while locked: no reads, which shows up in the CPU check of 6b.
   - It starts again after unlocking. A screenshot taken then shows a card at the next look.
@@ -1938,6 +1954,12 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
     - `quotePath()` refuses paths with control characters, because no quoting makes them safe.
 ```
 
+In the deferred "Security (M4)" list, change "Check the IPC sender frame." to:
+
+```md
+  - Check the IPC sender frame (`clipboard:paste` hands password-manager text to the renderer).
+```
+
 In the file table, change the `src/shared/` row to:
 
 ```md
@@ -1966,6 +1988,11 @@ Also add a row to the `src/main` table:
      just-written file for a moment; Deck retries.)
 18f. With Deck in front, copy in Excel or Word several times: no "clipboard in use" failures
      (Deck reads the clipboard about once a second while in front).
+18g. With Deck in front, press Win+L, then sign in again; and put the PC to sleep and wake it.
+     A screenshot taken afterwards still shows a card.
+18h. A copy marked only "not for clipboard history" shows no card. In Windows PowerShell:
+     `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.DataObject; $d.SetText('s3cret'); $d.SetData('CanIncludeInClipboardHistory', [IO.MemoryStream]::new([byte[]](0,0,0,0))); [System.Windows.Forms.Clipboard]::SetDataObject($d, $true)`
+18i. With RDP or Parallels clipboard sharing on, a card doesn't vanish or come back by itself.
 ```
 
 `docs/DECK.md`, in M5, add `(built 2026-10-31; Windows to test)` after the clipboard bullet's title.

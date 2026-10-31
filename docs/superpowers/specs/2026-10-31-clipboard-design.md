@@ -66,8 +66,8 @@ The card always shows what Cmd+V would paste, except concealed items, which get 
 ### Privacy
 
 - **Concealed items are skipped** (no card, plain paste):
-  - macOS: `org.nspasteboard.ConcealedType`, `org.nspasteboard.TransientType`;
-  - Windows: `ExcludeClipboardContentFromMonitorProcessing`, or `CanIncludeInClipboardHistory` set to 0.
+  - macOS: `org.nspasteboard.ConcealedType`, `org.nspasteboard.TransientType`, `com.agilebits.onepassword`, `de.petermaurer.TransientPasteboardType`;
+  - Windows: `ExcludeClipboardContentFromMonitorProcessing`, `Clipboard Viewer Ignore`, or `CanIncludeInClipboardHistory` set to 0.
 
   1Password, Bitwarden and KeePass set these.
 - **No history.** The main process keeps only the current item; the renderer only ever gets its preview.
