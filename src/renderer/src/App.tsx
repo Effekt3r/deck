@@ -1,8 +1,10 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import type { AppInfo, MenuCommand, ProjectAction } from '@shared/types'
+import type { AppInfo, ClipboardPreview, MenuCommand, ProjectAction } from '@shared/types'
 import { ClaudePanel } from './claude/ClaudePanel'
 import { shownSession, toResume } from './claude/resume'
 import { useClaudeSession } from './claude/useClaude'
+import { ClipboardCard } from './clipboard/ClipboardCard'
+import { useClipboardItem } from './clipboard/useClipboardItem'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
 import { ProjectsView } from './projects/ProjectsView'
@@ -42,6 +44,24 @@ export function App() {
   const [claudeWidth, setClaudeWidth] = useState(() => loadSize(CLAUDE_WIDTH_KEY, CLAUDE_WIDTH))
   /** View → Claude Panel, per tab: the tab knows whether its panel shows. */
   const [claudeToggles, setClaudeToggles] = useState<Record<string, number>>({})
+  /** What was just copied, offered under the Claude panel of tabs where Claude runs. */
+  const clipItem = useClipboardItem()
+
+  // Drops the terminal doesn't take (a link from a browser onto a panel) would reach Chromium's
+  // default and open the link: refuse them, except in text fields.
+  useEffect(() => {
+    const editable = (t: EventTarget | null) =>
+      t instanceof HTMLElement && (t.isContentEditable || t.tagName === 'INPUT' || t.tagName === 'TEXTAREA')
+    const refuse = (e: DragEvent) => {
+      if (!editable(e.target)) e.preventDefault()
+    }
+    document.addEventListener('dragover', refuse)
+    document.addEventListener('drop', refuse)
+    return () => {
+      document.removeEventListener('dragover', refuse)
+      document.removeEventListener('drop', refuse)
+    }
+  }, [])
 
   // Menu commands and IPC events read the latest state through refs.
   const stateRef = useRef(state)
@@ -154,7 +174,7 @@ export function App() {
         {terminals.map((tab) => (
           <Workspace key={tab.id} tab={tab} active={tab.id === state.active} home={info?.home ?? ''}
             gitWidth={gitWidth} claudeWidth={claudeWidth} windowsBuild={info?.windowsBuild}
-            findRequest={findRequests[tab.id] ?? 0} claudeToggle={claudeToggles[tab.id] ?? 0}
+            findRequest={findRequests[tab.id] ?? 0} claudeToggle={claudeToggles[tab.id] ?? 0} clipItem={clipItem}
             onGitWidth={storeGitWidth} onClaudeWidth={storeClaudeWidth} onUpdate={update} onClose={close} />
         ))}
       </main>
@@ -174,6 +194,8 @@ interface WorkspaceProps {
   /** Incremented by View → Claude Panel. */
   claudeToggle: number
   windowsBuild?: number
+  /** The clipboard card's item (one for the window). */
+  clipItem: ClipboardPreview | null
   /** A drag ended (or a reset): clamp, store and share the width. */
   onGitWidth(px: number): void
   onClaudeWidth(px: number): void
@@ -186,7 +208,7 @@ interface WorkspaceProps {
  *  or the folder has a session (unless hidden with View → Claude Panel), each panel
  *  with its splitter. Inactive tabs stay mounted. */
 const Workspace = memo(function Workspace(props: WorkspaceProps) {
-  const { tab, active, home, gitWidth, claudeWidth, findRequest, claudeToggle, windowsBuild } = props
+  const { tab, active, home, gitWidth, claudeWidth, findRequest, claudeToggle, windowsBuild, clipItem } = props
   const { onGitWidth, onClaudeWidth, onUpdate, onClose } = props
   const repo = tab.vars.GIT_REPO ?? ''
   const showGit = repo !== '' && !tab.gitHidden
@@ -204,6 +226,29 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const paneRef = useRef<HTMLDivElement>(null)
   const claudeRef = useRef<HTMLDivElement>(null)
+  /** Pastes into this tab's terminal (TerminalView sets it). */
+  const pasteRef = useRef<((text: string) => void) | null>(null)
+  const [clip, setClip] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null })
+  useEffect(() => setClip({ busy: false, error: null }), [clipItem?.id])
+  // An Add answered after a newer item replaced its own: its error isn't the new card's.
+  const clipIdRef = useRef(clipItem?.id)
+  useLayoutEffect(() => {
+    clipIdRef.current = clipItem?.id
+  }, [clipItem?.id])
+  const addClip = useCallback((id: string) => {
+    setClip({ busy: true, error: null })
+    const fail = (error: string) => setClip({ busy: false, error: clipIdRef.current === id ? error : null })
+    window.deck.clipboard.add(id).then(
+      (result) => {
+        if ('text' in result) {
+          pasteRef.current?.(result.text)
+          setClip({ busy: false, error: null })
+        } else fail(result.error)
+      },
+      (err: unknown) => fail(err instanceof Error ? err.message : String(err)),
+    )
+  }, [])
+  const dismissClip = useCallback((id: string) => window.deck.clipboard.dismiss(id), [])
 
   // Hidden for the repo it was hidden in: like the prototype's q, entering another repo shows it again.
   const hiddenIn = useRef<string | null>(null)
@@ -280,7 +325,7 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
           onReset={() => onGitWidth(GIT_WIDTH)} />
       )}
       <TerminalView tab={tab} active={active} windowsBuild={windowsBuild} findRequest={findRequest}
-        onUpdate={onUpdate} onClose={onClose} />
+        pasteRef={pasteRef} onUpdate={onUpdate} onClose={onClose} />
       {showClaude && (
         <Splitter orientation="vertical" label="Resize the Claude panel" direction={-1}
           getSize={() => claudeRef.current?.offsetWidth ?? claudeWidth}
@@ -295,6 +340,9 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
         <div className="claude-pane" ref={claudeRef} style={{ width: claudeDrag ?? claudeWidth }}>
           <ClaudePanel folder={folder} snapshot={claude.snapshot} phase={claude.phase} error={claude.error}
             claudeRuns={claudeRuns} active={active} home={home} onRetry={claude.retry} />
+          {claudeRuns && clipItem && (
+            <ClipboardCard item={clipItem} busy={clip.busy} error={clip.error} onAdd={addClip} onDismiss={dismissClip} />
+          )}
         </div>
       )}
     </div>
