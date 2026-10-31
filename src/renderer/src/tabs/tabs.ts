@@ -22,6 +22,8 @@ export interface TerminalTab {
   exited?: number
   /** The git panel was closed in this tab (View → Git Panel). */
   gitHidden?: boolean
+  /** The Claude panel was closed in this tab (View → Claude Panel). */
+  claudeHidden?: boolean
 }
 
 export type Tab = ProjectsTab | TerminalTab

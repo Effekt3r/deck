@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/channels'
-import type { DeckApi, GitSnapshot, MenuCommand, Platform } from '@shared/types'
+import type { ClaudeSnapshot, DeckApi, GitSnapshot, MenuCommand, Platform } from '@shared/types'
 
 function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
   const listener = (_e: IpcRendererEvent, ...args: unknown[]) => cb(...(args as A))
@@ -36,6 +36,13 @@ const api: DeckApi = {
     details: (repo, hash) => ipcRenderer.invoke(IPC.gitDetails, repo, hash),
     targets: (repo) => ipcRenderer.invoke(IPC.gitTargets, repo),
     setTarget: (repo, branch, target) => ipcRenderer.invoke(IPC.gitSetTarget, repo, branch, target),
+  },
+  claude: {
+    subscribe: (folder) => ipcRenderer.invoke(IPC.claudeSubscribe, folder),
+    unsubscribe: (folder) => ipcRenderer.send(IPC.claudeUnsubscribe, folder),
+    onUpdate: (cb) => on<[string, ClaudeSnapshot | null]>(IPC.claudeUpdate, cb),
+    sessions: (folder) => ipcRenderer.invoke(IPC.claudeSessions, folder),
+    follow: (folder, sessionId) => ipcRenderer.invoke(IPC.claudeFollow, folder, sessionId),
   },
   app: {
     info: () => ipcRenderer.invoke(IPC.appInfo),
