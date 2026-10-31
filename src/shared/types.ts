@@ -217,6 +217,37 @@ export interface ClaudeResume {
   pinned: boolean
 }
 
+/** The item the clipboard card offers: what Cmd/Ctrl+V would paste now. */
+export type ClipboardPreview =
+  | {
+      id: string
+      kind: 'image'
+      width: number
+      height: number
+      /** A small PNG of it, as a data: URL. */
+      thumbnail: string
+    }
+  | {
+      id: string
+      kind: 'files'
+      /** The first three file names. */
+      names: string[]
+      /** How many more files there are. */
+      more: number
+      /** The first file's folder. */
+      folder: string
+    }
+  | {
+      id: string
+      kind: 'text'
+      /** The first three lines, each cut at 120 characters. */
+      lines: string[]
+      lineCount: number
+    }
+
+/** Text for a terminal to paste, or why there is none. */
+export type InsertResult = { text: string } | { error: string }
+
 export interface DeckApi {
   platform: Platform
   pty: {
@@ -268,11 +299,23 @@ export interface DeckApi {
     /** Follow one session (by id), or the newest again (null). */
     follow(folder: string, sessionId: string | null): Promise<void>
   }
+  clipboard: {
+    /** The item the card offers now, or null. */
+    current(): Promise<ClipboardPreview | null>
+    /** The card's item changed: a new copy, or null once it was used, dismissed or replaced. */
+    onItem(cb: (item: ClipboardPreview | null) => void): () => void
+    /** The text that inserts this item: the snapshot the card shows, even if the clipboard changed since. */
+    add(id: string): Promise<InsertResult>
+    /** What Cmd/Ctrl+V inserts now; null: nothing (an image in a shell tab). Pasting the card's item uses it up. */
+    paste(opts: { claude: boolean }): Promise<InsertResult | null>
+    dismiss(id: string): void
+  }
   app: {
     info(): Promise<AppInfo>
     openExternal(url: string): void
     copyText(text: string): void
-    readText(): Promise<string>
+    /** A dropped file's path; '' for a drop with no file behind it. */
+    pathForFile(file: File): string
     /** A folder to open in a new shell tab: --open, macOS open-file, second launch. */
     onOpenFolder(cb: (path: string) => void): () => void
     onMenu(cb: (cmd: MenuCommand) => void): () => void
