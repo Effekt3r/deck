@@ -61,7 +61,7 @@ The card always shows what Cmd+V would paste, except concealed items, which get 
 - **What counts as new:**
   - **On focus:** anything changed since Deck last looked. It was copied in another app.
   - **While Deck is in front:** only an image or files, e.g. a screenshot taken straight to the clipboard with ⌃⇧⌘4. Text that changes while Deck is in front is Deck's own copy (a terminal selection, Copy hash, Copy path) and never brings up a card.
-- **Fingerprint:** the formats plus a hash of the content decide whether anything changed, so a large image isn't re-read every second.
+- **Fingerprint:** a hash of the kind and the content (keyed per run, so it means nothing outside the process) decides whether anything changed. The formats are left out: copies of the same content can carry different raw formats. Reading the clipboard once a second while Deck is in front is the cost to watch, not the hashing: a screenshot-size PNG reads in about 6 ms.
 
 ### Privacy
 

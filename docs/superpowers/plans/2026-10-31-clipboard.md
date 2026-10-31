@@ -428,6 +428,16 @@ git add src/main/clipboard/item.ts src/main/clipboard/item.test.ts
 git -c user.email=franco@effektstudios.com commit -m "Clipboard: content, previews and fingerprints" -m "Claude-Session: https://claude.ai/code/session_012Tidn9qVajMb9EYY5GyX8U"
 ```
 
+**After review (follow-up commits):**
+- **Paths from the uri-list:**
+  - Folder paths lose their trailing separator, unless they are a root. Otherwise `cp -R '/x/reports/'` copies the folder's contents instead of the folder.
+  - The `file:` scheme is matched without regard to case.
+- **The text preview:**
+  - It counts lines without splitting the whole text.
+  - Its 120-character cut never splits a surrogate pair.
+  - A copied root (a volume or drive) keeps its name.
+- **The fingerprint** is an HMAC-SHA256 with a key made once per run. A short concealed secret then can't be brute-forced back from it.
+
 ---
 
 ### Task 3: Saved images and the text to insert
@@ -598,6 +608,16 @@ Expected: PASS, 9 tests.
 git add src/main/clipboard/temp.ts src/main/clipboard/temp.test.ts src/main/clipboard/insert.ts src/main/clipboard/insert.test.ts
 git -c user.email=franco@effektstudios.com commit -m "Clipboard: saved images and the text to insert" -m "Claude-Session: https://claude.ai/code/session_012Tidn9qVajMb9EYY5GyX8U"
 ```
+
+**After review (follow-up commits):**
+- **`TempImages.clear()`:**
+  - It never throws. It runs at startup before the window opens, and a permission error there left Deck with no window.
+  - It removes only its own `clipboard-*.png` files (and `.tmp` ones), then the folder if that leaves it empty.
+- **`save()`:**
+  - It keeps an existing file of the same size, since the name is the content's hash.
+  - Otherwise it writes a `.tmp` file and renames it.
+  - The folder gets mode `0700` and the files `0600`.
+- **`insertFor`** returns null for an empty file list.
 
 ---
 
@@ -1269,6 +1289,10 @@ describe('pasteSafe', () => {
     expect(pasteSafe('a\u001b[200~b')).toBe('ab')
   })
 
+  it('drops the one-character CSI form too', () => {
+    expect(pasteSafe('a\u009b201~b')).toBe('ab')
+  })
+
   it('also drops a marker that removing another one would put together', () => {
     expect(pasteSafe('\u001b[2\u001b[201~01~x')).toBe('x')
   })
@@ -1287,8 +1311,9 @@ Expected: FAIL, `./paste` can't be resolved.
 - [ ] **Step 0c: Write `src/renderer/src/terminal/paste.ts`**
 
 ```ts
-/** The bracketed-paste markers xterm wraps a paste in. */
-const MARKER = /\u001b\[20[01]~/g
+/** The bracketed-paste markers xterm wraps a paste in, also in their one-character CSI form
+ *  (U+009B), which quotePath refuses too. */
+const MARKER = /(?:\u001b\[|\u009b)20[01]~/g
 
 /** Text ready for xterm's paste(). xterm wraps a paste in ESC[200~ … ESC[201~ and removes nothing,
  *  so a pasted ESC[201~ would end the paste early, and what follows would act as typed keys
@@ -1306,7 +1331,7 @@ export function pasteSafe(text: string): string {
 - [ ] **Step 0d: Run it to make sure it passes**
 
 Run: `npx vitest run src/renderer/src/terminal/paste.test.ts`
-Expected: PASS, 3 tests.
+Expected: PASS, 4 tests.
 
 - [ ] **Step 1: Props and refs** — in `TerminalView.tsx`:
 
@@ -1812,6 +1837,18 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
 
 - [ ] **Step 6: A drop inserts quoted paths.** Over the terminal, use CDP `Input.dispatchDragEvent`: `dragEnter`, `dragOver` and `drop` at its centre, with `data: { items: [], files: ['/tmp/deckclip/a b.txt'], dragOperationsMask: 1 }`. Send Return, and read `out.txt`.
   Expected: `'/tmp/deckclip/a b.txt'`.
+
+- [ ] **Step 6a: More pastes.** Each one through Cmd+V into the fake claude:
+  - a PNG and a PDF copied together: both quoted paths arrive;
+  - a file whose name contains `'`: arrives as `'it'\''s.png'`.
+
+  Then start a real `claude` in a scratch folder, paste the PNG and PDF pair, and check that the image shows as `[Image #N]`.
+
+- [ ] **Step 6b: The cost of looking.** Keep Deck in front for 30 s each time and compare the main process's CPU with nothing new on the clipboard:
+  - with a 100 MB text on the clipboard;
+  - with a 5K screenshot PNG (`pb hold-png`).
+
+  Each should stay well under 5% of a core. The git poll's 12% is the warning sign.
 
 - [ ] **Step 7: Clean up.** Stop the fake claude with Ctrl+D, quit the dev app, then run `pb restore /tmp/deck-clip-saved.plist` and `rm -rf /tmp/deckclip`. Compare the clipboard's checksum with the one from before; don't print its contents.
 
