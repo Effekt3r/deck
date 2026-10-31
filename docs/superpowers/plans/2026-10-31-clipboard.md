@@ -1535,6 +1535,8 @@ git -c user.email=franco@effektstudios.com commit -m "Terminal: smart paste and 
 
 ### Task 7: The clipboard card
 
+> Done and reviewed. The code below is the first version; review fixes changed it (see "After review" at the end of this task). The final code is in `src/renderer/src/clipboard/` and `App.tsx`. The document-level drop guard in step 2 was removed: Electron 45 never navigates on a drop (`navigateOnDragDrop` defaults to false). Don't re-run these steps as written.
+
 **Files:**
 - Create: `src/renderer/src/clipboard/card.ts`, `src/renderer/src/clipboard/card.test.ts`, `src/renderer/src/clipboard/useClipboardItem.ts`, `src/renderer/src/clipboard/ClipboardCard.tsx`, `src/renderer/src/clipboard/clipboard.css`
 - Modify: `src/renderer/src/App.tsx`
@@ -1857,6 +1859,25 @@ git add src/renderer/src/clipboard src/renderer/src/App.tsx
 git -c user.email=franco@effektstudios.com commit -m "Clipboard card under the Claude panel, with Add to Claude" -m "Claude-Session: https://claude.ai/code/session_012Tidn9qVajMb9EYY5GyX8U"
 ```
 
+**After review (follow-up commits):**
+- **Short windows:** the panel above the card is clipped (`overflow-y: clip`), so its content can't paint over the card or take its clicks. The thumbnail is at most `min(140px, 18vh)` tall.
+- **The document-level drop guard is removed.** It prevented nothing, and it made every panel look like a drop target.
+- **Card state:**
+  - Add's busy/error state belongs to the item id and is worked out during render, so an old error never flashes on a new card.
+  - The hook ignores `current()`'s answer once a push has arrived.
+  - `add()` in main checks the item again after inserting, so pressing × during an Add stops it.
+- **Focus and keyboard:** after × from the keyboard, focus goes back to the terminal. Add's tooltip mentions ⌘V/Ctrl+V.
+- **Text that overflows:**
+  - The folder line ellipsizes and shows `~`.
+  - Text lines ellipsize, with a tab size of 4.
+  - Errors wrap.
+- **Robustness:** an error boundary means a render error costs only the card.
+- **Polish:**
+  - The button says "Adding…" while busy.
+  - The pane has a `--chrome` background and the card an 8 px margin.
+  - The folder and "+N more" lines use `--muted`.
+  - Badges need an alphanumeric extension.
+
 ---
 
 ### Task 8: Check it in the real app, then the docs
@@ -1945,6 +1966,23 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
 
   If no card appears, `w.isFocused()` was false at `unlock-screen`, and `back()` needs another signal (`focus` again after unlock).
 
+- [ ] **Step 6d: The card itself.** Use real input: CDP `Input.dispatchMouseEvent` press and release, since `element.click()` skips mousedown. Scope selectors to `.workspace:not(.is-hidden)`.
+  - **Focus:** after clicking Add, and after clicking ×, `document.activeElement` is xterm's helper textarea.
+  - **Short window:** at 800×500, with the Agents and To-do lists open and an image card, the card is fully visible and × can be clicked.
+  - **Layout:** each card kind looks right at 260 px and 380 px panel width. Try long file names, a long folder, more than 3 files, long text lines with tabs, and tall and wide images.
+  - **Error path:**
+    - Run `chmod 000` on `<temp>/Deck clipboard`, then click Add. The error shows and nothing is inserted.
+    - Copy something new: the error is gone, with no flash.
+    - Restore the permissions afterwards.
+  - **Two Claude tabs:**
+    - the card shows in both;
+    - Add inserts only into its own tab;
+    - Add or × removes the card in both.
+  - **Claude stopping and starting:** the card hides when Claude exits in the tab, and comes back if Claude restarts while the item is still current.
+  - **Keyboard:** Tab from the feed reaches × and Add, and Enter works on both.
+  - **Reload:** with the card showing, run `location.reload()` through CDP. The card returns through `current()`.
+  - **Drops over panels:** drag a file over the git and Claude panels. The cursor shows the drop isn't accepted, and dropping does nothing.
+
 - [ ] **Step 7: Clean up.** Stop the fake claude with Ctrl+D, quit the dev app, then run `pb restore /tmp/deck-clip-saved.plist` and `rm -rf /tmp/deckclip`. Compare the clipboard's checksum with the one from before; don't print its contents.
 
 - [ ] **Step 8: Docs**
@@ -2018,9 +2056,9 @@ Also add a row to the `src/main` table:
      paths may need double quotes.)
 18c. Copy a password from your password manager: no card, and Ctrl+V pastes it as before.
 18d. Drag a PDF from Explorer onto the terminal: its quoted path appears.
-18e. Copy a new screenshot and click **Add to Claude** several times quickly. Each click
-     inserts the path, with no "Couldn't save the image" error. (Antivirus can hold a
-     just-written file for a moment; Deck retries.)
+18e. Copy a new screenshot, then press Ctrl+V several times quickly in a Claude tab. Each
+     paste inserts the image, with no "Couldn't save the image" error. (Antivirus can hold
+     a just-written file for a moment; Deck retries.)
 18f. With Deck in front, copy in Excel or Word several times: no "clipboard in use" failures
      (Deck reads the clipboard about once a second while in front).
 18g. With Deck in front, press Win+L, then sign in again; and put the PC to sleep and wake it.
