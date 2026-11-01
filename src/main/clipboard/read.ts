@@ -18,14 +18,16 @@ const CONCEALED = [
 /** Windows: a DWORD 0 here keeps the copy out of clipboard history. */
 const HISTORY = raw('CanIncludeInClipboardHistory')
 
-/** getType('image/png') makes Chromium decode the image to validate it: 62 ms for a 5K
- *  screenshot's 1 MB PNG, measured in the running app. When the copy's source was already PNG,
- *  one of these raw formats lists the very same file bytes at 0.5 ms. A TIFF-only or Windows
- *  DIB-only copy lists none of them, so image/png stays the source there — unchanged. */
-const PNG_RAW = ['Apple PNG pasteboard type', 'public.png', 'PNG'].map(raw)
-/** getType('text/plain').text() cost 223 ms for a 100 MB copy, measured in the running app; one
- *  of these raw formats, decoded as UTF-8 ourselves, cost 37.5 ms for the same text. */
-const UTF8_RAW = ['public.utf8-plain-text', 'NSStringPboardType'].map(raw)
+/** Electron omits from `types` any raw format Chromium treats as standard
+ *  (electron_api_clipboard.cc: `if (IsStandardClipboardFormat(fmt)) continue`); in Chromium 156
+ *  that's macOS `public.png` and Windows `PNG`, so only this legacy alias ever survives. Windows
+ *  has no raw path at all: image/png there always goes through Electron's ReadMime decode.
+ *  getType('image/png') makes Chromium decode the image to validate it: 62 ms for a 5K screenshot's
+ *  1 MB PNG, measured in the running app, against 0.5 ms for the same bytes read raw. */
+const PNG_RAW = raw('Apple PNG pasteboard type')
+/** 89 50 4E 47 0D 0A 1A 0A. */
+const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
+const isPng = (bytes: Uint8Array) => bytes.length >= PNG_SIGNATURE.length && PNG_SIGNATURE.every((b, i) => bytes[i] === b)
 
 /** The clipboard couldn't be opened for this read (Windows: another app has it open — RDP, Office,
  *  the clipboard history UI). Electron resolves such a read as empty data instead of rejecting;
@@ -41,12 +43,10 @@ export async function readClipboard(): Promise<ClipboardContent | null> {
   const [item] = await clipboard.read()
   if (!item) return null
   const { types } = item
-  const utf8Type = UTF8_RAW.find((f) => types.includes(f))
-  const text = types.includes('text/plain')
-    ? utf8Type
-      ? new TextDecoder().decode(await (await blob(item, utf8Type)).arrayBuffer())
-      : await (await blob(item, 'text/plain')).text()
-    : null
+  // dataForType: (what a raw read calls) returns only the first pasteboard item; text/plain's
+  // stringForType: joins every item with newlines, so an app that writes one item per row keeps
+  // all of them. A raw UTF-8 read only ever helped multi-MB texts, so it isn't used here.
+  const text = types.includes('text/plain') ? await (await blob(item, 'text/plain')).text() : null
   // getType() reads when called and has() is read() plus a search: one fresh list after the text
   // read catches a marker the first missed (a copy in between, or a list Windows took while busy).
   const [after] = await clipboard.read()
@@ -59,8 +59,10 @@ export async function readClipboard(): Promise<ClipboardContent | null> {
   // Electron resolves a read that couldn't open the clipboard as empty data: a listed type that
   // comes back empty is a failed read (the next look tries again), not an empty clipboard.
   if (types.includes('image/png')) {
-    const pngType = PNG_RAW.find((f) => types.includes(f)) ?? 'image/png'
-    const png = new Uint8Array(await (await blob(item, pngType)).arrayBuffer())
+    let png = types.includes(PNG_RAW) ? new Uint8Array(await (await blob(item, PNG_RAW)).arrayBuffer()) : new Uint8Array(0)
+    // A missing signature also catches an empty raw read; Chromium itself used to fall back to
+    // TIFF when public.png's data went missing, so falling back to image/png here follows suit.
+    if (!isPng(png)) png = new Uint8Array(await (await blob(item, 'image/png')).arrayBuffer())
     if (!png.length) throw new Error(BUSY)
     return { kind: 'image', png }
   }

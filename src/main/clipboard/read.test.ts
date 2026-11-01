@@ -138,31 +138,27 @@ describe('readClipboard', () => {
     await expect(readClipboard()).rejects.toThrow('The clipboard is in use by another app.')
   })
 
-  it.each(['Apple PNG pasteboard type', 'public.png', 'PNG'])(
-    'reads PNG bytes from the raw %s format rather than the decoded image/png',
-    async (format) => {
-      const fromRaw = new Uint8Array([137, 80, 78, 71, 1])
-      const fromDecoded = new Uint8Array([137, 80, 78, 71, 2]) // what image/png alone would give
-      fake.data = { 'image/png': fromDecoded, [raw(format)]: fromRaw }
-      expect(await readClipboard()).toEqual({ kind: 'image', png: fromRaw })
-    },
-  )
-
-  it('a raw PNG format listed but empty rejects as busy, even though image/png itself has bytes', async () => {
-    fake.data = { 'image/png': new Uint8Array([137, 80, 78, 71]), [raw('Apple PNG pasteboard type')]: new Uint8Array([]) }
-    await expect(readClipboard()).rejects.toThrow('The clipboard is in use by another app.')
+  it('reads PNG bytes from the raw Apple PNG pasteboard type rather than the decoded image/png', async () => {
+    const fromRaw = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1])
+    const fromDecoded = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 2]) // what image/png alone would give
+    fake.data = { 'image/png': fromDecoded, [raw('Apple PNG pasteboard type')]: fromRaw }
+    expect(await readClipboard()).toEqual({ kind: 'image', png: fromRaw })
   })
 
-  it.each(['public.utf8-plain-text', 'NSStringPboardType'])(
-    'reads text from the raw %s format rather than text/plain, including non-ASCII bytes',
-    async (format) => {
-      fake.data = { 'text/plain': 'from text/plain', [raw(format)]: new TextEncoder().encode('café ✓') }
-      expect(await readClipboard()).toEqual({ kind: 'text', text: 'café ✓', concealed: false })
-    },
-  )
+  it('raw bytes without a PNG signature fall back to image/png', async () => {
+    const decoded = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    fake.data = { 'image/png': decoded, [raw('Apple PNG pasteboard type')]: new Uint8Array([1, 2, 3]) }
+    expect(await readClipboard()).toEqual({ kind: 'image', png: decoded })
+  })
 
-  it('a raw text format listed but empty, with no image, rejects as busy even though text/plain has bytes', async () => {
-    fake.data = { 'text/plain': 'from text/plain', [raw('public.utf8-plain-text')]: new Uint8Array([]) }
+  it('an empty raw read falls back to image/png', async () => {
+    const decoded = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])
+    fake.data = { 'image/png': decoded, [raw('Apple PNG pasteboard type')]: new Uint8Array([]) }
+    expect(await readClipboard()).toEqual({ kind: 'image', png: decoded })
+  })
+
+  it('both the raw format and image/png empty rejects as busy', async () => {
+    fake.data = { 'image/png': new Uint8Array([]), [raw('Apple PNG pasteboard type')]: new Uint8Array([]) }
     await expect(readClipboard()).rejects.toThrow('The clipboard is in use by another app.')
   })
 })
