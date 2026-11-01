@@ -421,6 +421,25 @@ describe('ClipboardWatch', () => {
     watch.stop()
   })
 
+  // fingerprintOf isn't part of WatchDeps (it's a plain import), so a slow fingerprint can't be
+  // faked here; this instead checks that quietUntil is set from a point in time after the read
+  // finishes, which is also where fingerprinting now happens, so timing the look as a whole (not
+  // just the read) backs off the very next poll rather than only some later one.
+  it('one slow look (200 ms read) still backs off the very next scheduled poll', async () => {
+    const { watch, counts } = setup({
+      read: async () => {
+        await new Promise((r) => setTimeout(r, 200))
+        return image()
+      },
+    })
+    watch.focus()
+    await tick(200) // the arrival look's read finishes; quietUntil is set just after
+    const reads = counts.reads
+    await tick(1000) // the poll due at 1000 ms is still inside the backoff window
+    expect(counts.reads).toBe(reads)
+    watch.stop()
+  })
+
   it('a backoff never delays the arrival look', async () => {
     let reads = 0
     let slow = false
