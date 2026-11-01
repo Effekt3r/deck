@@ -137,17 +137,23 @@ export class ClipboardWatch {
       try {
         let content: ClipboardContent | null
         const started = performance.now()
-        try {
-          content = await this.deps.read()
-        } catch {
-          return // unreadable just now: the next look tries again
-        }
-        const fingerprint = fingerprintOf(content)
         // Reading is what polling costs most (an image is read whole), but fingerprinting a large
         // image or text runs every look too: time both here, so the backoff really keeps looking to
         // about 5% of the time, but never stop polling for more than 15 s because one look was slow.
-        const now = performance.now()
-        this.quietUntil = now + Math.min((now - started) * 19, 15_000)
+        const backOff = () => {
+          const now = performance.now()
+          this.quietUntil = now + Math.min((now - started) * 19, 15_000)
+        }
+        try {
+          content = await this.deps.read()
+        } catch {
+          // A slow failure (macOS blocking on a hung source app before giving up) should back off
+          // too, or it would retry every second instead of easing off like a slow success does.
+          backOff()
+          return
+        }
+        const fingerprint = fingerprintOf(content)
+        backOff()
         if (fingerprint === this.seen) return
         const first = this.seen === null
         this.seen = fingerprint

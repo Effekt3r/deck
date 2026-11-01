@@ -487,6 +487,30 @@ describe('ClipboardWatch', () => {
     watch.stop()
   })
 
+  it('a read that takes 2 s and then throws still backs off, not retrying every second', async () => {
+    let reads = 0
+    let slow = false
+    const { watch } = setup({
+      read: async () => {
+        reads++
+        if (slow) {
+          slow = false
+          await new Promise((r) => setTimeout(r, 2000))
+          throw new Error('busy')
+        }
+        return null
+      },
+    })
+    watch.focus()
+    await tick() // the arrival look: instant, not the slow one
+    slow = true
+    await tick(3100) // the poll due at 1000 ms starts a 2 s read that then throws, around 3000 ms
+    const before = reads
+    await tick(10_000) // without backing off on a thrown read, this would cost ~10 more reads
+    expect(reads).toBe(before)
+    watch.stop()
+  })
+
   it('ticks while a poll is still reading are skipped, not queued', async () => {
     let reads = 0
     let slow = false
