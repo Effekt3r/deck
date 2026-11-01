@@ -18,6 +18,15 @@ const CONCEALED = [
 /** Windows: a DWORD 0 here keeps the copy out of clipboard history. */
 const HISTORY = raw('CanIncludeInClipboardHistory')
 
+/** getType('image/png') makes Chromium decode the image to validate it: 62 ms for a 5K
+ *  screenshot's 1 MB PNG, measured in the running app. When the copy's source was already PNG,
+ *  one of these raw formats lists the very same file bytes at 0.5 ms. A TIFF-only or Windows
+ *  DIB-only copy lists none of them, so image/png stays the source there — unchanged. */
+const PNG_RAW = ['Apple PNG pasteboard type', 'public.png', 'PNG'].map(raw)
+/** getType('text/plain').text() cost 223 ms for a 100 MB copy, measured in the running app; one
+ *  of these raw formats, decoded as UTF-8 ourselves, cost 37.5 ms for the same text. */
+const UTF8_RAW = ['public.utf8-plain-text', 'NSStringPboardType'].map(raw)
+
 /** The clipboard couldn't be opened for this read (Windows: another app has it open — RDP, Office,
  *  the clipboard history UI). Electron resolves such a read as empty data instead of rejecting;
  *  readClipboard turns a listed-but-empty type back into this rejection, so the watch treats it as
@@ -32,7 +41,12 @@ export async function readClipboard(): Promise<ClipboardContent | null> {
   const [item] = await clipboard.read()
   if (!item) return null
   const { types } = item
-  const text = types.includes('text/plain') ? await (await blob(item, 'text/plain')).text() : null
+  const utf8Type = UTF8_RAW.find((f) => types.includes(f))
+  const text = types.includes('text/plain')
+    ? utf8Type
+      ? new TextDecoder().decode(await (await blob(item, utf8Type)).arrayBuffer())
+      : await (await blob(item, 'text/plain')).text()
+    : null
   // getType() reads when called and has() is read() plus a search: one fresh list after the text
   // read catches a marker the first missed (a copy in between, or a list Windows took while busy).
   const [after] = await clipboard.read()
@@ -45,7 +59,8 @@ export async function readClipboard(): Promise<ClipboardContent | null> {
   // Electron resolves a read that couldn't open the clipboard as empty data: a listed type that
   // comes back empty is a failed read (the next look tries again), not an empty clipboard.
   if (types.includes('image/png')) {
-    const png = new Uint8Array(await (await blob(item, 'image/png')).arrayBuffer())
+    const pngType = PNG_RAW.find((f) => types.includes(f)) ?? 'image/png'
+    const png = new Uint8Array(await (await blob(item, pngType)).arrayBuffer())
     if (!png.length) throw new Error(BUSY)
     return { kind: 'image', png }
   }
