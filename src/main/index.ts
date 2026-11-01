@@ -9,6 +9,7 @@ import type { AppInfo, Platform, PtyCreateOptions } from '@shared/types'
 import { buildMenu } from './menu'
 import { registerClaudeIpc } from './claude/ipc'
 import { registerClipboardIpc } from './clipboard/ipc'
+import { TempImages } from './clipboard/temp'
 import { externalUrl } from './external'
 import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
@@ -109,9 +110,14 @@ async function start(): Promise<void> {
   registerClaudeIpc()
   // Keyed by this instance's userData, not just shared machine temp: a dev build started with its
   // own --user-data-dir must not clear or collide with the installed app's saved clipboard images.
+  const clipboardRoot = join(app.getPath('temp'), 'Deck clipboard')
   const instance = createHash('sha1').update(userData).digest('hex').slice(0, 8)
+  // Builds before per-instance folders existed saved images directly in clipboardRoot; clean those
+  // up too. Never throws, and only removes its own clipboard-*.png(.tmp) files and the folder if
+  // that empties it, so another instance's subfolder here is left alone.
+  new TempImages(clipboardRoot).clear()
   const clip = registerClipboardIpc({
-    tempDir: join(app.getPath('temp'), 'Deck clipboard', instance),
+    tempDir: join(clipboardRoot, instance),
     platform: process.platform as Platform,
   })
 
