@@ -112,8 +112,7 @@ deck/
   published version isn't rebuilt.
 - Auto-update via electron-updater from a public releases-only repo (see
   Decisions; this repo stays private). Not built yet (M5). Until then: download the
-  new dmg/exe from the draft or published release. (Before: "private repo needs a
-  token — decide later).
+  new dmg/exe from the draft or published release.
 
 ## Decisions (confirmed with Franco, 2026-10-30)
 
