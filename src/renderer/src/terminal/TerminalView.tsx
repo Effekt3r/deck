@@ -94,6 +94,11 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
     let title = tab.title
     // Events that arrive before create() resolves; replayed for our pty only.
     const early: { pid: string; run: () => void }[] = []
+    // A smart paste is a clipboard IPC round trip: keys typed right after pressing Cmd/Ctrl+V (or
+    // a snippet tool sending it followed at once by Return) can otherwise reach the pty before the
+    // pasted text does. While pasting > 0, term.onData holds typed data instead of writing it.
+    let pasting = 0
+    let held: string[] = []
 
     const handleExit = (code: number) => {
       exited = true
@@ -120,9 +125,13 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
 
     const disposables = [
       term.onData((data) => {
-        if (!exited) {
-          if (ptyId) pty.write(ptyId, data)
-        } else if (data === '\r') close()
+        if (exited) {
+          if (data === '\r') close()
+        } else if (pasting > 0) {
+          held.push(data)
+        } else if (ptyId) {
+          pty.write(ptyId, data)
+        }
       }),
       term.onResize(({ cols, rows }) => {
         if (ptyId && !exited) pty.resize(ptyId, cols, rows)
@@ -156,17 +165,47 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
     // Cmd/Ctrl+V: main reads the clipboard. Copied files paste as quoted paths and, with Claude
     // running, an image as a saved PNG's path (Claude attaches it); text pastes as it is.
     const paste = (text: string) => term.paste(pasteSafe(text))
+    // Flushes keys held during a smart paste, in order, once every in-flight one has settled.
+    const flushHeld = () => {
+      if (pasting > 0 || !held.length) return
+      const queued = held
+      held = []
+      for (const data of queued) if (ptyId && !exited) pty.write(ptyId, data)
+    }
+    // Drops and the card's Add call paste() directly (they're mouse-driven, not racing a key the
+    // user is about to type), so only this round trip holds input.
     const smartPaste = () => {
       if (exited) return // don't use up the card's item, or save an image, for a dead tab
       const { process: name, title: current } = tabRef.current
+      pasting++
+      let settled = false
+      // Settles this paste exactly once, from whichever comes first: the IPC round trip, or a 2 s
+      // timeout so a stuck read can't hold typed keys forever. pasting is decremented before
+      // paste() runs, because paste() emits through term.onData too and must not hold itself.
+      const settle = (text?: string): void => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        pasting--
+        if (!disposed) {
+          if (text) paste(text)
+          flushHeld()
+        }
+      }
+      const timer = setTimeout(() => settle(), 2000)
       clipboard.paste({ claude: runsClaude(name, current) }).then(
         (result) => {
-          if (!result || disposed) return
-          if ('text' in result) {
-            if (result.text) paste(result.text)
-          } else console.warn('paste:', result.error)
+          if (!result) return settle()
+          if ('text' in result) settle(result.text || undefined)
+          else {
+            console.warn('paste:', result.error)
+            settle()
+          }
         },
-        (err: unknown) => console.warn('paste failed', err),
+        (err: unknown) => {
+          console.warn('paste failed', err)
+          settle()
+        },
       )
     }
     // macOS Cmd+V (the Edit menu's Paste) and Windows' Shift+Insert arrive as a paste event on
