@@ -4,6 +4,26 @@ Each version's section becomes the notes of its GitHub release
 (`.github/workflows/release.yml`), so write it for the people installing Deck.
 Headings are `## <version> — <date>`, with the version as in `package.json`.
 
+## 0.3.0 — 2026-11-01
+
+Copy something, then add it to Claude in one click.
+
+- **Clipboard card:** something you copy in another app (a screenshot, files, text)
+  shows under the Claude panel with **Add to Claude**, which puts it into the
+  prompt without sending it. A screenshot taken straight to the clipboard while
+  Deck is in front (⌃⇧⌘4) shows too. **×** dismisses it.
+- **Smart paste:** Cmd/Ctrl+V pastes copied files as their full paths and, with
+  Claude running, an image as `[Image #1]`. Dropping files on the terminal pastes
+  their paths.
+- **Privacy:** Deck looks at the clipboard only while its window is in front,
+  never shows a password manager's copy, and keeps no history.
+- **Safer pasting:** pasted text can no longer break out of a paste and run
+  commands in zsh, and keys you type during a paste wait for it.
+
+**Updating from 0.2.0:** quit Deck (your tabs close), open the new `.dmg` and drag
+Deck to Applications, replacing the old one. Automatic updates come later.
+Windows: the installer is still unsigned; choose **More info → Run anyway**.
+
 ## 0.2.0 — 2026-10-31
 
 The first build with all three parts of Deck: terminal tabs, the git panel and

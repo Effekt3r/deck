@@ -110,8 +110,9 @@ deck/
   GitHub Release for `package.json`'s version, with that version's
   `CHANGELOG.md` section as its notes. Re-running replaces the draft; a
   published version isn't rebuilt.
-- Auto-update via electron-updater from GitHub Releases (private repo needs a
-  token — decide later).
+- Auto-update via electron-updater from a public releases-only repo (see
+  Decisions; this repo stays private). Not built yet (M5). Until then: download the
+  new dmg/exe from the draft or published release.
 
 ## Decisions (confirmed with Franco, 2026-10-30)
 
@@ -125,7 +126,11 @@ deck/
 4. CI: **GitHub Actions** (`.github/workflows/release.yml`).
 5. Mac: **Apple silicon only** (2026-10-31). macOS 27 runs only on Apple
    silicon and Rosetta stops running Intel apps with macOS 28.
-6. Icon: the **branch + chevron mark** (teal git branch with two commits beside
+6. Updates (2026-11-01): auto-update reads a **public releases-only repo**
+   (e.g. `Effekt3r/deck-releases`) with electron-updater's GitHub provider, so the
+   app needs no token. Only the signed installers and `latest*.yml` go there; the
+   code stays private. The release workflow publishes to it with a token secret.
+7. Icon: the **branch + chevron mark** (teal git branch with two commits beside
    an amber prompt chevron, same at every size) in `branding/`; palette and
    regeneration steps in `branding/README.md`.
 
