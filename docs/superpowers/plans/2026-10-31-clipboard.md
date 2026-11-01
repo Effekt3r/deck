@@ -1985,6 +1985,32 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
 
 - [ ] **Step 7: Clean up.** Stop the fake claude with Ctrl+D, quit the dev app, then run `pb restore /tmp/deck-clip-saved.plist` and `rm -rf /tmp/deckclip`. Compare the clipboard's checksum with the one from before; don't print its contents.
 
+**Results, 2026-11-01 (macOS, dev build with its own userData; Franco's installed Deck was left running):**
+- **Passed, with real input over CDP and real ⌘V keystrokes:**
+  - a screenshot while in front brings up the card;
+  - Add inserts the saved PNG's quoted path plus a space (`0600` file, `0700` folder), uses the card up and returns focus to the terminal;
+  - three copied files, one named `it's.png`, paste all three quoted paths;
+  - text copied while in front gets no card;
+  - a dropped file pastes its quoted path plus a space;
+  - a ^C payload in zsh runs nothing;
+  - with the real Claude Code 2.1.283, Add gives `❯ [Image #1]`;
+  - at 800×500 with the Agents list open, the card stays fully visible and clickable;
+  - a temp folder that can't be written shows the error and inserts nothing, and the next copy shows no stale error;
+  - with two Claude tabs, Add inserts only into its own tab and the card disappears from both;
+  - after a reload the card comes back through `current()`;
+  - a drop on a panel does nothing;
+  - the card hides when Claude exits and comes back when it restarts.
+- **Measured with Deck in front (main-process CPU; worst event-loop stall):**
+  - idle: 1.8%, 16 ms (the 10 ms timer resolution);
+  - 5K screenshot: 6.7% and 142 ms at first, 2.0% and 20 ms after reading the raw PNG format (commit 54d4703);
+  - 100 MB text: 7.2% and 335 ms at first, 9.0% and 160 ms after reading the raw UTF-8 format. This is a known limit; see CLAUDE.md.
+- **Not done here:**
+  - step 6c (lock/unlock): Franco's to try;
+  - Tab-key navigation to the card.
+- **Lessons for these checks:**
+  - **Single instance:** a running installed Deck shares the dev build's single-instance lock, so give the dev build its own `--user-data-dir`.
+  - **The fake claude:** macOS kills a copy of `/bin/cat` started from the scratch folder; a compiled stand-in works.
+
 - [ ] **Step 8: Docs**
 
 `README.md`, in the Claude panel bullets, after **Picker**:

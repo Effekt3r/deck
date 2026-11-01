@@ -134,8 +134,15 @@ Things that aren't obvious from the code:
     History) makes Electron's `read()` resolve empty rather than reject; `readClipboard()`
     turns a listed type that comes back empty into a throw, so the watch retries at the
     next look instead of treating it as an empty clipboard.
+  - **Raw formats are read first:** Chromium decodes `image/png` just to validate it. For a
+    5K screenshot that took 62 ms, against 0.5 ms for the same bytes from the raw
+    `Apple PNG pasteboard type`/`public.png` (Windows: `PNG`). `text/plain` took 223 ms for
+    100 MB, against 37 ms from the raw UTF-8 `public.utf8-plain-text`/`NSStringPboardType`.
+    `image/png` and `text/plain` are the fallback. Measured 2026-11-01 with Deck in front:
+    a 5K screenshot costs 2% CPU, the same as idle, with no stall.
   - **Images:** saved to `<temp>/Deck clipboard/` and pasted as a quoted path, which Claude
-    Code turns into `[Image #N]`; cleared at start and quit.
+    Code turns into `[Image #N]`; cleared at start and quit. A dev app killed with a signal
+    skips `will-quit` and leaves its image; the next start removes it.
   - **Testing on macOS:** a clipboard written by a process that has quit keeps only its first
     item, so test writers must stay running (Finder does).
   - **Known limits:**
@@ -148,6 +155,10 @@ Things that aren't obvious from the code:
       you already used or dismissed. Electron offers no clipboard change counter.
     - **Polls back off when a read is slow,** to about 5% of the time, capped at 15 s. A
       locked screen or a sleeping Mac stops them.
+    - **A huge text is still costly:** with 100 MB on the clipboard each look stalls the
+      main thread about 160 ms, and Deck uses 9% CPU while in front. Decoding and
+      fingerprinting run on every poll, and the backoff only times the read. Follow-up:
+      fingerprint the raw bytes and decode only when the text is new or pasted.
   - **Paste safety:**
     - Every paste goes through `pasteSafe()`, which first drops ^C, ^Z and ^\ (zsh keeps
       the tty's signal keys on, so a pasted ^C would end the bracketed paste and run what
