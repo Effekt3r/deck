@@ -425,7 +425,21 @@ Checking the running app from a shell: with `--remoteDebuggingPort`, fetch
 `WebSocket`) and send `Runtime.evaluate` to read tab titles or row counts. The
 terminal itself is a WebGL canvas, so to read a shell's state, type a command
 that writes to a file. The dev app runs as process "Electron", the packaged one as
-"Deck"; both use the same userData, so quit one before starting the other.
+"Deck". Both use the same userData and so the same single-instance lock: with the
+installed Deck running, a dev launch hands its arguments (`--open` too) to it and quits.
+Give the dev build its own folder instead of quitting Franco's Deck:
+`npx electron-vite dev --remoteDebuggingPort 9333 --inspect 9229 -- --user-data-dir=<dir>`,
+and pass the same `--user-data-dir` to a second launch with `--open`. `--inspect` exposes
+the main process (evaluate through `process.mainModule.require`, since `require` isn't a
+global there).
+
+Single instance: if the running Deck doesn't acknowledge a second launch within about
+20 s (Chromium's ProcessSingleton), the second launch kills it and takes over. It was seen
+once, with an Intel build's slow first launch under Rosetta; a main-thread stall that long
+would cost the user's tabs.
+
+macOS kills a copy of a system binary (e.g. `/bin/cat` renamed to `claude`) started from
+the scratch folder; build a stand-in with `swiftc` instead.
 
 ```bash
 # render prototype panes once, no TTY needed
