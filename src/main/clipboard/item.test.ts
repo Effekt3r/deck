@@ -61,6 +61,22 @@ describe('previewOf', () => {
     expect(previewOf({ kind: 'files', paths: ['/'] }, 'p3')).toMatchObject({ names: ['/'], more: 0 })
   })
 
+  it('files: control characters in a name show as a middle dot; the stored path is untouched', () => {
+    const path = here('a\x07b.txt')
+    expect(previewOf({ kind: 'files', paths: [path] }, 'p4')).toMatchObject({ names: ['a\u00b7b.txt'] })
+  })
+
+  it('files: bidi marks in a name are removed from the preview, not the stored path', () => {
+    const path = here('a\u202eb.txt')
+    expect(previewOf({ kind: 'files', paths: [path] }, 'p5')).toMatchObject({ names: ['ab.txt'] })
+  })
+
+  it('files: control characters in the folder itself are cleaned too', () => {
+    const dir = join(tmpdir(), 'deck\x07clip')
+    const path = join(dir, 'a.txt')
+    expect(previewOf({ kind: 'files', paths: [path] }, 'p6')).toMatchObject({ names: ['a.txt'], folder: join(tmpdir(), 'deck\u00b7clip') })
+  })
+
   it('text: the first three lines, long ones cut, counted without a trailing newline', () => {
     const long = 'x'.repeat(130)
     expect(previewOf(text(`one\r\ntwo\n${long}\nfour\n`), 't1')).toEqual({
@@ -85,14 +101,14 @@ describe('previewOf', () => {
     expect(previewOf(text(line), 't4')).toMatchObject({ lines: [`${'z'.repeat(119)}…`] })
   })
 
-  it('text: C0/C1 control characters show as a middle dot, except tab', () => {
-    const line = 'a\x07b\x1bc\x9fd\te' // BEL, ESC, a C1 control, then a real tab
-    expect(previewOf(text(line), 't8')).toEqual({ id: 't8', kind: 'text', lines: ['a·b·c·d\te'], lineCount: 1 })
+  it('text: C0/C1 control characters and DEL show as a middle dot, except tab', () => {
+    const line = 'a\x07b\x1bc\x9fd\te\x7ff' // BEL, ESC, a C1 control, a real tab, then DEL
+    expect(previewOf(text(line), 't8')).toEqual({ id: 't8', kind: 'text', lines: ['a\u00b7b\u00b7c\u00b7d\te\u00b7f'], lineCount: 1 })
   })
 
-  it('text: bidi overrides and isolates are removed, not shown as anything', () => {
-    const line = 'a‮b⁦c‎d‏' // RLO, LRI, LRM, RLM
-    expect(previewOf(text(line), 't9')).toEqual({ id: 't9', kind: 'text', lines: ['abcd'], lineCount: 1 })
+  it('text: bidi marks, overrides and isolates are removed, not shown as anything', () => {
+    const line = 'a\u202eb\u2066c\u200ed\u200f\u061ce' // RLO, LRI, LRM, RLM, ALM
+    expect(previewOf(text(line), 't9')).toEqual({ id: 't9', kind: 'text', lines: ['abcde'], lineCount: 1 })
   })
 
   it('text: empty and single-line text each count as one line', () => {

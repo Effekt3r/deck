@@ -65,11 +65,12 @@ function cutLine(line: string): string {
   return `${line.slice(0, cut)}…`
 }
 
-/** C0/C1 controls (tab excepted) render as boxes or nothing in the card; show a middle dot instead. */
-const CONTROL = /[\u0000-\u0008\u000a-\u001f\u0080-\u009f]/g
-/** Bidi overrides and isolates (LRM/RLM, LRE/RLE/PDF/LRO/RLO, LRI/RLI/FSI/PDI) are invisible but can
- *  reorder the rest of the line on screen, so they're dropped rather than shown as anything. */
-const BIDI = /[‎‏‪-‮⁦-⁩]/g
+/** C0/C1 controls and DEL (tab excepted) render as boxes or nothing in the card; show a middle dot instead. */
+const CONTROL = /[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/g
+/** Bidi marks and overrides/isolates (ALM, LRM/RLM, LRE/RLE/PDF/LRO/RLO, LRI/RLI/FSI/PDI) are
+ *  invisible but can reorder the rest of the line on screen, so they're dropped rather than shown
+ *  as anything. Written as \u escapes, not the literal characters, to keep them visible in a diff. */
+const BIDI = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
 
 /** A preview line made safe to render as plain text: never the content itself, which pastes as the
  *  user copied it. */
@@ -106,12 +107,13 @@ function firstLines(text: string, max: number): { lines: string[]; lineCount: nu
 export function previewOf(content: ClipboardContent, id: string, image?: ImageInfo): ClipboardPreview {
   switch (content.kind) {
     case 'files':
+      // Sanitized for display only: content.paths (what actually pastes) is untouched.
       return {
         id,
         kind: 'files',
-        names: content.paths.slice(0, NAMES).map((p) => basename(p) || p),
+        names: content.paths.slice(0, NAMES).map((p) => sanitizeLine(basename(p) || p)),
         more: Math.max(0, content.paths.length - NAMES),
-        folder: dirname(content.paths[0] ?? ''),
+        folder: sanitizeLine(dirname(content.paths[0] ?? '')),
       }
     case 'text': {
       const { lines, lineCount } = firstLines(content.text, LINES)
