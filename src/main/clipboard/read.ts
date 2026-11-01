@@ -21,9 +21,10 @@ const HISTORY = raw('CanIncludeInClipboardHistory')
 /** Electron omits from `types` any raw format Chromium treats as standard
  *  (electron_api_clipboard.cc: `if (IsStandardClipboardFormat(fmt)) continue`); in Chromium 156
  *  that's macOS `public.png` and Windows `PNG`, so only this legacy alias ever survives. Windows
- *  has no raw path at all: image/png there always goes through Electron's ReadMime decode.
- *  getType('image/png') makes Chromium decode the image to validate it: 62 ms for a 5K screenshot's
- *  1 MB PNG, measured in the running app, against 0.5 ms for the same bytes read raw. */
+ *  has no raw path at all, so image/png there always decodes. The decode itself is Electron's own
+ *  `ReadMime` (electron_api_clipboard_item.cc), not Chromium's: getType('image/png') cost 62 ms
+ *  for a 5K screenshot's 1 MB PNG, measured in the running app, against 0.5 ms for the same bytes
+ *  read raw. */
 const PNG_RAW = raw('Apple PNG pasteboard type')
 /** 89 50 4E 47 0D 0A 1A 0A. */
 const PNG_SIGNATURE = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)
@@ -43,9 +44,10 @@ export async function readClipboard(): Promise<ClipboardContent | null> {
   const [item] = await clipboard.read()
   if (!item) return null
   const { types } = item
-  // dataForType: (what a raw read calls) returns only the first pasteboard item; text/plain's
-  // stringForType: joins every item with newlines, so an app that writes one item per row keeps
-  // all of them. A raw UTF-8 read only ever helped multi-MB texts, so it isn't used here.
+  // Apple documents that reading a standard text type joins every pasteboard item's text with
+  // newlines; whether the legacy NSStringPboardType alias gets the same treatment isn't
+  // documented either way, so text/plain is read directly rather than risk an app that writes
+  // one item per row losing rows. A raw UTF-8 read only ever helped multi-MB texts.
   const text = types.includes('text/plain') ? await (await blob(item, 'text/plain')).text() : null
   // getType() reads when called and has() is read() plus a search: one fresh list after the text
   // read catches a marker the first missed (a copy in between, or a list Windows took while busy).

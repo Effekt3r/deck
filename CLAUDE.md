@@ -139,9 +139,10 @@ Things that aren't obvious from the code:
     and image/png there always goes through Electron's own `ReadMime` decode (electron_api_clipboard_item.cc,
     not Chromium's) — unmeasured so far, worth checking on Windows. The raw PNG bytes are checked
     against the PNG signature, falling back to `image/png` when they don't match or come back
-    empty. Text is read through `text/plain`, not raw: the raw alias's `dataForType:` returns only
-    the first pasteboard item, while `text/plain`'s `stringForType:` joins every item with
-    newlines, so an app that writes one item per row would lose rows reading raw. Measured
+    empty. Text is read through `text/plain`, not raw: Apple documents that reading a standard
+    text type joins every pasteboard item's text with newlines, but whether the legacy alias
+    (`NSStringPboardType`) gets the same treatment isn't documented either way, so text/plain is
+    read directly rather than risk an app that writes one item per row losing rows. Measured
     2026-11-01 with Deck in front: a 5K screenshot's PNG read costs 62 ms decoded against 0.5 ms
     raw, and 2.0% CPU with a 20 ms stall after switching to the raw read, close to idle's 1.8%/16 ms.
   - **Images:** saved to `<temp>/Deck clipboard/<instance>/` — `<instance>` is the first 8 hex
@@ -160,8 +161,9 @@ Things that aren't obvious from the code:
       Claude's `/copy`) rightly show no card. Images and files always show.
     - **The same content twice gets no card:** A → B → A while away, or copying something
       you already used or dismissed. Electron offers no clipboard change counter.
-    - **Polls back off when a look is slow (its read, then its fingerprint),** to about 5% of
-      the time, capped at 15 s. A locked screen or a sleeping Mac stops them.
+    - **Polls back off when a look is slow, whether its read succeeds or fails (then its
+      fingerprint, on success),** to about 5% of the time, capped at 15 s. A locked screen or a
+      sleeping Mac stops them.
     - **A huge text is still costly:** with 100 MB on the clipboard each look stalls the main
       thread about 0.3 s, and Deck uses about 7% CPU while in front — measured back on
       `text/plain` after removing the raw UTF-8 read (see "Raw formats" above). Decoding and
@@ -178,6 +180,12 @@ Things that aren't obvious from the code:
       paste in, in one linear pass — repeating `replace()` until none remain would be
       quadratic on nested markers.
     - `quotePath()` refuses paths with control characters, because no quoting makes them safe.
+  - **Paste ordering:** `terminal/pasteQueue.ts`'s `PasteQueue` keeps typed input (and Shift+Enter,
+    sent through `term.input()` precisely so it counts as input) behind a smart paste still
+    waiting on its clipboard round trip, and keeps overlapping pastes in the order they were asked
+    for rather than the order their reads happen to resolve in — a plain in-flight counter got this
+    wrong as soon as two Cmd+V's overlapped. A paste gives up after 1 s, not longer: xterm's own
+    DA/CPR replies queue behind a pending paste too.
   - **Claude Code attaches an image only when a paste is one image path,** optionally
     quoted and with a trailing space. Several files pasted at once reach Claude as paths
     it can read.

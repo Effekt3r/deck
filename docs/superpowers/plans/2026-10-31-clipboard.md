@@ -2015,19 +2015,26 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
 1. `read.ts`: only the legacy `Apple PNG pasteboard type` alias is read raw — Electron hides
    `public.png`/Windows `PNG` from `types` as standard formats, so they never appeared anyway. Its
    bytes are checked against the PNG signature, falling back to `image/png` when they don't match
-   or come back empty. The raw UTF-8 text read is removed: `dataForType:` returns only the first
-   pasteboard item, while `text/plain` joins every item with newlines.
+   or come back empty. The raw UTF-8 text read is removed: Apple documents that a standard text
+   type joins every pasteboard item with newlines, but not whether the legacy alias
+   (`NSStringPboardType`) does too, so `text/plain` is read directly either way.
 2. `watch.ts`: `quietUntil` is set from a timestamp taken after `fingerprintOf()` runs, not just
-   after the read, so a slow fingerprint (a big image or text) is backed off from too.
-3. `TerminalView.tsx`: keys typed while a smart paste is in flight (a `pasting` counter) are held
-   in order and flushed once every in-flight one has settled — on the round trip resolving,
-   erroring, or a 2 s timeout. Drops and the card's Add still paste directly.
-4. `item.ts`: `previewOf`'s text lines replace C0/C1 controls (tab excepted) with a middle dot and
-   drop bidi overrides/isolates, so a copied control character or RTL override can't render oddly
-   or reorder the line; the pasted content itself is untouched.
+   after the read, so a slow fingerprint (a big image or text) is backed off from too — and a
+   *failed* read backs off the same way (a re-review catch: the first pass only did this for a
+   successful one, so a slow failure would have retried every second).
+3. `TerminalView.tsx`: keys typed while a smart paste is in flight wait behind it, and pastes keep
+   the order they were asked for even when a later one's clipboard read resolves first (a
+   re-review catch: a first pass using a plain in-flight counter got this wrong as soon as two
+   Cmd+V's overlapped). `terminal/pasteQueue.ts`'s `PasteQueue` is a small, pure, tested FIFO for
+   this; Shift+Enter goes through `term.input()` so it queues correctly too. A paste gives up
+   after 1 s, not longer, since xterm's own DA/CPR replies wait behind a pending paste as well.
+4. `item.ts`: `previewOf`'s text lines, and the files preview's names and folder, replace C0/C1
+   controls and DEL (tab excepted) with a middle dot and drop bidi marks and overrides/isolates,
+   so a copied control character or RTL override can't render oddly or reorder the line; the
+   pasted content and stored paths are untouched.
 5. `src/main/index.ts`: the temp folder is keyed by this instance's userData (`Deck clipboard/<sha1 prefix>/`),
    so a dev build with its own `--user-data-dir` doesn't clear or collide with the installed app's
-   saved images.
+   saved images; its own leftover files are cleared at startup too.
 6. Docs: this plan, `CLAUDE.md` and `docs/TESTING.md` updated to match 1–5.
 
 - [ ] **Step 8: Docs**
