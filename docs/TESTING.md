@@ -68,16 +68,20 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
 18c. Copy a password from your password manager: no card, and Ctrl+V pastes it as before.
 18d. Drag a PDF from Explorer onto the terminal: its quoted path appears.
 18e. Copy a new screenshot, then press Ctrl+V several times quickly in a Claude tab. Each
-     paste inserts the image, with no "Couldn't save the image" error. (Antivirus can hold
-     a just-written file for a moment; Deck retries.)
-18f. With Deck in front, copy in Excel or Word several times: no "clipboard in use" failures
-     (Deck reads the clipboard about once a second while in front).
+     paste inserts the image. (Antivirus can hold a just-written file for a moment; Deck
+     retries — paste errors only go to the console, so check the prompt, not for a message.)
+18f. With Deck in front, copy in Excel or Word several times: each copy's card or paste goes
+     through with no copy failures (Deck reads the clipboard about once a second while in
+     front; a "clipboard in use" failure would also only be logged to the console).
 18g. With Deck in front, press Win+L, then sign in again; and put the PC to sleep and wake it.
      A screenshot taken afterwards still shows a card.
 18h. A copy marked only "not for clipboard history" shows no card. In Windows PowerShell:
      `Add-Type -AssemblyName System.Windows.Forms; $d = New-Object System.Windows.Forms.DataObject; $d.SetText('s3cret'); $d.SetData('CanIncludeInClipboardHistory', [IO.MemoryStream]::new([byte[]](0,0,0,0))); [System.Windows.Forms.Clipboard]::SetDataObject($d, $true)`
 18i. With RDP or Parallels clipboard sharing on, a card doesn't vanish or come back by itself.
 18j. Shift+Insert pastes the same way as Ctrl+V (files as paths, an image as [Image #N] with Claude).
+18k. Put a large, full-screen screenshot on the clipboard, bring Deck to front, and run something
+     that prints continuously (`ping -t localhost`): output doesn't hitch about once a second.
+     Note the main process's CPU in Task Manager while it runs.
 
 **Restart**
 

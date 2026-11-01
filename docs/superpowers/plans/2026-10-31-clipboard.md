@@ -2011,6 +2011,25 @@ In that tab, type `./claude > out.txt` and press Return. Type it through the pag
   - **Single instance:** a running installed Deck shares the dev build's single-instance lock, so give the dev build its own `--user-data-dir`.
   - **The fake claude:** macOS kills a copy of `/bin/cat` started from the scratch folder; a compiled stand-in works.
 
+**Final review fixes, 2026-11-01:**
+1. `read.ts`: only the legacy `Apple PNG pasteboard type` alias is read raw — Electron hides
+   `public.png`/Windows `PNG` from `types` as standard formats, so they never appeared anyway. Its
+   bytes are checked against the PNG signature, falling back to `image/png` when they don't match
+   or come back empty. The raw UTF-8 text read is removed: `dataForType:` returns only the first
+   pasteboard item, while `text/plain` joins every item with newlines.
+2. `watch.ts`: `quietUntil` is set from a timestamp taken after `fingerprintOf()` runs, not just
+   after the read, so a slow fingerprint (a big image or text) is backed off from too.
+3. `TerminalView.tsx`: keys typed while a smart paste is in flight (a `pasting` counter) are held
+   in order and flushed once every in-flight one has settled — on the round trip resolving,
+   erroring, or a 2 s timeout. Drops and the card's Add still paste directly.
+4. `item.ts`: `previewOf`'s text lines replace C0/C1 controls (tab excepted) with a middle dot and
+   drop bidi overrides/isolates, so a copied control character or RTL override can't render oddly
+   or reorder the line; the pasted content itself is untouched.
+5. `src/main/index.ts`: the temp folder is keyed by this instance's userData (`Deck clipboard/<sha1 prefix>/`),
+   so a dev build with its own `--user-data-dir` doesn't clear or collide with the installed app's
+   saved images.
+6. Docs: this plan, `CLAUDE.md` and `docs/TESTING.md` updated to match 1–5.
+
 - [ ] **Step 8: Docs**
 
 `README.md`, in the Claude panel bullets, after **Picker**:

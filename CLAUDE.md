@@ -35,8 +35,7 @@ route and polish (M5) are next. Plans that built M1–M3:
 `…/2026-10-31-m3-claude-panel.md`.
 
 **M5, in progress:** the clipboard card and smart paste (spec:
-`docs/superpowers/specs/2026-10-31-clipboard-design.md`) are built on branch
-`m5-clipboard` (built 2026-10-31; Windows to test).
+`docs/superpowers/specs/2026-10-31-clipboard-design.md`; built 2026-10-31/11-01). Windows to test.
 
 | Path | Role |
 |---|---|
@@ -49,7 +48,7 @@ route and polish (M5) are next. Plans that built M1–M3:
 | `src/main/git/` | the git runner (the only way Deck runs git), header summary, merge target, graph log, commit details, watcher + poll probe, merge-target overrides, `git:*` subscriptions |
 | `src/main/claude/` | session-log locator, incremental tail, the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions |
 | `src/main/clipboard/` | reads the clipboard (files, text, images; concealed copies skipped), decides what the card offers, saves pasted images for Claude |
-| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker) |
+| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker), `clipboard/` (card, hook) |
 
 Things that aren't obvious from the code:
 - The app scrubs a parent Claude Code session's variables (`CLAUDECODE`, session
@@ -134,15 +133,23 @@ Things that aren't obvious from the code:
     History) makes Electron's `read()` resolve empty rather than reject; `readClipboard()`
     turns a listed type that comes back empty into a throw, so the watch retries at the
     next look instead of treating it as an empty clipboard.
-  - **Raw formats are read first:** Chromium decodes `image/png` just to validate it. For a
-    5K screenshot that took 62 ms, against 0.5 ms for the same bytes from the raw
-    `Apple PNG pasteboard type`/`public.png` (Windows: `PNG`). `text/plain` took 223 ms for
-    100 MB, against 37 ms from the raw UTF-8 `public.utf8-plain-text`/`NSStringPboardType`.
-    `image/png` and `text/plain` are the fallback. Measured 2026-11-01 with Deck in front:
-    a 5K screenshot costs 2% CPU, the same as idle, with no stall.
-  - **Images:** saved to `<temp>/Deck clipboard/` and pasted as a quoted path, which Claude
-    Code turns into `[Image #N]`; cleared at start and quit. A dev app killed with a signal
-    skips `will-quit` and leaves its image; the next start removes it.
+  - **Raw formats:** only the legacy macOS alias `Apple PNG pasteboard type` is ever read raw.
+    Electron hides from `types` any raw format Chromium treats as standard, which by Chromium 156
+    includes `public.png` and Windows' `PNG`, so neither appears; Windows has no raw path at all,
+    and image/png there always goes through Electron's own `ReadMime` decode (electron_api_clipboard_item.cc,
+    not Chromium's) — unmeasured so far, worth checking on Windows. The raw PNG bytes are checked
+    against the PNG signature, falling back to `image/png` when they don't match or come back
+    empty. Text is read through `text/plain`, not raw: the raw alias's `dataForType:` returns only
+    the first pasteboard item, while `text/plain`'s `stringForType:` joins every item with
+    newlines, so an app that writes one item per row would lose rows reading raw. Measured
+    2026-11-01 with Deck in front: a 5K screenshot's PNG read costs 62 ms decoded against 0.5 ms
+    raw, and 2.0% CPU with a 20 ms stall after switching to the raw read, close to idle's 1.8%/16 ms.
+  - **Images:** saved to `<temp>/Deck clipboard/<instance>/` — `<instance>` is the first 8 hex
+    characters of this run's userData path hashed with sha1, so a dev build started with its own
+    `--user-data-dir` gets its own folder instead of clearing or colliding with the installed
+    app's saved images — and pasted as a quoted path, which Claude Code turns into `[Image #N]`;
+    cleared at start and quit. A dev app killed with a signal skips `will-quit` and leaves its
+    image; the next start removes it.
   - **Testing on macOS:** a clipboard written by a process that has quit keeps only its first
     item, so test writers must stay running (Finder does).
   - **Known limits:**
@@ -153,12 +160,17 @@ Things that aren't obvious from the code:
       Claude's `/copy`) rightly show no card. Images and files always show.
     - **The same content twice gets no card:** A → B → A while away, or copying something
       you already used or dismissed. Electron offers no clipboard change counter.
-    - **Polls back off when a read is slow,** to about 5% of the time, capped at 15 s. A
-      locked screen or a sleeping Mac stops them.
-    - **A huge text is still costly:** with 100 MB on the clipboard each look stalls the
-      main thread about 160 ms, and Deck uses 9% CPU while in front. Decoding and
-      fingerprinting run on every poll, and the backoff only times the read. Follow-up:
-      fingerprint the raw bytes and decode only when the text is new or pasted.
+    - **Polls back off when a look is slow (its read, then its fingerprint),** to about 5% of
+      the time, capped at 15 s. A locked screen or a sleeping Mac stops them.
+    - **A huge text is still costly:** with 100 MB on the clipboard each look stalls the main
+      thread about 0.3 s, and Deck uses about 7% CPU while in front — measured back on
+      `text/plain` after removing the raw UTF-8 read (see "Raw formats" above). Decoding and
+      fingerprinting run on every poll; the backoff now times the fingerprint too, not just the
+      read, but a huge text's decode still dominates a look regardless. Follow-up: fingerprint
+      the raw bytes and decode only when the text is new or pasted.
+    - **A slow source could freeze terminals:** macOS clipboard reads run synchronously on the
+      main thread and wait for the source app, so a slow one (Universal Clipboard from an iPhone,
+      a hung app) could stall every terminal during a poll. Not yet hit; worth a manual check.
   - **Paste safety:**
     - Every paste goes through `pasteSafe()`, which first drops ^C, ^Z and ^\ (zsh keeps
       the tty's signal keys on, so a pasted ^C would end the bracketed paste and run what
