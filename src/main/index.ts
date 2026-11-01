@@ -1,12 +1,15 @@
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { homedir, release } from 'node:os'
 import { join, resolve } from 'node:path'
 import { app, type BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron'
 import { IPC } from '@shared/channels'
-import type { AppInfo, PtyCreateOptions } from '@shared/types'
+import type { AppInfo, Platform, PtyCreateOptions } from '@shared/types'
 import { buildMenu } from './menu'
 import { registerClaudeIpc } from './claude/ipc'
+import { registerClipboardIpc } from './clipboard/ipc'
+import { TempImages } from './clipboard/temp'
 import { externalUrl } from './external'
 import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
@@ -91,7 +94,6 @@ async function start(): Promise<void> {
   ipcMain.on(IPC.appCopyText, (_e, text: unknown) => {
     if (typeof text === 'string') clipboard.writeText(text)
   })
-  ipcMain.handle(IPC.appReadText, () => clipboard.readText())
   ipcMain.on(IPC.appReady, () => {
     rendererReady = true
     for (const folder of pendingFolders.splice(0)) send(IPC.appOpenFolder, folder)
@@ -106,9 +108,22 @@ async function start(): Promise<void> {
 
   registerGitIpc({ targetsFile: join(userData, 'git-targets.json') })
   registerClaudeIpc()
+  // Keyed by this instance's userData, not just shared machine temp: a dev build started with its
+  // own --user-data-dir must not clear or collide with the installed app's saved clipboard images.
+  const clipboardRoot = join(app.getPath('temp'), 'Deck clipboard')
+  const instance = createHash('sha1').update(userData).digest('hex').slice(0, 8)
+  // Builds before per-instance folders existed saved images directly in clipboardRoot; clean those
+  // up too. Never throws, and only removes its own clipboard-*.png(.tmp) files and the folder if
+  // that empties it, so another instance's subfolder here is left alone.
+  new TempImages(clipboardRoot).clear()
+  const clip = registerClipboardIpc({
+    tempDir: join(clipboardRoot, instance),
+    platform: process.platform as Platform,
+  })
 
   Menu.setApplicationMenu(buildMenu((cmd) => send(IPC.appMenu, cmd)))
   win = createWindow()
+  clip.attach(win)
   // A reload starts a fresh renderer whose tabs know nothing of the old shells.
   win.webContents.on('did-start-loading', () => {
     rendererReady = false
@@ -120,6 +135,7 @@ async function start(): Promise<void> {
     win = null
   })
   app.on('before-quit', () => ptys.killAll())
+  app.on('will-quit', () => clip.dispose())
 }
 
 // A stray error in the main process is logged, not shown as a modal dialog over

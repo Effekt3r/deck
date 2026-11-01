@@ -1,0 +1,54 @@
+/* The clipboard card, under the Claude panel (App.tsx: Workspace). */
+.clip-card {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 8px;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: 12px/1.4 var(--font-ui);
+}
+.clip-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.clip-label { color: var(--teal); font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; }
+.clip-title { min-width: 0; overflow: hidden; color: var(--muted); text-overflow: ellipsis; white-space: nowrap; }
+.clip-spacer { flex: 1; }
+.clip-head .icon-button { width: 20px; height: 20px; }
+.clip-thumb {
+  align-self: flex-start;
+  max-width: 100%;
+  max-height: min(140px, 18vh);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--field);
+  object-fit: contain;
+}
+.clip-files { display: flex; flex-direction: column; gap: 3px; min-width: 0; margin: 0; padding: 0; list-style: none; }
+.clip-files li { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.clip-files li.clip-folder { display: block; } /* a block box, so text-overflow has a single line to ellipsise */
+.clip-name, .clip-folder { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.clip-badge { flex: none; padding: 0 4px; border-radius: 3px; background: var(--tab-active); color: var(--muted); font: 600 9px/16px var(--font-mono); }
+.clip-more { color: var(--muted); }
+.clip-folder { color: var(--muted); font: 11px/1.4 var(--font-mono); }
+.clip-text {
+  max-height: 64px;
+  margin: 0;
+  padding: 6px 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--field);
+  color: var(--text);
+  font: 11px/1.45 var(--font-mono);
+  white-space: pre;
+  text-overflow: ellipsis;
+  tab-size: 4;
+}
+.clip-error { color: var(--red); overflow-wrap: anywhere; }
+.clip-add { align-self: flex-start; height: 26px; }
+
+/* The card never shrinks: a short window can leave the panel smaller than its header, lists and
+   the feed's 80 px. Clip it there rather than paint (and take clicks) over the card. */
+.claude-pane > .claude-panel { overflow-y: clip; }   /* x stays visible: focus rings aren't cut */

@@ -1,6 +1,6 @@
-import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron'
+import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/channels'
-import type { ClaudeSnapshot, DeckApi, GitSnapshot, MenuCommand, Platform } from '@shared/types'
+import type { ClaudeSnapshot, ClipboardPreview, DeckApi, GitSnapshot, MenuCommand, Platform } from '@shared/types'
 
 function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
   const listener = (_e: IpcRendererEvent, ...args: unknown[]) => cb(...(args as A))
@@ -44,11 +44,24 @@ const api: DeckApi = {
     sessions: (folder) => ipcRenderer.invoke(IPC.claudeSessions, folder),
     follow: (folder, sessionId) => ipcRenderer.invoke(IPC.claudeFollow, folder, sessionId),
   },
+  clipboard: {
+    current: () => ipcRenderer.invoke(IPC.clipboardCurrent),
+    onItem: (cb) => on<[ClipboardPreview | null]>(IPC.clipboardItem, cb),
+    add: (id) => ipcRenderer.invoke(IPC.clipboardAdd, id),
+    paste: (opts) => ipcRenderer.invoke(IPC.clipboardPaste, opts),
+    dismiss: (id) => ipcRenderer.send(IPC.clipboardDismiss, id),
+  },
   app: {
     info: () => ipcRenderer.invoke(IPC.appInfo),
     openExternal: (url) => ipcRenderer.send(IPC.appOpenExternal, url),
     copyText: (text) => ipcRenderer.send(IPC.appCopyText, text),
-    readText: () => ipcRenderer.invoke(IPC.appReadText),
+    pathForFile: (file) => {
+      try {
+        return webUtils.getPathForFile(file)
+      } catch {
+        return '' // not a File; a File that isn't on disk gives '' without throwing
+      }
+    },
     onOpenFolder: (cb) => on<[string]>(IPC.appOpenFolder, cb),
     onMenu: (cb) => on<[MenuCommand]>(IPC.appMenu, cb),
     ready: () => ipcRenderer.send(IPC.appReady),

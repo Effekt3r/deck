@@ -34,9 +34,12 @@ route and polish (M5) are next. Plans that built M1–M3:
 `docs/superpowers/plans/2026-10-30-m1-electron-shell.md`, `…/2026-10-31-m2-git-panel.md`,
 `…/2026-10-31-m3-claude-panel.md`.
 
+**M5, in progress:** the clipboard card and smart paste (spec:
+`docs/superpowers/specs/2026-10-31-clipboard-design.md`; built 2026-10-31/11-01). Windows to test.
+
 | Path | Role |
 |---|---|
-| `src/shared/` | `DeckApi` IPC contract (`types.ts`) and channel names; the only thing main and renderer share |
+| `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, and `quote.ts` (shell quoting, used by main and the renderer); the only thing main and renderer share |
 | `src/preload/index.ts` | exposes `window.deck`; sandboxed, requires only `electron` |
 | `src/main/index.ts` | lifecycle, single instance + `--open <folder>`, IPC wiring; `window.ts`, `menu.ts` (platform shortcuts → `MenuCommand`) |
 | `src/main/shell/` | `shellLaunch()` (which shell/args/env, pure), zsh `ZDOTDIR` wrappers + `deck.zsh`, PowerShell `deck.ps1`, installed to userData |
@@ -44,7 +47,8 @@ route and polish (M5) are next. Plans that built M1–M3:
 | `src/main/projects/` | `projects.json` (userData), scan, `.git/HEAD` branch, dirty counts, native context menu |
 | `src/main/git/` | the git runner (the only way Deck runs git), header summary, merge target, graph log, commit details, watcher + poll probe, merge-target overrides, `git:*` subscriptions |
 | `src/main/claude/` | session-log locator, incremental tail, the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions |
-| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker) |
+| `src/main/clipboard/` | reads the clipboard (files, text, images; concealed copies skipped), decides what the card offers, saves pasted images for Claude |
+| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker), `clipboard/` (card, hook) |
 
 Things that aren't obvious from the code:
 - The app scrubs a parent Claude Code session's variables (`CLAUDECODE`, session
@@ -108,6 +112,83 @@ Things that aren't obvious from the code:
   - **Config dir:** `CLAUDE_CONFIG_DIR` is read from the main process's
     environment, so one set only in shell profiles isn't seen when Deck starts
     from Finder.
+- Clipboard (`src/main/clipboard/`):
+  - **Electron 45's clipboard is async and web-like:** `read()` returns one item whose
+    `types` are MIME types plus raw platform formats (`electron application/osclipboard;format="…"`).
+    Copied files are in its `text/uri-list` (every file); the raw `NSFilenamesPboardType` holds only the first.
+  - **When Deck looks:** on focus, about once a second while its window is in front, and
+    once more as it leaves (one last look at a copy made just before) — never while it's
+    actually in the background. Only on focus does a text change count as new; while in
+    front, or leaving, a text change is Deck's own copy and gets no card (images and files
+    always count).
+  - **Password managers:** their copies carry `org.nspasteboard.ConcealedType`,
+    `org.nspasteboard.TransientType`, `com.agilebits.onepassword` or
+    `de.petermaurer.TransientPasteboardType` (macOS), or
+    `ExcludeClipboardContentFromMonitorProcessing`, `Clipboard Viewer Ignore` or
+    `CanIncludeInClipboardHistory`=0 (Windows), and get no card. A second `read()` right
+    after the content read catches a marker the first missed (a copy landing in between,
+    or a list Windows took while busy); `clipboard.has()` isn't used, since it's `read()`
+    plus a search, for the same cost again.
+  - **A busy clipboard** (Windows: another app has it open — RDP, Office, Clipboard
+    History) makes Electron's `read()` resolve empty rather than reject; `readClipboard()`
+    turns a listed type that comes back empty into a throw, so the watch retries at the
+    next look instead of treating it as an empty clipboard.
+  - **Raw formats:** only the legacy macOS alias `Apple PNG pasteboard type` is ever read raw.
+    Electron hides from `types` any raw format Chromium treats as standard, which by Chromium 156
+    includes `public.png` and Windows' `PNG`, so neither appears; Windows has no raw path at all,
+    and image/png there always goes through Electron's own `ReadMime` decode (electron_api_clipboard_item.cc,
+    not Chromium's) — unmeasured so far, worth checking on Windows. The raw PNG bytes are checked
+    against the PNG signature, falling back to `image/png` when they don't match or come back
+    empty. Text is read through `text/plain`, not raw: Apple documents that reading a standard
+    text type joins every pasteboard item's text with newlines, but whether the legacy alias
+    (`NSStringPboardType`) gets the same treatment isn't documented either way, so text/plain is
+    read directly rather than risk an app that writes one item per row losing rows. Measured
+    2026-11-01 with Deck in front: a 5K screenshot's PNG read costs 62 ms decoded against 0.5 ms
+    raw, and 2.0% CPU with a 20 ms stall after switching to the raw read, close to idle's 1.8%/16 ms.
+  - **Images:** saved to `<temp>/Deck clipboard/<instance>/` — `<instance>` is the first 8 hex
+    characters of this run's userData path hashed with sha1, so a dev build started with its own
+    `--user-data-dir` gets its own folder instead of clearing or colliding with the installed
+    app's saved images — and pasted as a quoted path, which Claude Code turns into `[Image #N]`;
+    cleared at start and quit. A dev app killed with a signal skips `will-quit` and leaves its
+    image; the next start removes it.
+  - **Testing on macOS:** a clipboard written by a process that has quit keeps only its first
+    item, so test writers must stay running (Finder does).
+  - **Known limits:**
+    - **Text copied while Deck is in front shows no card**, even when it came from
+      elsewhere: Universal Clipboard text, OCR overlays and other panels that don't take
+      focus, Keyboard Maestro or Shortcuts. That's the price of not offering Deck's own
+      copies; children of Deck that write the clipboard while it's in front (`pbcopy`,
+      Claude's `/copy`) rightly show no card. Images and files always show.
+    - **The same content twice gets no card:** A → B → A while away, or copying something
+      you already used or dismissed. Electron offers no clipboard change counter.
+    - **Polls back off when a look is slow, whether its read succeeds or fails (then its
+      fingerprint, on success),** to about 5% of the time, capped at 15 s. A locked screen or a
+      sleeping Mac stops them.
+    - **A huge text is still costly:** with 100 MB on the clipboard each look stalls the main
+      thread about 0.3 s, and Deck uses about 7% CPU while in front — measured back on
+      `text/plain` after removing the raw UTF-8 read (see "Raw formats" above). Decoding and
+      fingerprinting run on every poll; the backoff now times the fingerprint too, not just the
+      read, but a huge text's decode still dominates a look regardless. Follow-up: fingerprint
+      the raw bytes and decode only when the text is new or pasted.
+    - **A slow source could freeze terminals:** macOS clipboard reads run synchronously on the
+      main thread and wait for the source app, so a slow one (Universal Clipboard from an iPhone,
+      a hung app) could stall every terminal during a poll. Not yet hit; worth a manual check.
+  - **Paste safety:**
+    - Every paste goes through `pasteSafe()`, which first drops ^C, ^Z and ^\ (zsh keeps
+      the tty's signal keys on, so a pasted ^C would end the bracketed paste and run what
+      follows as typed keys), then strips the `ESC[200~`/`ESC[201~` markers xterm wraps a
+      paste in, in one linear pass — repeating `replace()` until none remain would be
+      quadratic on nested markers.
+    - `quotePath()` refuses paths with control characters, because no quoting makes them safe.
+  - **Paste ordering:** `terminal/pasteQueue.ts`'s `PasteQueue` keeps typed input (and Shift+Enter,
+    sent through `term.input()` precisely so it counts as input) behind a smart paste still
+    waiting on its clipboard round trip, and keeps overlapping pastes in the order they were asked
+    for rather than the order their reads happen to resolve in — a plain in-flight counter got this
+    wrong as soon as two Cmd+V's overlapped. A paste gives up after 1 s, not longer: xterm's own
+    DA/CPR replies queue behind a pending paste too.
+  - **Claude Code attaches an image only when a paste is one image path,** optionally
+    quoted and with a trailing space. Several files pasted at once reach Claude as paths
+    it can read.
 
 **WezTerm prototype (v0):** does 1–4 with text (TUI) panes. It's the behaviour
 reference for M2/M3; keep it working until Deck replaces it.
@@ -310,7 +391,7 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
   - **Windows:** a repo path with non-ASCII characters may hit the PowerShell
     code-page issue above as "Not a git repository".
 - **Security (M4):**
-  - Check the IPC sender frame.
+  - Check the IPC sender frame (`clipboard:paste` hands password-manager text to the renderer).
   - Load the renderer from a custom protocol, not `file://`.
   - Deny permission requests.
   - Set Electron fuses, after moving node-pty into a `utilityProcess` (its Windows
@@ -344,7 +425,21 @@ Checking the running app from a shell: with `--remoteDebuggingPort`, fetch
 `WebSocket`) and send `Runtime.evaluate` to read tab titles or row counts. The
 terminal itself is a WebGL canvas, so to read a shell's state, type a command
 that writes to a file. The dev app runs as process "Electron", the packaged one as
-"Deck"; both use the same userData, so quit one before starting the other.
+"Deck". Both use the same userData and so the same single-instance lock: with the
+installed Deck running, a dev launch hands its arguments (`--open` too) to it and quits.
+Give the dev build its own folder instead of quitting Franco's Deck:
+`npx electron-vite dev --remoteDebuggingPort 9333 --inspect 9229 -- --user-data-dir=<dir>`,
+and pass the same `--user-data-dir` to a second launch with `--open`. `--inspect` exposes
+the main process (evaluate through `process.mainModule.require`, since `require` isn't a
+global there).
+
+Single instance: if the running Deck doesn't acknowledge a second launch within about
+20 s (Chromium's ProcessSingleton), the second launch kills it and takes over. It was seen
+once, with an Intel build's slow first launch under Rosetta; a main-thread stall that long
+would cost the user's tabs.
+
+macOS kills a copy of a system binary (e.g. `/bin/cat` renamed to `claude`) started from
+the scratch folder; build a stand-in with `swiftc` instead.
 
 ```bash
 # render prototype panes once, no TTY needed

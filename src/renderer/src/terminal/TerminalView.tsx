@@ -1,13 +1,17 @@
-import { memo, useEffect, useRef, useState } from 'react'
+import { memo, type RefObject, useEffect, useRef, useState } from 'react'
 import { FitAddon } from '@xterm/addon-fit'
 import { SearchAddon } from '@xterm/addon-search'
 import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
+import { quotePaths } from '@shared/quote'
 import type { TerminalPatch, TerminalTab } from '../tabs/tabs'
+import { runsClaude } from '../tabs/title'
 import { keyAction } from './keys'
 import { parseOsc7, parseSetUserVar } from './osc'
+import { pasteSafe } from './paste'
+import { PasteQueue } from './pasteQueue'
 import { SearchBar } from './SearchBar'
 import { FONT_FAMILY, FONT_SIZE, theme } from './theme'
 
@@ -18,13 +22,15 @@ interface Props {
   findRequest: number
   /** Windows build number; lets xterm reflow ConPTY output on resize. */
   windowsBuild?: number
+  /** Set while mounted: pastes text into this terminal (the clipboard card's Add) and focuses it. */
+  pasteRef?: RefObject<((text: string) => void) | null>
   onUpdate(id: string, patch: TerminalPatch): void
   onClose(id: string): void
 }
 
 /** One xterm and one pty per mount. Hidden tabs stay mounted (display: none)
  *  so their scrollback survives. */
-export const TerminalView = memo(function TerminalView({ tab, active, findRequest, windowsBuild, onUpdate, onClose }: Props) {
+export const TerminalView = memo(function TerminalView({ tab, active, findRequest, windowsBuild, pasteRef, onUpdate, onClose }: Props) {
   const hostRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const fitRef = useRef<FitAddon | null>(null)
@@ -35,11 +41,17 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
     callbacks.current = { onUpdate, onClose }
   })
 
-  // Runs once per mount: the tab's id, starting cwd and command are read here only.
+  // The paste handler, set up once per mount, needs the tab's latest process and title.
+  const tabRef = useRef(tab)
+  useEffect(() => {
+    tabRef.current = tab
+  })
+
+  // Runs once per mount: the tab's id, starting cwd, command and pasteRef are read here only.
   useEffect(() => {
     const host = hostRef.current
     if (!host) return
-    const { platform, pty, app } = window.deck
+    const { platform, pty, app, clipboard } = window.deck
     const id = tab.id
     const update = (patch: TerminalPatch) => callbacks.current.onUpdate(id, patch)
     const close = () => callbacks.current.onClose(id)
@@ -83,6 +95,31 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
     let title = tab.title
     // Events that arrive before create() resolves; replayed for our pty only.
     const early: { pid: string; run: () => void }[] = []
+    // Cmd/Ctrl+V: main reads the clipboard. Copied files paste as quoted paths and, with Claude
+    // running, an image as a saved PNG's path (Claude attaches it); text pastes as it is.
+    const paste = (text: string) => term.paste(pasteSafe(text))
+    // A smart paste is a clipboard IPC round trip: keys typed right after pressing Cmd/Ctrl+V (or
+    // a snippet tool sending it followed at once by Return) can otherwise reach the pty before the
+    // pasted text does. The queue holds term.onData's input behind a paste still waiting on its
+    // clipboard read, and keeps pastes in the order they were asked for even if a later one's read
+    // finishes first.
+    const queue = new PasteQueue(
+      (data) => {
+        if (!disposed && ptyId && !exited) pty.write(ptyId, data)
+      },
+      (text) => {
+        if (!disposed) paste(text)
+      },
+    )
+    // One timer per in-flight smart paste (its id from queue.begin()); cleared on reply, timeout,
+    // or unmount, so a stuck read can't hold typed keys forever or fire after disposal.
+    const pasteTimers = new Map<number, ReturnType<typeof setTimeout>>()
+    const clearPasteTimer = (id: number) => {
+      const timer = pasteTimers.get(id)
+      if (timer === undefined) return
+      clearTimeout(timer)
+      pasteTimers.delete(id)
+    }
 
     const handleExit = (code: number) => {
       exited = true
@@ -109,9 +146,11 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
 
     const disposables = [
       term.onData((data) => {
-        if (!exited) {
-          if (ptyId) pty.write(ptyId, data)
-        } else if (data === '\r') close()
+        if (exited) {
+          if (data === '\r') close()
+        } else {
+          queue.input(data)
+        }
       }),
       term.onResize(({ cols, rows }) => {
         if (ptyId && !exited) pty.resize(ptyId, cols, rows)
@@ -142,6 +181,77 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
       }),
     ]
 
+    // Drops and the card's Add call paste() directly: it still emits through term.onData, so a
+    // paste still pending in the queue keeps its place ahead of it, same as any typed key.
+    const smartPaste = () => {
+      if (exited) return // don't use up the card's item, or save an image, for a dead tab
+      const { process: name, title: current } = tabRef.current
+      const id = queue.begin()
+      // xterm's own replies (DA, cursor reports) also queue behind a pending paste, so don't make
+      // them wait long: give up after 1 s rather than risk freezing input on a stuck clipboard read.
+      const timer = setTimeout(() => {
+        pasteTimers.delete(id)
+        console.warn('paste: no answer within 1 s; the text was dropped')
+        queue.settle(id, null)
+      }, 1000)
+      pasteTimers.set(id, timer)
+      clipboard.paste({ claude: runsClaude(name, current) }).then(
+        (result) => {
+          clearPasteTimer(id)
+          if (!result) return queue.settle(id, null)
+          if ('text' in result) queue.settle(id, result.text || null)
+          else {
+            console.warn('paste:', result.error)
+            queue.settle(id, null)
+          }
+        },
+        (err: unknown) => {
+          clearPasteTimer(id)
+          console.warn('paste failed', err)
+          queue.settle(id, null)
+        },
+      )
+    }
+    // macOS Cmd+V (the Edit menu's Paste) and Windows' Shift+Insert arrive as a paste event on
+    // xterm's textarea; take it here, in the capture phase, so xterm's own, unfiltered paste
+    // handler never runs.
+    const onPaste = (e: ClipboardEvent) => {
+      e.preventDefault()
+      e.stopPropagation()
+      smartPaste()
+    }
+    // Files dropped from Finder or Explorer: their quoted paths, like pasting copied files.
+    const onDragOver = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('Files')) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+    const onDrop = (e: DragEvent) => {
+      if (!e.dataTransfer?.types.includes('Files')) return
+      e.preventDefault() // even with no File objects below, or Chromium's own drop handling runs
+      const files = Array.from(e.dataTransfer.files)
+      if (!files.length) return
+      const paths = files.map((f) => app.pathForFile(f)).filter((p) => p !== '')
+      const text = quotePaths(paths, platform) // null: none, or a name with control characters
+      if (text === null) {
+        if (paths.length) console.warn("drop: a file name has control characters, so it isn't pasted")
+        return
+      }
+      if (!exited) {
+        paste(text + ' ') // trailing space, like Terminal.app/iTerm2: two drops don't run together
+        term.focus()
+      }
+    }
+    host.addEventListener('paste', onPaste, true)
+    host.addEventListener('dragover', onDragOver)
+    host.addEventListener('drop', onDrop)
+    const handle = (text: string) => {
+      if (exited) return
+      paste(text)
+      term.focus()
+    }
+    if (pasteRef) pasteRef.current = handle
+
     term.attachCustomKeyEventHandler((e) => {
       if (e.isComposing) return true
       const action = keyAction(e, platform, term.hasSelection())
@@ -149,14 +259,14 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
       if (action === 'menu') return false // left uncancelled so the menu accelerator fires
       e.preventDefault() // no keypress after it, and no browser copy/paste on top of ours
       if (action === 'newline') {
-        if (ptyId && !exited) pty.write(ptyId, '\x1b\r')
+        // Through term.input(), not straight to the pty: it fires onData like any other key, so a
+        // Shift+Enter right after Cmd+V still waits behind that paste instead of jumping ahead.
+        if (ptyId && !exited) term.input('\x1b\r')
       } else if (action === 'copy') {
         if (term.hasSelection()) app.copyText(term.getSelection()) // Ctrl+Shift+C alone keeps the clipboard
         term.clearSelection()
       } else if (action === 'paste') {
-        void app.readText().then((text) => {
-          if (text && !disposed) term.paste(text)
-        })
+        smartPaste()
       } else {
         setSearch((s) => ({ open: true, focus: s.focus + 1 }))
       }
@@ -199,7 +309,13 @@ export const TerminalView = memo(function TerminalView({ tab, active, findReques
       observer.disconnect()
       for (const off of unsubscribe) off()
       for (const d of disposables) d.dispose()
+      for (const timer of pasteTimers.values()) clearTimeout(timer)
+      pasteTimers.clear()
       if (ptyId && !exited) pty.kill(ptyId)
+      host.removeEventListener('paste', onPaste, true)
+      host.removeEventListener('dragover', onDragOver)
+      host.removeEventListener('drop', onDrop)
+      if (pasteRef?.current === handle) pasteRef.current = null
       term.dispose()
       termRef.current = null
       fitRef.current = null

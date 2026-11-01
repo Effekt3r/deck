@@ -161,7 +161,7 @@ input, textarea { user-select: text; }
    before the terminal goes below 280 px (TERMINAL_MIN in App.tsx). */
 .workspace { position: absolute; inset: 0; display: flex; background: var(--bg); }
 .git-pane { flex: 0 1 auto; display: flex; flex-direction: column; min-width: 240px; max-width: 55%; min-height: 0; }
-.claude-pane { flex: 0 1 auto; display: flex; flex-direction: column; min-width: 260px; max-width: 45%; min-height: 0; }
+.claude-pane { flex: 0 1 auto; display: flex; flex-direction: column; min-width: 260px; max-width: 45%; min-height: 0; background: var(--chrome); }
 
 .splitter { position: relative; z-index: 10; flex: none; background: var(--line); touch-action: none; }
 .splitter[aria-orientation='vertical'] { width: 1px; cursor: col-resize; }
