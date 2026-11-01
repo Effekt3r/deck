@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { homedir, release } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -106,7 +107,13 @@ async function start(): Promise<void> {
 
   registerGitIpc({ targetsFile: join(userData, 'git-targets.json') })
   registerClaudeIpc()
-  const clip = registerClipboardIpc({ tempDir: join(app.getPath('temp'), 'Deck clipboard'), platform: process.platform as Platform })
+  // Keyed by this instance's userData, not just shared machine temp: a dev build started with its
+  // own --user-data-dir must not clear or collide with the installed app's saved clipboard images.
+  const instance = createHash('sha1').update(userData).digest('hex').slice(0, 8)
+  const clip = registerClipboardIpc({
+    tempDir: join(app.getPath('temp'), 'Deck clipboard', instance),
+    platform: process.platform as Platform,
+  })
 
   Menu.setApplicationMenu(buildMenu((cmd) => send(IPC.appMenu, cmd)))
   win = createWindow()
