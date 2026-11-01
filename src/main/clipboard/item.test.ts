@@ -85,6 +85,16 @@ describe('previewOf', () => {
     expect(previewOf(text(line), 't4')).toMatchObject({ lines: [`${'z'.repeat(119)}…`] })
   })
 
+  it('text: C0/C1 control characters show as a middle dot, except tab', () => {
+    const line = 'a\x07b\x1bc\x9fd\te' // BEL, ESC, a C1 control, then a real tab
+    expect(previewOf(text(line), 't8')).toEqual({ id: 't8', kind: 'text', lines: ['a·b·c·d\te'], lineCount: 1 })
+  })
+
+  it('text: bidi overrides and isolates are removed, not shown as anything', () => {
+    const line = 'a‮b⁦c‎d‏' // RLO, LRI, LRM, RLM
+    expect(previewOf(text(line), 't9')).toEqual({ id: 't9', kind: 'text', lines: ['abcd'], lineCount: 1 })
+  })
+
   it('text: empty and single-line text each count as one line', () => {
     expect(previewOf(text(''), 't6')).toEqual({ id: 't6', kind: 'text', lines: [''], lineCount: 1 })
     expect(previewOf(text('abc'), 't7')).toEqual({ id: 't7', kind: 'text', lines: ['abc'], lineCount: 1 })

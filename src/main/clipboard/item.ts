@@ -65,6 +65,18 @@ function cutLine(line: string): string {
   return `${line.slice(0, cut)}…`
 }
 
+/** C0/C1 controls (tab excepted) render as boxes or nothing in the card; show a middle dot instead. */
+const CONTROL = /[\u0000-\u0008\u000a-\u001f\u0080-\u009f]/g
+/** Bidi overrides and isolates (LRM/RLM, LRE/RLE/PDF/LRO/RLO, LRI/RLI/FSI/PDI) are invisible but can
+ *  reorder the rest of the line on screen, so they're dropped rather than shown as anything. */
+const BIDI = /[‎‏‪-‮⁦-⁩]/g
+
+/** A preview line made safe to render as plain text: never the content itself, which pastes as the
+ *  user copied it. */
+function sanitizeLine(line: string): string {
+  return line.replace(CONTROL, '·').replace(BIDI, '')
+}
+
 /** The text's line count and its first `max` lines, counted with indexOf scans, without splitting
  *  or copying the whole text. CRLF, a lone CR and a lone LF each count as one break; a trailing
  *  break starts no further line. */
@@ -103,7 +115,7 @@ export function previewOf(content: ClipboardContent, id: string, image?: ImageIn
       }
     case 'text': {
       const { lines, lineCount } = firstLines(content.text, LINES)
-      return { id, kind: 'text', lines: lines.map(cutLine), lineCount }
+      return { id, kind: 'text', lines: lines.map((l) => sanitizeLine(cutLine(l))), lineCount }
     }
     case 'image':
       return { id, kind: 'image', width: image?.width ?? 0, height: image?.height ?? 0, thumbnail: image?.thumbnail ?? '' }
