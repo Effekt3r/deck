@@ -33,6 +33,10 @@ describe('resetText', () => {
     expect(resetText(Date.UTC(2026, 10, 3, 9, 0), now, utc)).toBe('resets tomorrow 09:00')
     expect(resetText(Date.UTC(2026, 10, 5, 9, 0), now, utc)).toBe('resets Thu 09:00')
   })
+  it('says "next" for a weekday a week or more away, which would otherwise read as today', () => {
+    expect(resetText(Date.UTC(2026, 10, 8, 9, 0), now, utc)).toBe('resets Sun 09:00')
+    expect(resetText(Date.UTC(2026, 10, 9, 9, 0), now, utc)).toBe('resets next Mon 09:00')
+  })
   it('says when a past window reset', () => {
     expect(resetText(Date.UTC(2026, 10, 2, 9, 0), now, utc)).toBe('reset at 09:00')
     expect(resetText(Date.UTC(2026, 10, 1, 23, 0), now, utc)).toBe('reset Sun 23:00')

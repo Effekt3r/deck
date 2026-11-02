@@ -57,14 +57,15 @@ export function toneOf(percent: number): Tone {
   return percent >= MAX ? 'max' : percent >= HIGH ? 'high' : 'ok'
 }
 
-/** When a window resets: counted down within 5 hours, else the time today, tomorrow or on a weekday. */
+/** When a window resets: counted down within 5 hours, else the time today, tomorrow or on a weekday
+ *  ('next Mon' a week or more away, which would otherwise read as today). */
 export function resetText(at: number, now: number, f: Formats): string {
   if (at <= now) return f.dayNumber(at) === f.dayNumber(now) ? `reset at ${f.clock(at)}` : `reset ${f.weekday(at)} ${f.clock(at)}`
   if (at - now < 5 * HOUR) return `resets in ${duration(at - now)}`
   const days = f.dayNumber(at) - f.dayNumber(now)
   if (days === 0) return `resets ${f.clock(at)}`
   if (days === 1) return `resets tomorrow ${f.clock(at)}`
-  return `resets ${f.weekday(at)} ${f.clock(at)}`
+  return `resets ${days >= 7 ? 'next ' : ''}${f.weekday(at)} ${f.clock(at)}`
 }
 
 /** How long ago Claude Code last reported. */
