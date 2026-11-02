@@ -155,4 +155,6 @@ deck/
      (macOS asks on Deck's behalf for anything run in a tab): Desktop, Documents
      and Downloads, removable and network volumes (`/Volumes/wyobi`), Local
      Network, Notifications. Ask for access whenever a project folder is added
-     (pinned or a scan root). Windows equivalents where they exist.
+     (pinned or a scan root). Windows equivalents where they exist. The
+     clipboard card's image previews open copied files themselves, so a file
+     from Downloads or a removable volume can prompt too.

@@ -26,7 +26,9 @@ Show a preview of image files too, and keep the names and the folder.
   - Quick Look takes 14–170 ms for a file it hasn't seen (a 25 MP PNG: 166 ms; HEIC: 126 ms) and
     about 3 ms after that.
   - A file that can't be previewed has no thumbnail: unreadable, not really an image, or no
-    thumbnailer on that OS.
+    thumbnailer on that OS. On macOS, Quick Look answers such a file with its type's icon
+    (1024×1024); a result larger than the requested box is taken for that icon and dropped.
+- **Windows:** off for now (see [After review](#after-review)); the card shows names, as today.
 - **Nothing else changes:**
   - what Add to Claude and Cmd/Ctrl+V insert;
   - the title ("1 file");
@@ -128,3 +130,19 @@ The renderer already keys Add state by id, so the second update changes nothing 
   wanted.
 - Previews in the Claude panel feed for prompts with `[Image #N]`.
 - The image's size in the card title: the OS thumbnail doesn't give it.
+
+## After review
+
+A code review on 2026-11-02 found three things. The changes:
+- **Icons:** on macOS, a corrupt, empty, unreadable or unknown image file got Quick Look's
+  generic document icon as its "preview". Empty files are now skipped, and a result larger
+  than the requested box is dropped (macOS only, since Windows' cache can return thumbnails
+  larger than asked).
+- **Windows:** off by default. Electron's Windows `createThumbnailFromPath` runs the thumbnail
+  cache synchronously on the main thread. A slow file stalls every terminal, and a stall over
+  1 s can lose a Ctrl+V: the renderer gives up while main still uses the item. Electron also
+  turns the bitmap into an icon masked by itself, which may make white transparent.
+  `DECK_FILE_THUMBNAILS=1` turns previews on so `docs/TESTING.md` step 18l can decide.
+- **Tests:** a test now pins the in-place update that `add()` depends on, with a mocked
+  `nativeImage` for `fileThumbnail`, and an IPC test for the Windows switch.
+

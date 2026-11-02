@@ -365,3 +365,33 @@ npx electron-vite dev --remoteDebuggingPort 9333 -- --user-data-dir="$TMPDIR/dec
   (`fileThumbnail`), noting the 1×/2× shape quirk. Update the DECK.md M5 bullet to say "image
   files get previews".
 - [ ] **Commit:** "Docs: image previews for copied files".
+
+---
+
+## Results (2026-11-02)
+
+- **Tasks 1–4 and 6:** done as planned. Tasks 2 and 3 share a commit, so every commit typechecks.
+- **Task 5** (dev app, macOS): each copy showed thumbnails of the right shape:
+  - one PNG: 240×146, shown 229×140;
+  - HEIC: 240×145;
+  - 24 MP JPEG: 240×160;
+  - three images: one 87 px tall row;
+  - two images and a PDF: the PDF in the list only;
+  - a PDF alone: no row;
+  - five images: three previews and "+2 more".
+
+  Add to Claude inserted all quoted paths. The user's clipboard was saved before and restored
+  after; that was checked by hash.
+- **Review:** see the spec's "After review".
+  - On macOS, corrupt and unknown files now get no preview.
+  - Windows is off unless `DECK_FILE_THUMBNAILS=1`.
+  - New tests: `image.test.ts` with a mocked `nativeImage`, an IPC test of the Windows switch,
+    and the `add()` race.
+  - Each test was checked against a deliberate regression:
+    - resizing Electron's image instead of its 1× PNG;
+    - no icon check, or the icon check on Windows;
+    - no empty-file check;
+    - replacing the item instead of updating it in place;
+    - the switch always on, or ignored.
+- **Final:** `npm test` passes, 532 tests.
+
