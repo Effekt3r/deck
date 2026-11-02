@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
-import { pathKey } from '../projects/config'
 import { renameRetrying } from '../fs/atomic'
+import { pathKey } from '../projects/config'
 
 /** repo root key → branch → ref. Maps, so a branch named `__proto__` is just a name. */
 type Targets = Map<string, Map<string, string>>

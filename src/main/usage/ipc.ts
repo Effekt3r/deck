@@ -62,9 +62,10 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
     if (platform !== 'win32' && script) await writeFile(join(dir, SCRIPT_FILE), script, 'utf8')
     await removeLeftovers(dir)
     await store.load()
+    // Watching before the first read: a report written in between is caught by one or the other.
+    stopWatching = watchReports(dir, () => void takeReport())
     await takeReport()
     await checkLink()
-    stopWatching = watchReports(dir, () => void takeReport())
   })().catch((err: unknown) => console.error('usage: starting failed', err))
 
   const change = (run: (command: string) => Promise<UsageLink>): Promise<UsageChange> => {
