@@ -1,8 +1,8 @@
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { claudeSettingsFile, connect, currentLink, disconnect } from './settings'
+import { claudeSettingsFile, connect, currentLink, disconnect, writeSettings } from './settings'
 
 const root = mkdtempSync(join(tmpdir(), 'deck-usage-settings-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
@@ -43,6 +43,7 @@ describe('connect and disconnect', () => {
     const o = setup()
     await connect({ ...o, replace: false })
     expect(read(o.file)).toEqual({ statusLine: { type: 'command', command: o.command } })
+    expect(existsSync(join(o.dir, 'settings.backup.json'))).toBe(false) // there was nothing to back up
     await disconnect(o)
     expect(read(o.file)).toEqual({})
   })
@@ -97,5 +98,81 @@ describe('connect and disconnect', () => {
     expect(lstatSync(o.file).isSymbolicLink()).toBe(true)
     expect(read(real).statusLine).toEqual({ type: 'command', command: o.command })
     expect(statSync(real).mode & 0o777).toBe(0o600)
+  })
+
+  it.skipIf(process.platform === 'win32')('leaves a link to a missing file alone, rather than putting a file in its place', async () => {
+    const o = setup()
+    const missing = join(root, `dotfiles-missing-${n}.json`)
+    symlinkSync(missing, o.file)
+    const message = `${o.file} links to a file that doesn't exist (${missing}), so Deck leaves it alone.`
+    expect(await currentLink(o.file, o.command)).toEqual({ state: 'error', message })
+    await expect(connect({ ...o, replace: false })).rejects.toThrow(message)
+    expect(lstatSync(o.file).isSymbolicLink()).toBe(true)
+    expect(existsSync(missing)).toBe(false)
+  })
+
+  it('reads a file that starts with a byte order mark', async () => {
+    const o = setup('\uFEFF{\n  "model": "opus"\n}\n') // as PowerShell 5.1 writes UTF-8
+    expect(await currentLink(o.file, o.command)).toEqual({ state: 'off' })
+    await connect({ ...o, replace: false })
+    expect(read(o.file)).toEqual({ model: 'opus', statusLine: { type: 'command', command: o.command } })
+  })
+
+  it('writes the file back with its own indentation, or two spaces when it has none', async () => {
+    const before = { model: 'opus', permissions: { allow: ['Bash'] } }
+    for (const indent of ['\t', '    ']) {
+      const o = setup(`${JSON.stringify(before, null, indent)}\n`)
+      await connect({ ...o, replace: false })
+      const after = { ...before, statusLine: { type: 'command', command: o.command } }
+      expect(readFileSync(o.file, 'utf8')).toBe(`${JSON.stringify(after, null, indent)}\n`)
+      await disconnect(o)
+      expect(readFileSync(o.file, 'utf8')).toBe(`${JSON.stringify(before, null, indent)}\n`)
+    }
+    const o = setup('{"model":"opus"}')
+    await connect({ ...o, replace: false })
+    expect(readFileSync(o.file, 'utf8')).toMatch(/^\{\n {2}"model": "opus",\n {2}"statusLine"/)
+  })
+
+  it('leaves a read-only file alone, and still reads it', async () => {
+    const o = setup('{"model":"opus"}')
+    await connect({ ...o, replace: false })
+    const connected = readFileSync(o.file, 'utf8')
+    chmodSync(o.file, 0o444)
+    try {
+      const message = `${o.file} is read-only, so Deck leaves it alone.`
+      expect(await currentLink(o.file, o.command)).toEqual({ state: 'connected' })
+      await expect(disconnect(o)).rejects.toThrow(message)
+      expect(readFileSync(o.file, 'utf8')).toBe(connected)
+      expect(statSync(o.file).mode & 0o777).toBe(0o444)
+
+      const other = setup('{"model":"opus"}')
+      chmodSync(other.file, 0o444)
+      await expect(connect({ ...other, replace: false })).rejects.toThrow(`${other.file} is read-only, so Deck leaves it alone.`)
+      expect(readFileSync(other.file, 'utf8')).toBe('{"model":"opus"}')
+      chmodSync(other.file, 0o644)
+    } finally {
+      chmodSync(o.file, 0o644)
+    }
+  })
+})
+
+describe('writeSettings', () => {
+  const changed = "Claude Code's settings changed while Deck was writing them; try again."
+
+  it('writes only over the text the new settings were made from', async () => {
+    const o = setup('{"model":"opus"}')
+    await expect(writeSettings(o.file, { model: 'sonnet' }, '{"model":"haiku"}')).rejects.toThrow(changed)
+    await expect(writeSettings(o.file, { model: 'sonnet' }, null)).rejects.toThrow(changed) // made when there was no file
+    expect(readFileSync(o.file, 'utf8')).toBe('{"model":"opus"}')
+    await writeSettings(o.file, { model: 'sonnet' }, '{"model":"opus"}')
+    expect(read(o.file)).toEqual({ model: 'sonnet' })
+  })
+
+  it('writes a missing file only while it is still missing', async () => {
+    const o = setup()
+    await expect(writeSettings(o.file, { model: 'sonnet' }, '{}')).rejects.toThrow(changed) // removed meanwhile
+    expect(existsSync(o.file)).toBe(false)
+    await writeSettings(o.file, { model: 'sonnet' }, null)
+    expect(read(o.file)).toEqual({ model: 'sonnet' })
   })
 })

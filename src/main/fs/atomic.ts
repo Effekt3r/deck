@@ -18,11 +18,12 @@ export async function renameRetrying(from: string, to: string): Promise<void> {
 }
 
 /** `text` written beside `file` and renamed over it, so a reader never sees half a file. `mode`
- *  (permission bits) is set on the new file before it takes the old one's place. */
+ *  (permission bits) is the new file's from the start, so a private file's copy is never readable
+ *  by others, and set again before it takes the old one's place, as the umask may have narrowed it. */
 export async function writeFileAtomic(file: string, text: string, mode?: number): Promise<void> {
   const tmp = `${file}.${process.pid}.${++seq}.tmp`
   try {
-    await writeFile(tmp, text, 'utf8')
+    await writeFile(tmp, text, { encoding: 'utf8', mode })
     if (mode !== undefined) await chmod(tmp, mode)
     await renameRetrying(tmp, file)
   } catch (err) {
