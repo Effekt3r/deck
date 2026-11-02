@@ -59,7 +59,7 @@ Windows installer; publish it once it looks right.
   - **Feed:** prompts, collapsible thinking, replies as markdown and tool calls.
     It follows the end, pauses when you scroll up, and resumes from "↓ N new".
   - **Picker:** follows the folder's newest session; ▾ pins another one. Deck only
-    reads Claude's files.
+    reads Claude's files, apart from the status line the usage card's Connect adds.
   - **Clipboard:** what you just copied in another app (an image, files, text) shows
     under the panel with **Add to Claude**, which puts it into the prompt without
     sending. Cmd/Ctrl+V does the same in any tab: copied files paste as quoted paths
@@ -67,6 +67,12 @@ Windows installer; publish it once it looks right.
     Claude running, a copied image instead pastes as `[Image #N]`. Dropping files on
     the terminal pastes their paths the same way. Deck looks at the clipboard only
     while it's in front, never shows a password manager's copy, and keeps no history.
+  - **Usage:** your plan's weekly and 5-hour limits as a donut above the clipboard card,
+    with when each resets. It updates whenever Claude replies. **Connect** on the card
+    makes Deck Claude Code's status line, which is how Claude Code hands out these
+    numbers: it adds a `statusLine` to `~/.claude/settings.json`, and Claude Code then
+    hides its footer hints. **Disconnect** puts back what was there and forgets the
+    numbers.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 

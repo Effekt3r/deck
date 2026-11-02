@@ -1,6 +1,8 @@
 import { Component, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ErrorInfo, type MouseEvent, type ReactNode } from 'react'
 import type { ClaudeAgent, ClaudeSnapshot, ClaudeStatus, ClaudeTodo } from '@shared/types'
 import { baseName, displayPath } from '../git/format'
+import { useStoredFlag, useTick } from '../hooks'
+import { Caret } from '../icons'
 import { Feed } from './Feed'
 import { SessionPicker } from './SessionPicker'
 import { agentsView, formatTokens, modeLabel, modelLabel, statusExtras, statusView, todoView } from './summary'
@@ -274,44 +276,9 @@ class Boundary extends Component<{ session: string; children: ReactNode }, { err
   }
 }
 
-/** A remembered on/off setting (localStorage; per window when that's unavailable). */
-function useStoredFlag(key: string, fallback: boolean): [boolean, () => void] {
-  const [value, setValue] = useState(() => {
-    try {
-      const stored = localStorage.getItem(key)
-      return stored === null ? fallback : stored === '1'
-    } catch {
-      return fallback
-    }
-  })
-  useEffect(() => {
-    try {
-      localStorage.setItem(key, value ? '1' : '0')
-    } catch {
-      // Storage unavailable: it lasts until the window closes.
-    }
-  }, [key, value])
-  return [value, useCallback(() => setValue((v) => !v), [])]
-}
-
-/** Re-renders every `ms`. */
-function useTick(ms: number): void {
-  const [, setTick] = useState(0)
-  useEffect(() => {
-    const timer = setInterval(() => setTick((t) => t + 1), ms)
-    return () => clearInterval(timer)
-  }, [ms])
-}
-
 const Chevron = () => (
   <svg className="cp-chevron" width="10" height="10" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2"
     strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
     <path d="M4 6l4 4 4-4" />
-  </svg>
-)
-
-const Caret = () => (
-  <svg className="cp-caret" width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-    <path d="M3.5 5.5h9L8 11z" />
   </svg>
 )

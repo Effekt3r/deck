@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/channels'
-import type { ClaudeSnapshot, ClipboardPreview, DeckApi, GitSnapshot, MenuCommand, Platform } from '@shared/types'
+import type { ClaudeSnapshot, ClipboardPreview, DeckApi, GitSnapshot, MenuCommand, Platform, UsageState } from '@shared/types'
 
 function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
   const listener = (_e: IpcRendererEvent, ...args: unknown[]) => cb(...(args as A))
@@ -50,6 +50,12 @@ const api: DeckApi = {
     add: (id) => ipcRenderer.invoke(IPC.clipboardAdd, id),
     paste: (opts) => ipcRenderer.invoke(IPC.clipboardPaste, opts),
     dismiss: (id) => ipcRenderer.send(IPC.clipboardDismiss, id),
+  },
+  usage: {
+    get: () => ipcRenderer.invoke(IPC.usageGet),
+    onChange: (cb) => on<[UsageState]>(IPC.usageChanged, cb),
+    connect: (replace) => ipcRenderer.invoke(IPC.usageConnect, replace),
+    disconnect: () => ipcRenderer.invoke(IPC.usageDisconnect),
   },
   app: {
     info: () => ipcRenderer.invoke(IPC.appInfo),

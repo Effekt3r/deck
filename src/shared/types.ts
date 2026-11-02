@@ -252,6 +252,39 @@ export type ClipboardPreview =
 /** Text for a terminal to paste, or why there is none. */
 export type InsertResult = { text: string } | { error: string }
 
+/** One of Claude's plan limits, as Claude Code's status line last reported it (`rate_limits`). */
+export interface UsageWindow {
+  /** 0–100. */
+  usedPercentage: number
+  /** When the window resets: ms since the epoch. */
+  resetsAt: number
+}
+
+/** Deck and Claude Code's status line, which is how Deck gets the numbers. */
+export type UsageLink =
+  /** Deck's command is the status line in Claude Code's user settings. */
+  | { state: 'connected' }
+  /** No status line is set. */
+  | { state: 'off' }
+  /** Another status line is set: `command` is what it runs. */
+  | { state: 'other'; command: string }
+  /** Claude Code's settings can't be read, so Deck won't write them. */
+  | { state: 'error'; message: string }
+
+/** What the usage card shows. */
+export interface UsageState {
+  link: UsageLink
+  /** Claude Code's user settings file, which Connect changes. */
+  settingsFile: string
+  fiveHour: UsageWindow | null
+  sevenDay: UsageWindow | null
+  /** When Claude Code last reported (ms since the epoch); null before its first report. */
+  updatedAt: number | null
+}
+
+/** Connect's or Disconnect's outcome: the new state, or what went wrong. */
+export type UsageChange = { state: UsageState } | { error: string }
+
 export interface DeckApi {
   platform: Platform
   pty: {
@@ -319,6 +352,17 @@ export interface DeckApi {
     paste(opts: { claude: boolean }): Promise<InsertResult | null>
     /** Hide the card's item `id`. */
     dismiss(id: string): void
+  }
+  usage: {
+    /** The usage card's state now. */
+    get(): Promise<UsageState>
+    /** A newer state: a report from Claude Code, a changed link, Connect or Disconnect. */
+    onChange(cb: (state: UsageState) => void): () => void
+    /** Makes Deck Claude Code's status line. `replace`: also when another status line is set
+     *  (Disconnect puts that one back). */
+    connect(replace: boolean): Promise<UsageChange>
+    /** Puts back the status line Claude Code had before Connect, or none. */
+    disconnect(): Promise<UsageChange>
   }
   app: {
     info(): Promise<AppInfo>

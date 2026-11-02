@@ -93,6 +93,21 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
      - if OneDrive is set up, copy an online-only image: no long freeze (a missing preview is
        fine).
      Report the results: they decide whether previews are turned on for Windows.
+18m. Usage card: a Claude tab's pane shows a **Usage** card above the clipboard card. Click
+     **Connect**: `%USERPROFILE%\.claude\settings.json` gains a `statusLine` whose command starts
+     `powershell -NoProfile`. Give Claude a small task: a second or two after its reply the card
+     shows the week ring (and the 5-hour one when Claude reports it) with reset times. They match
+     what `/usage` says.
+18n. Do 18m with Git for Windows installed (Claude Code then runs status lines through Git Bash)
+     and, if you can, on a PC without it (PowerShell). Claude Code never shows a status line run
+     that failed, so check the files instead: after a reply, `%APPDATA%\Deck\usage\statusline.json`
+     has just been written (its Date modified is a second or two after the reply), and no
+     `.statusline.*.tmp` files pile up beside it. Also do 18m from a Deck tab whose shell is
+     pwsh 7 (Deck uses pwsh when it's installed): a Windows PowerShell started from there
+     inherits pwsh 7's module path.
+18o. Click **Disconnect**: the `statusLine` leaves settings.json (or goes back to what was there
+     before), and the card offers Connect again. Connect once more: the card waits for Claude's
+     next reply instead of showing the old numbers.
 
 **Restart**
 

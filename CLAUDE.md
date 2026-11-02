@@ -1,6 +1,12 @@
 # Deck — project brief for Claude Code
 
-Owner: Franco Landman (Effekt Studios). Repo: `github.com/Effekt3r/deck` (private).
+Owner: Franco Landman (Effekt Studios). Repo: `github.com/Effekt3r/deck`, public since
+2026-11-02:
+- **Who can do what:** anyone can read and clone it. Only Franco can push or merge, and a
+  fork's pull request runs CI only once he approves it.
+- **What never goes in:** keys, certificates, session logs or client code. The Mac signing
+  secrets live in GitHub's Actions secrets.
+
 Read this first, then `docs/DECK.md` for the product spec and build plan.
 
 ## What Deck is
@@ -36,7 +42,9 @@ route and polish (M5) are next. Plans that built M1–M3:
 
 **M5, in progress:** the clipboard card and smart paste (spec:
 `docs/superpowers/specs/2026-10-31-clipboard-design.md`; built 2026-10-31/11-01), and previews
-of copied image files (`…/2026-11-02-clipboard-image-previews-design.md`). Windows to test.
+of copied image files (`…/2026-11-02-clipboard-image-previews-design.md`). Also the usage card
+(`…/2026-11-02-usage-card-design.md`, built 2026-11-02): Claude's plan limits above the clipboard
+card. Windows to test.
 
 | Path | Role |
 |---|---|
@@ -49,7 +57,8 @@ of copied image files (`…/2026-11-02-clipboard-image-previews-design.md`). Win
 | `src/main/git/` | the git runner (the only way Deck runs git), header summary, merge target, graph log, commit details, watcher + poll probe, merge-target overrides, `git:*` subscriptions |
 | `src/main/claude/` | session-log locator, incremental tail, the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions |
 | `src/main/clipboard/` | reads the clipboard (files, text, images; concealed copies skipped), decides what the card offers, saves pasted images for Claude |
-| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker), `clipboard/` (card, hook) |
+| `src/main/usage/` | Claude's plan usage: the status line command and script, Claude Code's settings (connect/disconnect), reading and merging reports, `usage.json` |
+| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker), `clipboard/` (card, hook), `usage/` (card, donut, view) |
 
 Things that aren't obvious from the code:
 - The app scrubs a parent Claude Code session's variables (`CLAUDECODE`, session
@@ -211,6 +220,50 @@ Things that aren't obvious from the code:
   - **Claude Code attaches an image only when a paste is one image path,** optionally
     quoted and with a trailing space. Several files pasted at once reach Claude as paths
     it can read.
+- Usage card (`src/main/usage/`):
+  - **Source:** Claude Code's status line input: `rate_limits.five_hour` / `seven_day`, each
+    `used_percentage` (0–100) and `resets_at` (Unix seconds). It comes only on Pro/Max/Ultra and
+    only after a session's first API response, and either window can be missing (2026-11-02,
+    2.1.283: only `seven_day` came).
+  - **Never Claude's login:** Deck never reads Claude Code's OAuth token or calls `/api/oauth/usage`,
+    which is what `/usage` does. Anthropic's terms forbid other apps collecting or using Claude.ai
+    credentials.
+  - **Connect** writes `statusLine` into Claude Code's user settings
+    (`$CLAUDE_CONFIG_DIR` or `~/.claude`, then `settings.json`):
+    - key order, indentation and the file's mode are kept, and a symlink is followed;
+    - the old value goes to `userData/usage/connection.json` for Disconnect, and the text Deck read
+      to `settings.backup.json` (0600);
+    - Deck never writes a settings file it can't parse, a read-only one or a link to a missing
+      file, and reads the file again just before writing: if it changed meanwhile, Connect or
+      Disconnect fails with "try again" rather than lose that change;
+    - while connected, Claude Code hides its footer hints ("esc to interrupt").
+  - **Disconnect** also forgets the numbers, and removes the last `statusline.json`, which the next
+    focus would otherwise read back in.
+  - **Connected** means the settings' command equals this Deck's. That command holds the userData
+    path, so a dev build started with `--user-data-dir` is another Deck.
+  - **The command:**
+    - **macOS:** `/bin/sh '<userData>/usage/statusline.sh'`, which writes a temp file and `mv`s it
+      over `statusline.json`.
+    - **Windows:** inline `powershell -NoProfile -NonInteractive -Command "…"`. The Restricted
+      policy won't run a `.ps1`, and Deck doesn't pass `-ExecutionPolicy Bypass`. Claude Code runs
+      the command through Git Bash, or PowerShell when that's missing, so it has no `$`, backtick,
+      `"` or backslash. Git Bash's MSYS2 path conversion skips any argument holding `[`, `]` or
+      `'`, so its `C:/…` paths arrive unchanged. .NET calls only, no cmdlets: a Windows PowerShell
+      started under pwsh 7 (a Deck tab's shell when it's installed) inherits pwsh 7's
+      `PSModulePath`, and `Move-Item` then fails to load. Stdin is read as UTF-8, not in the
+      console code page. CI's Windows job runs it through both shells (from pwsh 7, GitHub's
+      default shell); untested from a real Claude Code session on Windows.
+  - **Merging:** within a window (reset times under an hour apart) a higher or equal percentage
+    wins. A lower one is kept out for 10 minutes after the kept one was seen (`seenAt`, its
+    report's file time, kept in `usage.json`): an idle session's status line re-runs (on a mode
+    change or a reset) with its own older numbers. After that the lower one wins, since usage can
+    drop within a window (a plan upgrade, a reset by Anthropic), and the next real reply corrects
+    a stale one. The same file read again (at focus) isn't an update.
+  - **Testing without touching real settings:** start the dev build with `CLAUDE_CONFIG_DIR` set
+    to a temp folder whose `projects` links to `~/.claude/projects`. Feed it reports with a
+    throwaway `claude --settings <file with Deck's statusLine>` run. Checked that way on
+    2026-11-02: a real reply moved the card to "week 90%" within a second, and Disconnect left
+    the settings as they were.
 
 **WezTerm prototype (v0):** does 1–4 with text (TUI) panes. It's the behaviour
 reference for M2/M3; keep it working until Deck replaces it.

@@ -17,6 +17,8 @@ import { registerProjectsIpc } from './projects/ipc'
 import { PtyManager } from './pty/manager'
 import { installShellIntegration } from './shell/install'
 import { shellLaunch } from './shell/launch'
+import { registerUsageIpc } from './usage/ipc'
+import { claudeSettingsFile } from './usage/settings'
 import { createWindow } from './window'
 
 let win: BrowserWindow | null = null
@@ -120,10 +122,16 @@ async function start(): Promise<void> {
     tempDir: join(clipboardRoot, instance),
     platform: process.platform as Platform,
   })
+  const usage = registerUsageIpc({
+    dir: join(userData, 'usage'),
+    settingsFile: claudeSettingsFile(),
+    platform: process.platform as Platform,
+  })
 
   Menu.setApplicationMenu(buildMenu((cmd) => send(IPC.appMenu, cmd)))
   win = createWindow()
   clip.attach(win)
+  usage.attach(win)
   // A reload starts a fresh renderer whose tabs know nothing of the old shells.
   win.webContents.on('did-start-loading', () => {
     rendererReady = false
@@ -135,7 +143,10 @@ async function start(): Promise<void> {
     win = null
   })
   app.on('before-quit', () => ptys.killAll())
-  app.on('will-quit', () => clip.dispose())
+  app.on('will-quit', () => {
+    clip.dispose()
+    usage.dispose()
+  })
 }
 
 // A stray error in the main process is logged, not shown as a modal dialog over

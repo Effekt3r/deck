@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import type { AppInfo, ClipboardPreview, MenuCommand, ProjectAction } from '@shared/types'
+import type { AppInfo, ClipboardPreview, MenuCommand, ProjectAction, UsageState } from '@shared/types'
 import { ClaudePanel } from './claude/ClaudePanel'
 import { shownSession, toResume } from './claude/resume'
 import { useClaudeSession } from './claude/useClaude'
@@ -7,11 +7,14 @@ import { ClipboardCard } from './clipboard/ClipboardCard'
 import { useClipboardItem } from './clipboard/useClipboardItem'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
+import { useStoredFlag } from './hooks'
 import { ProjectsView } from './projects/ProjectsView'
 import { TabBar } from './tabs/TabBar'
 import { initialTabs, isTerminal, PROJECTS_ID, tabsReducer, type TerminalPatch, type TerminalTab } from './tabs/tabs'
 import { runsClaude, tabTitle } from './tabs/title'
 import { TerminalView } from './terminal/TerminalView'
+import { UsageCard } from './usage/UsageCard'
+import { useUsage } from './usage/useUsage'
 
 // Main holds --open folders until the first ready(); StrictMode runs effects twice.
 let readySent = false
@@ -28,6 +31,8 @@ const CLAUDE_MIN = 260
 const CLAUDE_MAX_SHARE = 0.45
 /** What a drag leaves the terminal when both panels are open (and styles.css: .terminal-view). */
 const TERMINAL_MIN = 280
+/** The usage card's fold, shared by every tab. */
+const USAGE_OPEN_KEY = 'deck.usageOpen'
 
 /** `px` within min … share of the window, and within `room` (what the other panel and the terminal leave). */
 const clampWidth = (px: number, min: number, share: number, room = Infinity) =>
@@ -46,6 +51,9 @@ export function App() {
   const [claudeToggles, setClaudeToggles] = useState<Record<string, number>>({})
   /** What was just copied, offered under the Claude panel of tabs where Claude runs. */
   const clipItem = useClipboardItem()
+  /** Claude's plan usage, shown at the bottom of every Claude pane, which all fold together. */
+  const usage = useUsage()
+  const [usageOpen, toggleUsage] = useStoredFlag(USAGE_OPEN_KEY, true)
 
   // Menu commands and IPC events read the latest state through refs.
   const stateRef = useRef(state)
@@ -158,7 +166,8 @@ export function App() {
         {terminals.map((tab) => (
           <Workspace key={tab.id} tab={tab} active={tab.id === state.active} home={info?.home ?? ''}
             gitWidth={gitWidth} claudeWidth={claudeWidth} windowsBuild={info?.windowsBuild}
-            findRequest={findRequests[tab.id] ?? 0} claudeToggle={claudeToggles[tab.id] ?? 0} clipItem={clipItem}
+            findRequest={findRequests[tab.id] ?? 0} claudeToggle={claudeToggles[tab.id] ?? 0} clipItem={clipItem} usage={usage}
+            usageOpen={usageOpen} onUsageToggle={toggleUsage}
             onGitWidth={storeGitWidth} onClaudeWidth={storeClaudeWidth} onUpdate={update} onClose={close} />
         ))}
       </main>
@@ -180,6 +189,11 @@ interface WorkspaceProps {
   windowsBuild?: number
   /** The clipboard card's item (one for the window). */
   clipItem: ClipboardPreview | null
+  /** Claude's plan usage (one for the window). */
+  usage: UsageState | null
+  /** The usage card is unfolded (one flag for the window). */
+  usageOpen: boolean
+  onUsageToggle(): void
   /** A drag ended (or a reset): clamp, store and share the width. */
   onGitWidth(px: number): void
   onClaudeWidth(px: number): void
@@ -193,7 +207,7 @@ interface WorkspaceProps {
  *  with its splitter. Inactive tabs stay mounted. */
 const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const { tab, active, home, gitWidth, claudeWidth, findRequest, claudeToggle, windowsBuild, clipItem } = props
-  const { onGitWidth, onClaudeWidth, onUpdate, onClose } = props
+  const { usage, usageOpen, onUsageToggle, onGitWidth, onClaudeWidth, onUpdate, onClose } = props
   const repo = tab.vars.GIT_REPO ?? ''
   const showGit = repo !== '' && !tab.gitHidden
   // Claude logs under the folder it was started in: the tab's cwd, which stays put while
@@ -232,6 +246,10 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     window.deck.clipboard.dismiss(id)
     // × via the keyboard leaves focus on the card's button, about to unmount: give it to the terminal.
     if (claudeRef.current?.contains(document.activeElement)) rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
+  }, [])
+  /** The usage card lost the keyboard to nowhere (its button went): the terminal gets it. */
+  const focusTerminal = useCallback(() => {
+    rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
   }, [])
 
   // Hidden for the repo it was hidden in: like the prototype's q, entering another repo shows it again.
@@ -324,6 +342,9 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
         <div className="claude-pane" ref={claudeRef} style={{ width: claudeDrag ?? claudeWidth }}>
           <ClaudePanel folder={folder} snapshot={claude.snapshot} phase={claude.phase} error={claude.error}
             claudeRuns={claudeRuns} active={active} home={home} onRetry={claude.retry} />
+          {usage && (
+            <UsageCard state={usage} home={home} open={usageOpen} onToggle={onUsageToggle} onFocusLost={focusTerminal} />
+          )}
           {claudeRuns && clipItem && (
             <ClipboardCard item={clipItem} home={home} busy={clipState?.busy ?? false} error={clipState?.error ?? null}
               onAdd={addClip} onDismiss={dismissClip} />
