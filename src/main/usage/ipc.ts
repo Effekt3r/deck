@@ -1,8 +1,9 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type BrowserWindow, ipcMain } from 'electron'
 import { IPC } from '@shared/channels'
-import type { Platform, UsageChange, UsageLink, UsageState } from '@shared/types'
+import type { Platform, UsageChange, UsageLink, UsageState, UsageWindow } from '@shared/types'
+import type { SeenWindow } from './merge'
 import { connect, currentLink, disconnect } from './settings'
 import { REPORT_FILE, SCRIPT_FILE, statusLineCommand, statusLineScript } from './statusline'
 import { UsageStore } from './store'
@@ -37,7 +38,7 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
 
   const state = (): UsageState => {
     const { windows, updatedAt } = store.get()
-    return { link, settingsFile, fiveHour: windows.five_hour ?? null, sevenDay: windows.seven_day ?? null, updatedAt }
+    return { link, settingsFile, fiveHour: shown(windows.five_hour), sevenDay: shown(windows.seven_day), updatedAt }
   }
   const push = () => {
     if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(IPC.usageChanged, state())
@@ -53,6 +54,13 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
   const takeReport = async () => {
     const read = await readReportFile(join(dir, REPORT_FILE))
     if (read && store.add(read.report, read.at)) push()
+  }
+  /** After Disconnect, so a later Connect waits for Claude's next report rather than showing old
+   *  numbers. The last report goes too: the next focus would read it back in. */
+  const forget = async () => {
+    store.clear()
+    await rm(join(dir, REPORT_FILE), { force: true })
+      .catch((err: unknown) => console.error('usage: removing the last report failed', err))
   }
 
   const ready = (async () => {
@@ -73,7 +81,8 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
       await ready
       try {
         if (!command) throw new Error(unusable)
-        setLink(await run(command))
+        link = await run(command)
+        push() // even when the link is the same: Disconnect forgets the numbers too
         return { state: state() }
       } catch (err) {
         await checkLink() // whatever got written, the card shows what the settings say now
@@ -90,7 +99,12 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
   })
   ipcMain.handle(IPC.usageConnect, (_e, replace: unknown) =>
     change((cmd) => connect({ file: settingsFile, command: cmd, dir, replace: replace === true })))
-  ipcMain.handle(IPC.usageDisconnect, () => change((cmd) => disconnect({ file: settingsFile, command: cmd, dir })))
+  ipcMain.handle(IPC.usageDisconnect, () =>
+    change(async (cmd) => {
+      const next = await disconnect({ file: settingsFile, command: cmd, dir })
+      await forget()
+      return next
+    }))
 
   return {
     attach(w) {
@@ -107,3 +121,7 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
     },
   }
 }
+
+/** A kept window as the card gets it: when it was seen stays in main. */
+const shown = (w: SeenWindow | undefined): UsageWindow | null =>
+  w ? { usedPercentage: w.usedPercentage, resetsAt: w.resetsAt } : null

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -64,8 +64,14 @@ describe('registerUsageIpc', () => {
       renameSync(join(dir, '.statusline.1.tmp'), join(dir, 'statusline.json'))
       await vi.waitFor(() => expect(sent.at(-1)?.sevenDay).toEqual({ usedPercentage: 85, resetsAt: 1_793_653_200_000 }), { timeout: 3000 })
 
-      expect(await call<UsageChange>(IPC.usageDisconnect)).toMatchObject({ state: { link: { state: 'off' }, sevenDay: { usedPercentage: 85 } } })
+      // Disconnect forgets the numbers, and the last report too, which the next focus would read back in.
+      expect(await call<UsageChange>(IPC.usageDisconnect)).toEqual({
+        state: { link: { state: 'off' }, settingsFile, fiveHour: null, sevenDay: null, updatedAt: null },
+      })
+      expect(sent.at(-1)).toMatchObject({ link: { state: 'off' }, sevenDay: null, updatedAt: null })
       expect(JSON.parse(readFileSync(settingsFile, 'utf8'))).toEqual({ model: 'opus' })
+      expect(existsSync(join(dir, 'statusline.json'))).toBe(false)
+      await vi.waitFor(() => expect(JSON.parse(readFileSync(join(dir, 'usage.json'), 'utf8'))).toEqual({ windows: {}, updatedAt: null }))
     } finally {
       usage.dispose()
     }
