@@ -4,6 +4,24 @@ Each version's section becomes the notes of its GitHub release
 (`.github/workflows/release.yml`), so write it for the people installing Deck.
 Headings are `## <version> — <date>`, with the version as in `package.json`.
 
+## 0.3.2 — 2026-11-02
+
+See your Claude plan usage without typing `/usage`.
+
+- **Usage card:** your weekly and 5-hour limits as a donut at the bottom of the
+  Claude panel, above the clipboard card, with when each resets. It updates a
+  second after any Claude reply, turns amber from 75% and red from 90%, and
+  folds to one line.
+- **Connect** on the card makes Deck Claude Code's status line, which is how
+  Claude Code hands out these numbers. It adds a `statusLine` to
+  `~/.claude/settings.json`, and Claude Code then hides its footer hints ("esc
+  to interrupt"). **Disconnect** puts back what was there. Deck never reads your
+  Claude login.
+
+**Updating from 0.3.1:** quit Deck (your tabs close), open the new `.dmg` and drag
+Deck to Applications, replacing the old one. Windows: the installer is still
+unsigned; choose **More info → Run anyway**.
+
 ## 0.3.1 — 2026-11-02
 
 - **Image previews in the clipboard card:** image files you copy in Finder now show
