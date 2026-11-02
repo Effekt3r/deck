@@ -4,6 +4,19 @@ Each version's section becomes the notes of its GitHub release
 (`.github/workflows/release.yml`), so write it for the people installing Deck.
 Headings are `## <version> — <date>`, with the version as in `package.json`.
 
+## 0.3.1 — 2026-11-02
+
+- **Image previews in the clipboard card:** image files you copy in Finder now show
+  a preview above their names, as a screenshot already did. Two or three images
+  share a row. Any format Finder can preview works, HEIC included. On Windows the
+  card still shows names only, for now.
+- The first time you copy an image from Downloads, Desktop or an external drive,
+  macOS may ask whether Deck can open files there: the preview needs it.
+
+**Updating from 0.3.0:** quit Deck (your tabs close), open the new `.dmg` and drag
+Deck to Applications, replacing the old one. Windows: the installer is still
+unsigned; choose **More info → Run anyway**.
+
 ## 0.3.0 — 2026-11-01
 
 Copy something, then add it to Claude in one click.
