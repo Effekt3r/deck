@@ -2,7 +2,7 @@ import { tmpdir } from 'node:os'
 import { join, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
-import { type ClipboardContent, filePathsFromUriList, fingerprintOf, previewOf } from './item'
+import { type ClipboardContent, filePathsFromUriList, fingerprintOf, isImageFile, previewOf } from './item'
 
 /** Native absolute paths on every OS, so file URLs round-trip on macOS and Windows alike. */
 const folder = join(tmpdir(), 'deck clip')
@@ -134,5 +134,20 @@ describe('fingerprintOf', () => {
   it('tells concealed text from the same text unconcealed, and nothing from anything', () => {
     expect(fingerprintOf(text('pw', true))).not.toBe(fingerprintOf(text('pw')))
     expect(fingerprintOf(null)).toBe('empty')
+  })
+})
+
+describe('isImageFile', () => {
+  it('knows image files by their extension, in any case', () => {
+    for (const p of ['/a/shot.png', 'C:\\x\\Photo.JPG', '/a/b.jpeg', '/a/c.heic', '/a/d.HEIF', '/a/e.webp',
+      '/a/f.gif', '/a/g.tif', '/a/h.tiff', '/a/i.bmp', '/a/j.avif', '/a/k.svg']) {
+      expect(isImageFile(p), p).toBe(true)
+    }
+  })
+
+  it('leaves out other files, and names that only contain an image extension', () => {
+    for (const p of ['/a/spec.pdf', '/a/png', '/a/shot.png.txt', '/a/archive.tar.gz', '/a/Makefile', '/a/x.pngx']) {
+      expect(isImageFile(p), p).toBe(false)
+    }
   })
 })

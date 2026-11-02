@@ -41,6 +41,14 @@ export function filePathsFromUriList(list: string): string[] {
   return paths
 }
 
+/** Image formats Finder and Explorer can show a thumbnail of. */
+const IMAGE_FILE = /\.(png|jpe?g|gif|webp|hei[cf]|avif|bmp|tiff?|svg)$/i
+
+/** The card previews this file as an image (judged by its extension). */
+export function isImageFile(path: string): boolean {
+  return IMAGE_FILE.test(path)
+}
+
 /** A key made once per run; see fingerprintOf. */
 const KEY = randomBytes(32)
 
