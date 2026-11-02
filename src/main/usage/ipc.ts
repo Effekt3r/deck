@@ -1,8 +1,9 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { type BrowserWindow, ipcMain } from 'electron'
 import { IPC } from '@shared/channels'
 import type { Platform, UsageChange, UsageLink, UsageState, UsageWindow } from '@shared/types'
+import { writeFileAtomic } from '../fs/atomic'
 import type { SeenWindow } from './merge'
 import { connect, currentLink, disconnect } from './settings'
 import { REPORT_FILE, SCRIPT_FILE, statusLineCommand, statusLineScript } from './statusline'
@@ -33,8 +34,15 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
   let link: UsageLink = { state: 'off' }
   let win: BrowserWindow | null = null
   let stopWatching = () => {}
-  /** Connect and Disconnect each read, then write, Claude Code's settings: one at a time. */
-  let changing: Promise<unknown> = Promise.resolve()
+  let disposed = false
+  /** Connect, Disconnect and the check when the window comes to the front each read Claude Code's
+   *  settings, then set the link: one at a time, so an older read never lands after a newer one. */
+  let queue: Promise<unknown> = Promise.resolve()
+  const serial = <T>(run: () => Promise<T>): Promise<T> => {
+    const result = queue.then(run)
+    queue = result.catch(() => {})
+    return result
+  }
 
   const state = (): UsageState => {
     const { windows, updatedAt } = store.get()
@@ -63,21 +71,37 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
       .catch((err: unknown) => console.error('usage: removing the last report failed', err))
   }
 
-  const ready = (async () => {
-    await mkdir(dir, { recursive: true })
-    // Written at every start, so a newer script reaches a Deck that is connected already.
+  /** macOS and Linux: the script the command runs. Written only when it changed, and by a rename, so
+   *  a status line run under way never reads half of it. */
+  const writeScript = async () => {
     const script = statusLineScript(dir)
-    if (platform !== 'win32' && script) await writeFile(join(dir, SCRIPT_FILE), script, 'utf8')
-    await removeLeftovers(dir)
-    await store.load()
-    // Watching before the first read: a report written in between is caught by one or the other.
-    stopWatching = watchReports(dir, () => void takeReport())
-    await takeReport()
-    await checkLink()
-  })().catch((err: unknown) => console.error('usage: starting failed', err))
+    if (platform === 'win32' || !script) return
+    const file = join(dir, SCRIPT_FILE)
+    if ((await readFile(file, 'utf8').catch(() => null)) !== script) await writeFileAtomic(file, script)
+  }
+  /** One step of starting: a failing one (a script Deck can't write) leaves the others to run. */
+  const step = async (what: string, run: () => Promise<unknown>) => {
+    try {
+      await run()
+    } catch (err) {
+      console.error(`usage: ${what} failed`, err)
+    }
+  }
 
-  const change = (run: (command: string) => Promise<UsageLink>): Promise<UsageChange> => {
-    const result = changing.then(async (): Promise<UsageChange> => {
+  const ready = (async () => {
+    await step('creating the usage folder', () => mkdir(dir, { recursive: true }))
+    // Checked at every start, so a newer script reaches a Deck that is connected already.
+    await step('writing the status line script', writeScript)
+    await step('removing leftovers', () => removeLeftovers(dir))
+    await step('reading usage.json', () => store.load())
+    // Watching before the first read: a report written in between is caught by one or the other.
+    if (!disposed) stopWatching = watchReports(dir, () => void takeReport())
+    await step('reading the report', takeReport)
+    await step("reading Claude Code's settings", checkLink)
+  })()
+
+  const change = (run: (command: string) => Promise<UsageLink>): Promise<UsageChange> =>
+    serial(async () => {
       await ready
       try {
         if (!command) throw new Error(unusable)
@@ -89,9 +113,6 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
         return { error: err instanceof Error ? err.message : String(err) }
       }
     })
-    changing = result
-    return result
-  }
 
   ipcMain.handle(IPC.usageGet, async () => {
     await ready
@@ -110,13 +131,18 @@ export function registerUsageIpc({ dir, settingsFile, platform }: UsageIpcOption
     attach(w) {
       if (win) throw new Error('registerUsageIpc: attach() runs once')
       win = w
-      // Claude Code's settings may have changed while Deck was in the background, and a report the
-      // watch missed is read again.
+      // Claude Code's settings may have changed while Deck was in the background (checked in turn
+      // with Connect and Disconnect), and a report the watch missed is read again.
       w.on('focus', () => {
-        void ready.then(() => Promise.all([checkLink(), takeReport()]))
+        serial(async () => {
+          await ready
+          await checkLink()
+        }).catch((err: unknown) => console.error("usage: reading Claude Code's settings failed", err))
+        void ready.then(takeReport)
       })
     },
     dispose() {
+      disposed = true
       stopWatching()
     },
   }
