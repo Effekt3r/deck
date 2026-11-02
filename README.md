@@ -71,7 +71,8 @@ Windows installer; publish it once it looks right.
     with when each resets. It updates whenever Claude replies. **Connect** on the card
     makes Deck Claude Code's status line, which is how Claude Code hands out these
     numbers: it adds a `statusLine` to `~/.claude/settings.json`, and Claude Code then
-    hides its footer hints. **Disconnect** puts back what was there.
+    hides its footer hints. **Disconnect** puts back what was there and forgets the
+    numbers.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 

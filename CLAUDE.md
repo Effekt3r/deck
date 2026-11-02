@@ -224,11 +224,15 @@ Things that aren't obvious from the code:
     credentials.
   - **Connect** writes `statusLine` into Claude Code's user settings
     (`$CLAUDE_CONFIG_DIR` or `~/.claude`, then `settings.json`):
-    - key order and the file's mode are kept, and a symlink is followed;
-    - the old value goes to `userData/usage/connection.json` for Disconnect, and a copy of the
-      file to `settings.backup.json`;
-    - Deck never writes a settings file it can't parse;
+    - key order, indentation and the file's mode are kept, and a symlink is followed;
+    - the old value goes to `userData/usage/connection.json` for Disconnect, and the text Deck read
+      to `settings.backup.json` (0600);
+    - Deck never writes a settings file it can't parse, a read-only one or a link to a missing
+      file, and reads the file again just before writing: if it changed meanwhile, Connect or
+      Disconnect fails with "try again" rather than lose that change;
     - while connected, Claude Code hides its footer hints ("esc to interrupt").
+  - **Disconnect** also forgets the numbers, and removes the last `statusline.json`, which the next
+    focus would otherwise read back in.
   - **Connected** means the settings' command equals this Deck's. That command holds the userData
     path, so a dev build started with `--user-data-dir` is another Deck.
   - **The command:**
@@ -236,10 +240,19 @@ Things that aren't obvious from the code:
       over `statusline.json`.
     - **Windows:** inline `powershell -NoProfile -NonInteractive -Command "…"`. The Restricted
       policy won't run a `.ps1`, and Deck doesn't pass `-ExecutionPolicy Bypass`. Claude Code runs
-      the command through Git Bash, or PowerShell when that's missing, so it has no `$`, backtick
-      or backslash. Untested on Windows.
-  - **Merging:** within a window (reset times under an hour apart) the higher percentage wins. An
-    idle session's status line re-runs (on a mode change or a reset) with its own older numbers.
+      the command through Git Bash, or PowerShell when that's missing, so it has no `$`, backtick,
+      `"` or backslash. Git Bash's MSYS2 path conversion skips any argument holding `[`, `]` or
+      `'`, so its `C:/…` paths arrive unchanged. .NET calls only, no cmdlets: a Windows PowerShell
+      started under pwsh 7 (a Deck tab's shell when it's installed) inherits pwsh 7's
+      `PSModulePath`, and `Move-Item` then fails to load. Stdin is read as UTF-8, not in the
+      console code page. CI's Windows job runs it through both shells (from pwsh 7, GitHub's
+      default shell); untested from a real Claude Code session on Windows.
+  - **Merging:** within a window (reset times under an hour apart) a higher or equal percentage
+    wins. A lower one is kept out for 10 minutes after the kept one was seen (`seenAt`, its
+    report's file time, kept in `usage.json`): an idle session's status line re-runs (on a mode
+    change or a reset) with its own older numbers. After that the lower one wins, since usage can
+    drop within a window (a plan upgrade, a reset by Anthropic), and the next real reply corrects
+    a stale one. The same file read again (at focus) isn't an update.
   - **Testing without touching real settings:** start the dev build with `CLAUDE_CONFIG_DIR` set
     to a temp folder whose `projects` links to `~/.claude/projects`. Feed it reports with a
     throwaway `claude --settings <file with Deck's statusLine>` run. Checked that way on
