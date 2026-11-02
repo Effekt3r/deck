@@ -20,3 +20,10 @@ export const SettingsIcon = () => (
     <circle cx="5" cy="11.5" r="1.5" />
   </Svg>
 )
+
+/** A section's fold marker (panel.css: .cp-caret turns it while folded). */
+export const Caret = () => (
+  <svg className="cp-caret" width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+    <path d="M3.5 5.5h9L8 11z" />
+  </svg>
+)
