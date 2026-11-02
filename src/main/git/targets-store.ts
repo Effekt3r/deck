@@ -1,6 +1,7 @@
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { pathKey } from '../projects/config'
+import { renameRetrying } from '../fs/atomic'
 
 /** repo root key → branch → ref. Maps, so a branch named `__proto__` is just a name. */
 type Targets = Map<string, Map<string, string>>
@@ -74,19 +75,5 @@ export class TargetsStore {
     })
     this.queue = result.catch(() => undefined)
     return result
-  }
-}
-
-/** Windows: a virus scanner or indexer briefly holding the target makes rename fail with
- *  EPERM/EBUSY; a few short retries get past it. */
-async function renameRetrying(from: string, to: string): Promise<void> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await rename(from, to)
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code
-      if (attempt >= 4 || (code !== 'EPERM' && code !== 'EBUSY' && code !== 'EACCES')) throw err
-      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)))
-    }
   }
 }
