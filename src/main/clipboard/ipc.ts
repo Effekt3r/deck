@@ -1,7 +1,7 @@
 import { type BrowserWindow, ipcMain, powerMonitor } from 'electron'
 import { IPC } from '@shared/channels'
 import type { InsertResult, Platform } from '@shared/types'
-import { imageInfo } from './image'
+import { fileThumbnail, imageInfo } from './image'
 import { insertFor } from './insert'
 import { readClipboard } from './read'
 import { TempImages } from './temp'
@@ -21,6 +21,7 @@ export function registerClipboardIpc(opts: { tempDir: string; platform: Platform
   const watch = new ClipboardWatch({
     read: readClipboard,
     imageInfo,
+    fileThumbnail,
     insert: (content, claude) => insertFor(content, claude, { platform: opts.platform, saveImage: (png) => temp.save(png) }),
     publish: (item) => {
       if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(IPC.clipboardItem, item)

@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import type { ClipboardPreview, InsertResult } from '@shared/types'
-import { type ClipboardContent, fingerprintOf, type ImageInfo, previewOf } from './item'
+import { type ClipboardContent, fingerprintOf, type ImageInfo, isImageFile, previewOf } from './item'
 
 export interface WatchDeps {
   /** The clipboard now; null when it's empty or holds nothing Deck pastes. */
   read(): Promise<ClipboardContent | null>
   /** Size and thumbnail of a new image item. */
   imageInfo(png: Uint8Array): ImageInfo
+  /** A thumbnail of an image file as a data: URL, '' for none; never rejects. Can take a while:
+   *  the OS makes it. */
+  fileThumbnail(path: string): Promise<string>
   /** What inserts `content` into a terminal (insertFor). */
   insert(content: ClipboardContent, claude: boolean): Promise<InsertResult | null>
   /** The card's item changed. */
@@ -123,6 +126,28 @@ export class ClipboardWatch {
     if (this.item?.preview.id === id) this.set(null)
   }
 
+  /** Thumbnails for a files item's listed image files: once the OS has made them, the item is
+   *  published again (same id) with them, unless it has gone by then (pasted, added, dismissed or
+   *  replaced). Runs beside the look/add/paste chain, not in it, so a slow volume never holds up a
+   *  paste. */
+  private async addThumbnails(item: Item): Promise<void> {
+    const { preview, content } = item
+    if (preview.kind !== 'files' || content.kind !== 'files') return
+    const listed = content.paths.slice(0, preview.names.length)
+    if (!listed.some(isImageFile)) return
+    const thumbnails = await Promise.all(listed.map(async (path) => {
+      if (!isImageFile(path)) return ''
+      try {
+        return await this.deps.fileThumbnail(path)
+      } catch {
+        return '' // it shouldn't reject, but this runs detached: a rejection would go unhandled
+      }
+    }))
+    if (this.item !== item || !thumbnails.some(Boolean)) return
+    item.preview = { ...preview, thumbnails }
+    this.deps.publish(item.preview)
+  }
+
   /** `reason`: why this look is happening. A poll is deduped against one already pending, so a
    *  slow read never queues more behind it; a leaving look always runs regardless (a pending poll
    *  may have sampled before the last copy). Only an arrival look treats a text change as new; a
@@ -167,7 +192,9 @@ export class ClipboardWatch {
             // undecodable: the card says "Image", without size or thumbnail
           }
         }
-        this.set({ preview: previewOf(content, randomUUID(), image), fingerprint, content })
+        const item: Item = { preview: previewOf(content, randomUUID(), image), fingerprint, content }
+        this.set(item)
+        void this.addThumbnails(item)
       } finally {
         if (poll) this.looking = false
       }
