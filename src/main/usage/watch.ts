@@ -15,7 +15,7 @@ export async function readReportFile(file: string): Promise<{ report: UsageRepor
   try {
     const info = await stat(file)
     if (!info.isFile() || info.size > MAX_BYTES) return null
-    return { report: readReport(JSON.parse(await readFile(file, 'utf8'))), at: info.mtimeMs }
+    return { report: readReport(JSON.parse(await readFile(file, 'utf8'))), at: Math.round(info.mtimeMs) }
   } catch {
     return null
   }
