@@ -18,10 +18,16 @@ export function registerClipboardIpc(opts: { tempDir: string; platform: Platform
   const temp = new TempImages(opts.tempDir)
   temp.clear() // images a crashed run left behind
   let win: BrowserWindow | null = null
+  // Copied image files get thumbnails on macOS only for now. Windows makes them synchronously on
+  // the main thread (Electron's IThumbnailCache call), where a slow file stalls every terminal and
+  // can cost a Ctrl+V (the renderer gives up after 1 s), and Electron turns that bitmap into an
+  // icon whose mask may make white transparent. DECK_FILE_THUMBNAILS=1 turns them on to try
+  // (docs/TESTING.md, step 18l).
+  const thumbnails = opts.platform === 'darwin' || process.env.DECK_FILE_THUMBNAILS === '1'
   const watch = new ClipboardWatch({
     read: readClipboard,
     imageInfo,
-    fileThumbnail,
+    fileThumbnail: (path) => (thumbnails ? fileThumbnail(path, opts.platform) : Promise.resolve('')),
     insert: (content, claude) => insertFor(content, claude, { platform: opts.platform, saveImage: (png) => temp.save(png) }),
     publish: (item) => {
       if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(IPC.clipboardItem, item)

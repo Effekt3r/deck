@@ -144,6 +144,8 @@ export class ClipboardWatch {
       }
     }))
     if (this.item !== item || !thumbnails.some(Boolean)) return
+    // In place: add() and the check above tell items apart by identity, so the Item stays the same
+    // object and only its preview is new (the one already published is left as it was).
     item.preview = { ...preview, thumbnails }
     this.deps.publish(item.preview)
   }

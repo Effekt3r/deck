@@ -395,7 +395,7 @@ describe('ClipboardWatch', () => {
   })
 
   it('leaves out a thumbnail that fails, and publishes nothing more when none is made', async () => {
-    const { clip, watch, last } = setup({
+    const { clip, watch, last, published } = setup({
       fileThumbnail: async (p) => {
         if (p.includes('bad')) throw new Error('no thumbnailer')
         return p.includes('none') ? '' : `data:${p}`
@@ -410,6 +410,7 @@ describe('ClipboardWatch', () => {
     await tick(1000) // the next poll: files copied while Deck is in front are new
     expect(last()).toMatchObject({ names: ['bad.png', 'none.gif'] })
     expect(last()).not.toHaveProperty('thumbnails')
+    expect(published).toHaveLength(3) // the second item was published once
     watch.stop()
   })
 
@@ -449,6 +450,29 @@ describe('ClipboardWatch', () => {
     watch.focus()
     await tick()
     await expect(watch.paste(true)).resolves.toEqual({ text: '/x/a.png' })
+    watch.stop()
+  })
+
+  it('add() still inserts when the thumbnails land while it waits on insert()', async () => {
+    let inserted: (r: InsertResult) => void = () => {}
+    let made: (thumb: string) => void = () => {}
+    const { clip, watch, last } = setup({
+      fileThumbnail: () => new Promise((resolve) => (made = resolve)),
+      insert: () => new Promise((resolve) => (inserted = resolve)),
+    })
+    await watch.baseline()
+    clip.now = files('/x/a.png')
+    watch.focus()
+    await tick()
+    const id = last()!.id
+    const adding = watch.add(id)
+    await tick()
+    made('data:a')
+    await tick()
+    expect(last()).toMatchObject({ id, thumbnails: ['data:a'] })
+    inserted({ text: "'/x/a.png' " })
+    await expect(adding).resolves.toEqual({ text: "'/x/a.png' " }) // not "That clipboard item is gone"
+    expect(last()).toBeNull()
     watch.stop()
   })
 
