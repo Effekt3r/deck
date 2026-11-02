@@ -13,6 +13,7 @@ const dir = () => {
   return d
 }
 const report = JSON.stringify({ rate_limits: { seven_day: { used_percentage: 85, resets_at: 1_793_653_200 } } })
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 describe('readReportFile', () => {
   it("reads the report, dated by the file's modification time", async () => {
@@ -41,6 +42,9 @@ describe('watchReports', () => {
     const changed = vi.fn()
     const stop = watchReports(d, changed, 20)
     try {
+      // let the OS watcher settle: macOS starts it a moment after watch() returns, and under load
+      // (the rest of the suite) a rename made at once was missed
+      await sleep(300)
       writeFileSync(join(d, '.statusline.1.tmp'), report)
       renameSync(join(d, '.statusline.1.tmp'), join(d, 'statusline.json'))
       await vi.waitFor(() => expect(changed).toHaveBeenCalled(), { timeout: 3000 })

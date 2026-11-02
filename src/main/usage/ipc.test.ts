@@ -40,6 +40,7 @@ function fakeWindow() {
 }
 
 const call = <T>(channel: string, ...args: unknown[]) => ipc.handlers.get(channel)!({}, ...args) as Promise<T>
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 describe('registerUsageIpc', () => {
   it('connects, picks up a report Claude Code writes, and disconnects', async () => {
@@ -56,7 +57,9 @@ describe('registerUsageIpc', () => {
       expect(JSON.parse(readFileSync(settingsFile, 'utf8')).statusLine)
         .toEqual({ type: 'command', command: statusLineCommand('darwin', dir) })
 
-      // What the status line script does with each report:
+      // What the status line script does with each report, once the OS watcher has settled (macOS
+      // starts it a moment after watch() returns; under load a rename made at once was missed):
+      await sleep(300)
       writeFileSync(join(dir, '.statusline.1.tmp'), JSON.stringify({ rate_limits: { seven_day: { used_percentage: 85, resets_at: 1_793_653_200 } } }))
       renameSync(join(dir, '.statusline.1.tmp'), join(dir, 'statusline.json'))
       await vi.waitFor(() => expect(sent.at(-1)?.sevenDay).toEqual({ usedPercentage: 85, resetsAt: 1_793_653_200_000 }), { timeout: 3000 })
