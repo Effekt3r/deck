@@ -35,7 +35,8 @@ route and polish (M5) are next. Plans that built M1–M3:
 `…/2026-10-31-m3-claude-panel.md`.
 
 **M5, in progress:** the clipboard card and smart paste (spec:
-`docs/superpowers/specs/2026-10-31-clipboard-design.md`; built 2026-10-31/11-01). Windows to test.
+`docs/superpowers/specs/2026-10-31-clipboard-design.md`; built 2026-10-31/11-01), and previews
+of copied image files (`…/2026-11-02-clipboard-image-previews-design.md`). Windows to test.
 
 | Path | Role |
 |---|---|
@@ -151,6 +152,14 @@ Things that aren't obvious from the code:
     app's saved images — and pasted as a quoted path, which Claude Code turns into `[Image #N]`;
     cleared at start and quit. A dev app killed with a signal skips `will-quit` and leaves its
     image; the next start removes it.
+  - **Copied image files get thumbnails** from the OS (`fileThumbnail()`,
+    `nativeImage.createThumbnailFromPath`). On macOS that's Quick Look, off the main thread:
+    14–170 ms the first time, about 3 ms after. On Windows it's Explorer's thumbnail cache, which
+    Electron calls synchronously on the main thread (untested). On macOS, Electron 45's result
+    claims the whole requested box, and its 2× copy (`toPNG({ scaleFactor: 2 })`, `resize()`) is
+    stretched to that box. Only its 1× PNG keeps the image's shape, so that PNG is decoded and
+    fitted again. The watch publishes a files item at once, then again (same id) with
+    `thumbnails`, outside the look/add/paste chain, so a paste never waits for one.
   - **Testing on macOS:** a clipboard written by a process that has quit keeps only its first
     item, so test writers must stay running (Finder does).
   - **Known limits:**

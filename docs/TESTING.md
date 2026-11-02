@@ -82,6 +82,9 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
 18k. Put a large, full-screen screenshot on the clipboard, bring Deck to front, and run something
      that prints continuously (`ping -t localhost`): output doesn't hitch about once a second.
      Note the main process's CPU in Task Manager while it runs.
+18l. Copy one photo in Explorer, then three, and come back: the card shows a preview of each
+     above the names, the right way up and not black or blank. Copying a very large image
+     (50 MB or more) doesn't make terminal output stall.
 
 **Restart**
 
