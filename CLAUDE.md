@@ -1,6 +1,12 @@
 # Deck — project brief for Claude Code
 
-Owner: Franco Landman (Effekt Studios). Repo: `github.com/Effekt3r/deck` (private).
+Owner: Franco Landman (Effekt Studios). Repo: `github.com/Effekt3r/deck`, public since
+2026-11-02:
+- **Who can do what:** anyone can read and clone it. Only Franco can push or merge, and a
+  fork's pull request runs CI only once he approves it.
+- **What never goes in:** keys, certificates, session logs or client code. The Mac signing
+  secrets live in GitHub's Actions secrets.
+
 Read this first, then `docs/DECK.md` for the product spec and build plan.
 
 ## What Deck is
