@@ -237,6 +237,9 @@ export type ClipboardPreview =
       more: number
       /** The first file's folder. */
       folder: string
+      /** Small PNGs of the named files that are images, as data: URLs, one per name ('' for the
+       *  others). Absent until the OS has made them: they come in a second update of the item. */
+      thumbnails?: string[]
     }
   | {
       id: string

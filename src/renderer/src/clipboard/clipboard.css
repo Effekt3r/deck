@@ -26,6 +26,9 @@
   background: var(--field);
   object-fit: contain;
 }
+/* Copied image files: one shows like a screenshot; two or three share the row, shrinking to fit. */
+.clip-thumbs { display: flex; align-items: flex-start; gap: 6px; min-width: 0; }
+.clip-thumbs .clip-thumb { min-width: 0; }
 .clip-files { display: flex; flex-direction: column; gap: 3px; min-width: 0; margin: 0; padding: 0; list-style: none; }
 .clip-files li { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .clip-files li.clip-folder { display: block; } /* a block box, so text-overflow has a single line to ellipsise */

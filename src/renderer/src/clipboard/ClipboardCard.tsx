@@ -43,6 +43,12 @@ function CardBody({ item, home, busy, error, onAdd, onDismiss }: ClipboardCardPr
         </button>
       </div>
       {item.kind === 'image' && item.thumbnail && <img className="clip-thumb" src={item.thumbnail} alt="Copied image" />}
+      {item.kind === 'files' && item.thumbnails?.some(Boolean) && (
+        <div className="clip-thumbs">
+          {item.thumbnails.map((src, i) =>
+            src ? <img key={i} className="clip-thumb" src={src} alt={item.names[i] ?? ''} title={item.names[i]} /> : null)}
+        </div>
+      )}
       {item.kind === 'files' && (
         <ul className="clip-files">
           {item.names.map((name, i) => (

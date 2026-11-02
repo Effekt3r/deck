@@ -82,6 +82,17 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
 18k. Put a large, full-screen screenshot on the clipboard, bring Deck to front, and run something
      that prints continuously (`ping -t localhost`): output doesn't hitch about once a second.
      Note the main process's CPU in Task Manager while it runs.
+18l. Previews of copied image files are off on Windows until this passes. Quit Deck, then start
+     it from a Command Prompt with `set DECK_FILE_THUMBNAILS=1` followed by Deck's path. Then:
+     - copy one photo in Explorer, then three, and come back: the card shows a preview of each
+       above the names, the right way up and not black or blank;
+     - copy a screenshot saved as a file that has a white background: its white stays white,
+       not the card's dark grey;
+     - copy three large images (20 MB or more each), come back and press Ctrl+V at once: the
+       paths paste, and terminal output doesn't stall;
+     - if OneDrive is set up, copy an online-only image: no long freeze (a missing preview is
+       fine).
+     Report the results: they decide whether previews are turned on for Windows.
 
 **Restart**
 

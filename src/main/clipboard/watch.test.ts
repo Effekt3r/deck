@@ -20,6 +20,7 @@ function setup(overrides: Partial<WatchDeps> = {}) {
       return clip.now
     },
     imageInfo: () => ({ width: 1440, height: 900, thumbnail: 'data:image/png;base64,AA==' }),
+    fileThumbnail: async () => '',
     insert: async (c, claude): Promise<InsertResult | null> => {
       if (c.kind === 'image') return claude ? { text: "'/tmp/clipboard-1.png'" } : null
       return { text: c.kind === 'files' ? c.paths.join(' ') : c.text }
@@ -357,6 +358,121 @@ describe('ClipboardWatch', () => {
     clip.now = image()
     await tick(1000) // the one interval it armed still polls normally afterwards
     expect(last()).toMatchObject({ kind: 'image' })
+    watch.stop()
+  })
+
+  it('follows a files card with thumbnails of its listed image files, as an update of the same item', async () => {
+    const asked: string[] = []
+    const { clip, watch, published } = setup({
+      fileThumbnail: async (p) => {
+        asked.push(p)
+        return `data:${p}`
+      },
+    })
+    await watch.baseline()
+    clip.now = files('/x/a.png', '/x/b.pdf', '/x/c.PNG', '/x/d.png')
+    watch.focus()
+    await tick()
+    expect(asked).toEqual(['/x/a.png', '/x/c.PNG']) // not the PDF, nor the fourth file, which isn't listed
+    expect(published).toHaveLength(2)
+    expect(published[0]).toMatchObject({ kind: 'files', names: ['a.png', 'b.pdf', 'c.PNG'], more: 1 })
+    expect(published[0]).not.toHaveProperty('thumbnails')
+    expect(published[1]).toEqual({ ...published[0], thumbnails: ['data:/x/a.png', '', 'data:/x/c.PNG'] })
+    expect(watch.current()).toEqual(published[1])
+    watch.stop()
+  })
+
+  it('asks for no thumbnails when no listed file is an image', async () => {
+    const fileThumbnail = vi.fn(async () => 'data:x')
+    const { clip, watch, published } = setup({ fileThumbnail })
+    await watch.baseline()
+    clip.now = files('/x/spec.pdf', '/x/notes.md')
+    watch.focus()
+    await tick()
+    expect(fileThumbnail).not.toHaveBeenCalled()
+    expect(published).toHaveLength(1)
+    watch.stop()
+  })
+
+  it('leaves out a thumbnail that fails, and publishes nothing more when none is made', async () => {
+    const { clip, watch, last, published } = setup({
+      fileThumbnail: async (p) => {
+        if (p.includes('bad')) throw new Error('no thumbnailer')
+        return p.includes('none') ? '' : `data:${p}`
+      },
+    })
+    await watch.baseline()
+    clip.now = files('/x/bad.png', '/x/good.jpg')
+    watch.focus()
+    await tick()
+    expect(last()).toMatchObject({ names: ['bad.png', 'good.jpg'], thumbnails: ['', 'data:/x/good.jpg'] })
+    clip.now = files('/x/bad.png', '/x/none.gif')
+    await tick(1000) // the next poll: files copied while Deck is in front are new
+    expect(last()).toMatchObject({ names: ['bad.png', 'none.gif'] })
+    expect(last()).not.toHaveProperty('thumbnails')
+    expect(published).toHaveLength(3) // the second item was published once
+    watch.stop()
+  })
+
+  it.each(['dismissed', 'pasted', 'replaced'] as const)('drops thumbnails that arrive after the item was %s', async (how) => {
+    const pending = new Map<string, (thumb: string) => void>()
+    const { clip, watch, published } = setup({
+      fileThumbnail: (p) => new Promise((resolve) => pending.set(p, resolve)),
+    })
+    await watch.baseline()
+    clip.now = files('/x/a.png')
+    watch.focus()
+    await tick()
+    const first = published.at(-1)!
+    if (how === 'dismissed') watch.dismiss(first.id)
+    if (how === 'pasted') await watch.paste(true)
+    if (how === 'replaced') {
+      clip.now = files('/x/b.png')
+      await tick(1000)
+    }
+    const before = published.length
+    pending.get('/x/a.png')!('data:late')
+    await tick()
+    expect(published).toHaveLength(before) // nothing republished for the old item
+    expect(published.some((p) => p?.kind === 'files' && p.thumbnails)).toBe(false)
+    if (how === 'replaced') {
+      pending.get('/x/b.png')!('data:b')
+      await tick()
+      expect(published.at(-1)).toMatchObject({ names: ['b.png'], thumbnails: ['data:b'] })
+    }
+    watch.stop()
+  })
+
+  it('never holds up a paste while thumbnails are still being made', async () => {
+    const { clip, watch } = setup({ fileThumbnail: () => new Promise<string>(() => {}) })
+    await watch.baseline()
+    clip.now = files('/x/a.png')
+    watch.focus()
+    await tick()
+    await expect(watch.paste(true)).resolves.toEqual({ text: '/x/a.png' })
+    watch.stop()
+  })
+
+  it('add() still inserts when the thumbnails land while it waits on insert()', async () => {
+    let inserted: (r: InsertResult) => void = () => {}
+    let made: (thumb: string) => void = () => {}
+    const { clip, watch, last } = setup({
+      fileThumbnail: () => new Promise((resolve) => (made = resolve)),
+      insert: () => new Promise((resolve) => (inserted = resolve)),
+    })
+    await watch.baseline()
+    clip.now = files('/x/a.png')
+    watch.focus()
+    await tick()
+    const id = last()!.id
+    const adding = watch.add(id)
+    await tick()
+    made('data:a')
+    await tick()
+    expect(last()).toMatchObject({ id, thumbnails: ['data:a'] })
+    inserted({ text: "'/x/a.png' " })
+    await expect(adding).resolves.toEqual({ text: "'/x/a.png' " }) // not "That clipboard item is gone"
+    expect(last()).toBeNull()
     watch.stop()
   })
 

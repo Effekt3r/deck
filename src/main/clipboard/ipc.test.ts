@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/channels'
 import type { ClipboardPreview } from '@shared/types'
@@ -30,6 +31,8 @@ const power = vi.hoisted(() => {
     },
   }
 })
+/** nativeImage.createThumbnailFromPath: every file gets one (a PNG the mocked decoder makes 1×1). */
+const thumbs = vi.hoisted(() => ({ made: vi.fn(async () => ({ toPNG: () => Buffer.alloc(0) })) }))
 const clip = vi.hoisted(() => ({
   /** readClipboard()'s one item: type → data; {} (the default) is an empty clipboard. */
   data: {} as Record<string, string | Uint8Array<ArrayBuffer>>,
@@ -61,11 +64,11 @@ vi.mock('electron', () => {
         return itemFor(clip.data)
       },
     },
-    // image.ts only needs enough of nativeImage to round-trip a size and a data: URL; none of
-    // these tests drive a clipboard image through a focused window's look() (only through
-    // paste(), which never touches imageInfo), so this is never exercised, just present so the
-    // module graph resolves.
+    // image.ts only needs enough of nativeImage to round-trip a size and a data: URL. No test
+    // drives a clipboard image through a focused window's look() (only through paste(), which
+    // never touches imageInfo); the thumbnail tests decode createThumbnailFromPath's PNG with it.
     nativeImage: {
+      createThumbnailFromPath: thumbs.made,
       createFromBuffer: () => {
         const img = {
           getSize: () => ({ width: 1, height: 1 }),
@@ -124,6 +127,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllEnvs()
   power.removeAllListeners()
 })
 
@@ -216,6 +220,36 @@ describe('clipboard IPC', () => {
       expect(win.webContents.sent).toEqual([])
       clipIpc.dispose()
     }
+  })
+
+  it.each([
+    { platform: 'darwin', env: undefined, made: true },
+    { platform: 'win32', env: undefined, made: false },
+    { platform: 'win32', env: '1', made: true },
+  ] as const)('copied image files get thumbnails on $platform with DECK_FILE_THUMBNAILS=$env: $made', async ({ platform, env, made }) => {
+    if (env) vi.stubEnv('DECK_FILE_THUMBNAILS', env)
+    thumbs.made.mockClear()
+    const shot = join(freshTempDir(), 'shot.png')
+    writeFileSync(shot, 'png')
+    const clipIpc = registerClipboardIpc({ tempDir: freshTempDir(), platform })
+    const win = new FakeWindow()
+    clipIpc.attach(bw(win))
+    await vi.advanceTimersByTimeAsync(100) // the baseline (empty) and the arrival look
+    clip.data = { 'text/uri-list': pathToFileURL(shot).href }
+    await vi.advanceTimersByTimeAsync(1000) // the next poll offers the file
+    const items = () => win.webContents.sent.map(([, item]) => item)
+    expect(items()[0]).toMatchObject({ kind: 'files', names: ['shot.png'] })
+    expect(items()[0]).not.toHaveProperty('thumbnails')
+    if (made) {
+      // The thumbnail waits on a real stat(), which may finish during the timer advance above or
+      // only after it.
+      await vi.waitFor(() => expect(items()).toHaveLength(2))
+      expect(items()[1]).toMatchObject({ id: items()[0]!.id, thumbnails: ['data:image/png;base64,AA=='] })
+    } else {
+      expect(thumbs.made).not.toHaveBeenCalled()
+      expect(items()).toHaveLength(1)
+    }
+    clipIpc.dispose()
   })
 
   it('attach() runs once', () => {

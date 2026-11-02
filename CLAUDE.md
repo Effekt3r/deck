@@ -35,7 +35,8 @@ route and polish (M5) are next. Plans that built M1–M3:
 `…/2026-10-31-m3-claude-panel.md`.
 
 **M5, in progress:** the clipboard card and smart paste (spec:
-`docs/superpowers/specs/2026-10-31-clipboard-design.md`; built 2026-10-31/11-01). Windows to test.
+`docs/superpowers/specs/2026-10-31-clipboard-design.md`; built 2026-10-31/11-01), and previews
+of copied image files (`…/2026-11-02-clipboard-image-previews-design.md`). Windows to test.
 
 | Path | Role |
 |---|---|
@@ -151,6 +152,27 @@ Things that aren't obvious from the code:
     app's saved images — and pasted as a quoted path, which Claude Code turns into `[Image #N]`;
     cleared at start and quit. A dev app killed with a signal skips `will-quit` and leaves its
     image; the next start removes it.
+  - **Copied image files get thumbnails** from the OS (`fileThumbnail()`,
+    `nativeImage.createThumbnailFromPath`), on macOS only for now.
+    - **macOS:** Quick Look, off the main thread: 14–170 ms the first time, about 3 ms after.
+      Decoding and fitting its result then takes 0.5–7 ms on the main thread per image.
+    - **Shape:** Electron 45's result claims the whole requested box, and its 2× copy
+      (`toPNG({ scaleFactor: 2 })`, `resize()`) is stretched to that box. Only its 1× PNG keeps
+      the image's shape, so that PNG is decoded and fitted again.
+    - **Files it can't preview:** a file Quick Look can't preview (corrupt, unreadable, an
+      unknown format) still resolves, with its type's 1024×1024 icon. Anything larger than the
+      requested box is taken for that icon and dropped.
+    - **Windows (off):** the thumbnail cache runs synchronously on the main thread, where a slow
+      file would stall every terminal and could lose a Ctrl+V (the renderer gives up after 1 s).
+      Also, Electron builds the bitmap as an icon masked by itself, which may make white
+      transparent. `DECK_FILE_THUMBNAILS=1` turns it on to try (`docs/TESTING.md` 18l).
+    - **When:** the watch publishes a files item at once, then again (same id) with
+      `thumbnails`, outside the look/add/paste chain, so a paste never waits for one. The item is
+      updated in place, because `add()` tells items apart by identity
+      (`watch.test.ts` "add() still inserts when the thumbnails land").
+    - **Privacy prompt:** Deck now opens copied files itself. A file in Downloads, Desktop,
+      Documents or on a removable volume may trigger a macOS privacy prompt for Deck; denied
+      means no preview. Unverified.
   - **Testing on macOS:** a clipboard written by a process that has quit keeps only its first
     item, so test writers must stay running (Finder does).
   - **Known limits:**

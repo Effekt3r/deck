@@ -146,11 +146,15 @@ deck/
 6. **M5** — Polish: settings UI, notifications, auto-update, and:
    - **Clipboard card and smart paste** (built 2026-10-31; Windows to test): the
      Claude panel shows what was just copied (image, files, text) with "Add to
-     Claude"; Cmd/Ctrl+V and drops insert images and files as paths. Spec:
-     `docs/superpowers/specs/2026-10-31-clipboard-design.md`.
+     Claude"; Cmd/Ctrl+V and drops insert images and files as paths. Copied image
+     files show previews (2026-11-02). Specs:
+     `docs/superpowers/specs/2026-10-31-clipboard-design.md`,
+     `docs/superpowers/specs/2026-11-02-clipboard-image-previews-design.md`.
    - **Permissions guide on first launch:** walk through every permission Deck
      needs, including what Claude Code and the other tools in its tabs need
      (macOS asks on Deck's behalf for anything run in a tab): Desktop, Documents
      and Downloads, removable and network volumes (`/Volumes/wyobi`), Local
      Network, Notifications. Ask for access whenever a project folder is added
-     (pinned or a scan root). Windows equivalents where they exist.
+     (pinned or a scan root). Windows equivalents where they exist. The
+     clipboard card's image previews open copied files themselves, so a file
+     from Downloads or a removable volume can prompt too.
