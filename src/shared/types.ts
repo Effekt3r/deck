@@ -57,6 +57,7 @@ export type MenuCommand =
   | { type: 'find' }
   | { type: 'toggle-git' }
   | { type: 'toggle-claude' }
+  | { type: 'toggle-device' }
 
 export type ProjectAction = 'claude' | 'shell'
 
@@ -285,6 +286,61 @@ export interface UsageState {
 /** Connect's or Disconnect's outcome: the new state, or what went wrong. */
 export type UsageChange = { state: UsageState } | { error: string }
 
+/** An Android phone or emulator that adb sees. */
+export interface DeviceInfo {
+  /** The same across reconnects and connections: `android:<serial number>`, or
+   *  `emulator:<AVD name>` (an emulator's adb name changes with its port). */
+  id: string
+  kind: 'android' | 'emulator'
+  /** The name set on the phone ("Franco's S25 FE"), else its maker and model; an emulator's AVD name. */
+  name: string
+  /** Its Android version and connection: "Android 13 · USB", "Android 17 · USB + Wi-Fi",
+   *  "Emulator · Android 15". */
+  detail: string
+  /** ready: it can be shown; unauthorized: USB debugging isn't allowed on it yet; offline: adb
+   *  can't reach it; connecting: adb is still setting it up. */
+  state: 'ready' | 'unauthorized' | 'offline' | 'connecting'
+}
+
+/** The devices Deck sees, or why it sees none. */
+export interface DeviceList {
+  devices: DeviceInfo[]
+  /** 'no-adb': adb wasn't found; { error }: adb failed; null: adb runs. */
+  problem: 'no-adb' | { error: string } | null
+}
+
+/** A tab's project, for the device panel. */
+export interface DeviceProject {
+  /** Its repository's main work tree (worktrees share it), or the folder outside git. */
+  root: string
+  /** It's an Android app, so it takes Android phones and emulators. */
+  android: boolean
+  /** The device last picked in it. */
+  pick: string | null
+}
+
+/** News of a device's stream. */
+export type DeviceStreamEvent =
+  /** connecting: starting; live: frames are coming; reconnecting: it broke and is starting again;
+   *  error: it couldn't be started (`message`), until Try again. */
+  | { type: 'state'; state: 'connecting' | 'live' | 'reconnecting' | 'error'; message?: string }
+  /** A capture session started (also after a rotation): the frames that follow have this size. */
+  | { type: 'size'; width: number; height: number }
+  /** H.264, Annex B. A config packet holds SPS and PPS, which the next key frame needs. */
+  | { type: 'packet'; config: boolean; key: boolean; data: Uint8Array }
+
+/** Input for a device. Positions are in the frame's pixels with the frame's size (the last 'size'):
+ *  scrcpy ignores a touch made for another size. */
+export type DeviceInput =
+  | { type: 'touch'; action: 'down' | 'move' | 'up'; x: number; y: number; width: number; height: number }
+  /** dx, dy: scroll steps, -16 … 16; a positive dy scrolls up, like a wheel pushed away. */
+  | { type: 'scroll'; x: number; y: number; width: number; height: number; dx: number; dy: number }
+  /** An Android key code pressed and let go, with Android's meta state (shift 1, alt 2). */
+  | { type: 'key'; keycode: number; meta: number }
+  | { type: 'text'; text: string }
+  /** Puts `text` on the device's clipboard and pastes it. */
+  | { type: 'paste'; text: string }
+
 export interface DeckApi {
   platform: Platform
   pty: {
@@ -363,6 +419,29 @@ export interface DeckApi {
     connect(replace: boolean): Promise<UsageChange>
     /** Puts back the status line Claude Code had before Connect, or none. */
     disconnect(): Promise<UsageChange>
+  }
+  devices: {
+    /** Look for Android devices (adb) from now; the function stops this look. adb runs while any
+     *  look is on, so only while some tab needs devices. */
+    watch(): () => void
+    /** The devices now. */
+    list(): Promise<DeviceList>
+    onList(cb: (list: DeviceList) => void): () => void
+    /** `folder`'s project: its root, whether it's an Android app, and its device. */
+    project(folder: string): Promise<DeviceProject>
+    /** Remembers `id` as the project's device. */
+    pick(root: string, id: string): Promise<void>
+    /** Streams device `id` from now; the function stops viewing. A stream nobody views stops 10 s
+     *  later, so viewing it again before then picks it up. */
+    view(id: string): () => void
+    onStream(cb: (id: string, event: DeviceStreamEvent) => void): () => void
+    /** A fresh key frame, for a decoder that fell behind or failed. */
+    keyframe(id: string): void
+    /** Starts a stream that ended in an error again. */
+    retry(id: string): void
+    input(id: string, input: DeviceInput): void
+    /** Saves a screenshot (PNG) where Claude can read it: the text that adds it to Claude's prompt. */
+    screenshot(png: Uint8Array): Promise<InsertResult>
   }
   app: {
     info(): Promise<AppInfo>
