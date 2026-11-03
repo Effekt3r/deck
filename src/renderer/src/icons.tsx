@@ -27,3 +27,15 @@ export const Caret = () => (
     <path d="M3.5 5.5h9L8 11z" />
   </svg>
 )
+
+/** Android's navigation buttons and the screenshot camera, for the device panel. */
+export const BackIcon = () => <Svg size={13}><path d="M11 3.5v9L4 8z" /></Svg>
+export const HomeIcon = () => <Svg size={13}><circle cx="8" cy="8" r="4.5" /></Svg>
+export const RecentsIcon = () => <Svg size={13}><rect x="3.5" y="3.5" width="9" height="9" rx="1.5" /></Svg>
+export const PowerIcon = () => <Svg size={13}><path d="M8 2.5v5" /><path d="M5 4.6a5 5 0 1 0 6 0" /></Svg>
+export const CameraIcon = () => (
+  <Svg size={13}>
+    <path d="M2.5 5.5h2l1.2-2h4.6l1.2 2h2v7h-11z" />
+    <circle cx="8" cy="9" r="2.2" />
+  </Svg>
+)
