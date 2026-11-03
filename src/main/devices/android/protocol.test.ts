@@ -205,9 +205,9 @@ describe('VideoReader', () => {
     expect(Buffer.from(last.data).equals(payload)).toBe(true)
   })
 
-  it('a 1 MiB packet fed in 13-byte chunks fills as bytes arrive: correct, and fast', () => {
+  it('a 2 MiB packet fed in 13-byte chunks fills as bytes arrive: correct, and fast', () => {
     const reader = new VideoReader()
-    const payload = Buffer.alloc(1024 * 1024)
+    const payload = Buffer.alloc(2 * 1024 * 1024)
     for (let i = 0; i < payload.length; i++) payload[i] = i % 256
     const bytes = Buffer.concat([prefix, packetBuf((1n << 61n) | 16_666n, payload)])
 
@@ -222,10 +222,9 @@ describe('VideoReader', () => {
     expect(last.config).toBe(false)
     expect(last.key).toBe(true)
     expect(Buffer.from(last.data).equals(payload)).toBe(true)
-    // Before filling the packet as bytes arrive, every one of these ~80,700 tiny chunks sat in a
+    // Before filling the packet as bytes arrive, every one of these ~161,300 tiny chunks sat in a
     // list until the packet completed, then got shift()ed off one at a time in a single batched
-    // copy: O(chunk count²), which is seconds, not tens of milliseconds, once the count is large
-    // enough (a 2 MiB packet this same way measured in the seconds on the old code).
+    // copy: O(chunk count²); measured at ~14.6 s on the old code, against tens of milliseconds now.
     expect(ms).toBeLessThan(1000)
   })
 
