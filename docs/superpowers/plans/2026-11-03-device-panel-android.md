@@ -57,7 +57,7 @@ TypeScript, WebCodecs `VideoDecoder`, vitest (node environment), plain CSS with 
 | `src/preload/index.ts` (modify) | `window.deck.devices` |
 | `src/main/devices/android/devices.ts` (create) | `track-devices -l` frames, identities, one device per phone (pure) |
 | `src/main/devices/android/adb.ts` (create) | where adb is; running it |
-| `src/main/devices/android/tracker.ts` (create) | the long-running `track-devices`, identity lookups, restarts |
+| `src/main/devices/android/tracker.ts` (create) | the long-running `track-devices`, identity lookups, restarts; the first list waits for its devices |
 | `src/main/devices/android/protocol.ts` (create) | scrcpy's video stream reader and control messages (pure) |
 | `src/main/devices/android/input.ts` (create) | renderer input → control messages, checked (pure) |
 | `src/main/devices/android/server.ts` (create) | the server file and its version |
@@ -3395,6 +3395,338 @@ git add src/renderer/src/device/
 git -c user.email=franco@effektstudios.com commit -m "Device panel: which device a tab shows, letterboxing, keys and the codec string" -m "Claude-Session: https://claude.ai/code/session_012TidnAXmFkf7jwBCQQo4jJ"
 ```
 
+**After review (commit `99b052b`), the code above changed:**
+- `Held` also keeps the pick in force (`pick: string | null`), and `panelView(choice, devices, held, now, pick)`
+  takes the tab's pick (else the project's, else null). A new pick ends a hold at once. While the pick
+  is unchanged, a shown device that's still connected stays when a second arrives (the menu switches).
+- `fitSize` floors the box first, so sizes are whole CSS px for fractional boxes.
+- `avcCodec` masks the constraint byte's two reserved bits.
+- `deviceKey`:
+  - macOS: Option+Backspace/Delete/←/→ go with Android's Ctrl (`META_CTRL_ON`, 0x1000), since they're
+    word-wise and Android's Alt works by line. Cmd+←/→ go to `MOVE_HOME`/`MOVE_END`.
+  - Off macOS: `KeyPress.altGraph` (from `getModifierState('AltGraph')`, else Ctrl+Alt) tells AltGr from
+    Alt. An Alt combination that isn't AltGr types nothing.
+
+---
+
+### Task 11b: The first list waits for its devices
+
+**Files:**
+- Modify: `src/main/devices/android/tracker.ts`, `src/main/devices/android/tracker.test.ts`
+- Modify: `src/main/devices/ipc.ts`, `src/main/devices/ipc.test.ts`
+- Modify: `src/shared/types.ts` (`DeckApi.devices.list`)
+
+A device joins the list once it has said what it is, so right after adb's tracking starts (or
+restarts) the list grows one device at a time. A project with the emulator and the S25 and no pick
+would show whichever answered first, and keep showing it (`panelView` keeps a shown device when a
+second one arrives). And until the first list main answers `list()` with "no devices", so a panel
+shown by hand says "No devices connected" while adb is still starting. From now on the first list
+after each start waits for every ready device's first answer (3 s at most), and `list()` answers
+null until it's there.
+
+- [ ] **Step 1: Write the failing tests**
+
+In `src/main/devices/android/tracker.test.ts`, after the `c66` constant, add:
+
+```ts
+const EMULATOR = 'emulator-5554 device product:sdk_gphone64_arm64 model:sdk_gphone64_arm64 device:emu64a transport_id:2\n'
+const emu: Identity = { serialNo: 'EMULATOR37X2X12X0', maker: 'Google', model: 'sdk_gphone64_arm64', release: '15', avd: 'Pixel_9', name: 'sdk_gphone64_arm64', booted: true }
+```
+
+Replace the test `'keeps tracking when publish throws, and the next publish tries again'` with:
+
+```ts
+  it('keeps tracking when publish throws, and the next publish tries again', async () => {
+    vi.useFakeTimers()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const calls: { devices: DeviceInfo[]; error: string | null }[] = []
+    let first = true
+    const { tracker, children } = setup(async () => c66, (devices, error) => {
+      if (first) {
+        first = false
+        throw new Error('boom')
+      }
+      calls.push({ devices, error })
+    })
+    tracker.start()
+    // No device to wait for: the first list goes out at once, and that publish throws.
+    children[0].stdout.emit('data', frame(''))
+    expect(errorSpy).toHaveBeenCalledWith('devices: publishing the list failed', expect.any(Error))
+    children[0].stdout.emit('data', frame(C66))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(calls.at(-1)?.devices.map((d) => d.name)).toEqual(['C66'])
+    // The throw didn't look like adb dying: no restart.
+    expect(children).toHaveLength(1)
+    tracker.stop()
+    errorSpy.mockRestore()
+  })
+```
+
+Replace the test `'tries again even when the repeated state is identical, since a failed publish leaves lastPublished unset'` with:
+
+```ts
+  it('tries again even when the repeated state is identical, since a failed publish leaves lastPublished unset', () => {
+    vi.useFakeTimers()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const calls: { devices: DeviceInfo[]; error: string | null }[] = []
+    let first = true
+    const { tracker, children } = setup(async () => c66, (devices, error) => {
+      if (first) {
+        first = false
+        throw new Error('boom')
+      }
+      calls.push({ devices, error })
+    })
+    tracker.start()
+    // The same empty list twice: the second is published, since the first never was.
+    children[0].stdout.emit('data', frame(''))
+    children[0].stdout.emit('data', frame(''))
+    expect(calls).toEqual([{ devices: [], error: null }])
+    tracker.stop()
+    errorSpy.mockRestore()
+  })
+```
+
+Before `it('keeps a phone listed, as connecting, while its first ask is in flight', …)`, add:
+
+```ts
+  it('holds the first list until every ready device has answered once', async () => {
+    vi.useFakeTimers()
+    let answerEmulator: (identity: Identity) => void = () => {}
+    const identify = vi.fn((serial: string) =>
+      serial === '8d2e61a' ? Promise.resolve(c66) : new Promise<Identity>((resolve) => { answerEmulator = resolve }))
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66 + EMULATOR))
+    await vi.advanceTimersByTimeAsync(0)
+    // The C66 has answered, the emulator not yet: nothing goes out, not even an empty list.
+    expect(published).toEqual([])
+    answerEmulator(emu)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published.map((p) => p.devices.map((d) => d.id))).toEqual([['android:8d2e61a', 'emulator:Pixel_9']])
+    tracker.stop()
+  })
+
+  it('publishes the first list after 3 s without a device that is slow to answer', async () => {
+    vi.useFakeTimers()
+    const identify = vi.fn((serial: string) => (serial === '8d2e61a' ? Promise.resolve(c66) : new Promise<Identity>(() => {})))
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66 + EMULATOR))
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(published).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(published.map((p) => p.devices.map((d) => d.id))).toEqual([['android:8d2e61a']])
+    tracker.stop()
+  })
+
+  it('publishes the first list once a first ask fails, without that device', async () => {
+    vi.useFakeTimers()
+    const identify = vi.fn(async (): Promise<Identity> => {
+      throw new Error('closed')
+    })
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66))
+    expect(published).toEqual([])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published).toEqual([{ devices: [], error: null }])
+    tracker.stop()
+  })
+
+  it('waits for the devices again after adb restarts', async () => {
+    vi.useFakeTimers()
+    let answer: (identity: Identity) => void = () => {}
+    const identify = vi.fn(() => new Promise<Identity>((resolve) => { answer = resolve }))
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(''))
+    expect(published).toEqual([{ devices: [], error: null }])
+    children[0].emit('close', 1)
+    expect(published.at(-1)?.error).toBeTruthy()
+    const before = published.length
+    await vi.advanceTimersByTimeAsync(20) // restartMin
+    children[1].stdout.emit('data', frame(C66))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published).toHaveLength(before)
+    answer(c66)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published).toHaveLength(before + 1)
+    expect(published.at(-1)).toEqual({ devices: [expect.objectContaining({ name: 'C66' })], error: null })
+    tracker.stop()
+  })
+```
+
+In `src/main/devices/ipc.test.ts`, replace the first test with:
+
+```ts
+  it("answers null until the first list, says so when adb can't be found, and forgets it when nothing needs devices", async () => {
+    expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
+    emit(IPC.devicesWatch)
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
+    expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [], problem: 'no-adb' })
+    const pushes = sent.length
+    emit(IPC.devicesUnwatch)
+    // Nobody listens any more: nothing is pushed, and the list is unknown again.
+    expect(sent).toHaveLength(pushes)
+    expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
+  })
+```
+
+In the test `"a reload forgets the watches: devices:watch publishes no-adb again, and the old page's late unwatch does nothing"`,
+replace its body with:
+
+```ts
+    emit(IPC.devicesWatch)
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
+
+    win.webContents.emit('did-start-loading')
+    expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
+
+    const pushes = sent.length
+    emit(IPC.devicesUnwatch) // the old page's effect cleanup, arriving late: watchers is already 0
+    expect(sent).toHaveLength(pushes)
+
+    emit(IPC.devicesWatch) // the new page watches again
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
+    emit(IPC.devicesUnwatch) // leave watchers at 0 for later tests
+```
+
+(Any other assertion in `ipc.test.ts` that expects `{ devices: [], problem: null }` to be pushed when
+watching stops changes the same way: nothing is pushed, and `devices:list` answers null.)
+
+- [ ] **Step 2: Run them to make sure they fail**
+
+Run: `npx vitest run src/main/devices`
+Expected: FAIL: the tracker publishes an empty list at the first frame and before each device has
+answered, and `devices:list` answers `{ devices: [], problem: null }` rather than null.
+
+- [ ] **Step 3: The tracker holds its first list**
+
+In `src/main/devices/android/tracker.ts`:
+
+Add to `TrackerDeps`, after `retryMs`:
+
+```ts
+  /** ms the first list after a (re)start waits at most for every ready device's first answer;
+   *  tests shorten it. */
+  settleMs?: number
+```
+
+After `const BOOT_TRIES = 40`, add:
+
+```ts
+/** After track-devices (re)starts, the first list waits this long at most for its devices' answers. */
+const SETTLE_MS = 3000
+```
+
+Add a field after `private lastPublished = ''`:
+
+```ts
+  /** Since track-devices (re)started, until every ready device has answered once (or SETTLE_MS has
+   *  passed): the list isn't published yet, so it holds every device that answers in time rather
+   *  than growing one at a time. A project with two devices would otherwise show whichever answered
+   *  first. */
+  private settling = false
+```
+
+In `spawn()`, right after `this.child = child`, add:
+
+```ts
+    this.settling = true
+    this.later(this.deps.settleMs ?? SETTLE_MS, () => {
+      if (this.child !== child || !this.settling) return
+      this.settling = false
+      this.publish(null)
+    })
+```
+
+In `ask()`'s failure handler, replace:
+
+```ts
+        if (++asked.tries >= IDENTITY_TRIES) return this.publish(null)
+        this.askLater(key, asked, this.retry.identity)
+```
+
+with:
+
+```ts
+        if (++asked.tries >= IDENTITY_TRIES) return this.publish(null)
+        // A first list held for this answer goes out without the device.
+        if (this.settling) this.publish(null)
+        this.askLater(key, asked, this.retry.identity)
+```
+
+At the top of `publish(error)`, before `const seen: Seen[] = []`, add:
+
+```ts
+    if (this.settling) {
+      if (error === null && this.firstAsks()) return
+      this.settling = false
+    }
+```
+
+and after `publish()`, add:
+
+```ts
+  /** A ready device hasn't answered its first ask yet. */
+  private firstAsks(): boolean {
+    return this.entries.some((entry) => {
+      const asked = this.asked.get(keyOf(entry))
+      return entry.state === 'device' && !asked?.identity && (asked?.tries ?? 0) === 0
+    })
+  }
+```
+
+Update the class comment's first sentence to: "Follows the Android devices adb sees with one
+long-running `adb track-devices -l`, and asks each connected device once what it is (again while it's
+still starting up); after each start, the first list waits for every ready device's first answer (3 s
+at most)."
+
+- [ ] **Step 4: Main's list is null until the first**
+
+In `src/main/devices/ipc.ts`:
+
+Remove `const NOTHING: DeviceList = { devices: [], problem: null }` and change `let list: DeviceList = NOTHING` to:
+
+```ts
+  /** null until the first list after watching starts, and again once nothing watches: a tab waits
+   *  for the list rather than taking "no devices" for an answer. */
+  let list: DeviceList | null = null
+```
+
+In `stopWatching`, replace `publish(NOTHING)` with `list = null` (no push: every tab that watched has
+stopped listening).
+
+In the `IPC.devicesView` listener, change `list.devices.some(` to `list?.devices.some(`.
+
+In `src/shared/types.ts`, in `DeckApi.devices`, replace:
+
+```ts
+    /** The devices now. */
+    list(): Promise<DeviceList>
+```
+
+with:
+
+```ts
+    /** The devices now; null while Deck is still looking (adb starting, or devices still saying what
+     *  they are): the list is pushed when it's there. */
+    list(): Promise<DeviceList | null>
+```
+
+- [ ] **Step 5: Run the tests**
+
+Run: `npx vitest run src/main/devices && npm run typecheck`
+Expected: PASS. (`src/preload/index.ts` passes `list` through `ipcRenderer.invoke` unchanged.)
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/main/devices/android/tracker.ts src/main/devices/android/tracker.test.ts src/main/devices/ipc.ts src/main/devices/ipc.test.ts src/shared/types.ts
+git -c user.email=franco@effektstudios.com commit -m "Devices: the first list waits for its devices; list() is null until then" -m "Claude-Session: https://claude.ai/code/session_012TidnAXmFkf7jwBCQQo4jJ"
+```
+
 ---
 
 ### Task 12: The screen
@@ -3438,10 +3770,26 @@ const MAX_QUEUE = 10
 /** The decoder wants increasing timestamps, not real ones. */
 const FRAME_US = 16_667
 
+/** The window's pixel ratio, which changes when the window moves to a display with another scale
+ *  (or zooms). */
+function usePixelRatio(): number {
+  const [ratio, setRatio] = useState(() => window.devicePixelRatio || 1)
+  useEffect(() => {
+    // The query matches only the ratio it was made for: a change ends the match, and the new ratio
+    // makes a new query.
+    const query = window.matchMedia(`(resolution: ${ratio}dppx)`)
+    const update = () => setRatio(window.devicePixelRatio || 1)
+    query.addEventListener('change', update)
+    return () => query.removeEventListener('change', update)
+  }, [ratio])
+  return ratio
+}
+
 /** One device's screen: its stream decoded with WebCodecs onto a canvas that fits the space, and
  *  the pointer and keyboard sent back as touches, scrolls, keys and text. */
 export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceScreenProps) {
   const platform = window.deck.platform
+  const ratio = usePixelRatio()
   const areaRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [area, setArea] = useState<Box>({ width: 0, height: 0 })
@@ -3457,6 +3805,8 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
   const frame = useRef<VideoFrame | null>(null)
   const timestamp = useRef(0)
   const touching = useRef(false)
+  /** The last touch's point on the frame, to lift it there. */
+  const lastTouch = useRef<{ x: number; y: number } | null>(null)
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -3472,6 +3822,20 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
     waitKey.current = true
     if (d && d.state !== 'closed') d.close()
   }, [])
+
+  /** The frame changed size (the screen turned) under a touch: lift it at its last point, once for
+   *  each size. scrcpy drops a touch made for another size than its own, and may switch before or
+   *  after it says so. The pointer is then ignored until it's released. */
+  const lift = useCallback((sizes: Box[]) => {
+    const point = lastTouch.current
+    if (!touching.current || !point) return
+    touching.current = false
+    for (const { width, height } of sizes) {
+      const x = Math.min(point.x, width - 1)
+      const y = Math.min(point.y, height - 1)
+      window.deck.devices.input(deviceId, { type: 'touch', action: 'up', x, y, width, height })
+    }
+  }, [deviceId])
 
   useLayoutEffect(() => {
     const el = areaRef.current
@@ -3489,11 +3853,10 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
   useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (!canvas || !drawn) return
-    const ratio = window.devicePixelRatio || 1
     canvas.width = Math.round(drawn.width * ratio)
     canvas.height = Math.round(drawn.height * ratio)
     draw()
-  }, [drawn?.width, drawn?.height, draw])
+  }, [drawn?.width, drawn?.height, ratio, draw])
 
   // Viewing: main streams the device while any tab views it, and sends its news.
   useEffect(() => {
@@ -3523,7 +3886,9 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
       if (event.type === 'state') return setStream(event)
       if (event.type === 'size') {
         const next = { width: event.width, height: event.height }
+        const before = sizeRef.current
         sizeRef.current = next
+        if (before && (before.width !== next.width || before.height !== next.height)) lift([before, next])
         setSize((s) => (s && s.width === next.width && s.height === next.height ? s : next))
         return
       }
@@ -3560,7 +3925,7 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
       off()
       closeDecoder() // the last picture stays until the stream comes back
     }
-  }, [deviceId, live, draw, closeDecoder])
+  }, [deviceId, live, draw, closeDecoder, lift])
 
   useEffect(() => () => {
     frame.current?.close()
@@ -3589,7 +3954,9 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
   }
   const touch = (action: 'down' | 'move' | 'up', e: ReactPointerEvent<HTMLCanvasElement>) => {
     const point = at(e)
-    if (point) send({ type: 'touch', action, ...point })
+    if (!point) return
+    lastTouch.current = { x: point.x, y: point.y }
+    send({ type: 'touch', action, ...point })
   }
   const onPointerDown = (e: ReactPointerEvent<HTMLCanvasElement>) => {
     if (!interactive || e.button !== 0) return
@@ -3716,11 +4083,12 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { DeviceInfo, DeviceList, DeviceProject } from '@shared/types'
 import { GONE_MS, type Held, type PanelChoice, type PanelView, panelView } from './pick'
 
-const NOTHING: DeviceList = { devices: [], problem: null }
+const NONE: PanelView = { kind: 'none' }
 
-/** The devices Deck sees, while `needed`: main runs adb only while some tab needs it. */
-export function useDeviceList(needed: boolean): DeviceList {
-  const [list, setList] = useState<DeviceList>(NOTHING)
+/** The devices Deck sees while `needed` (main runs adb only while some tab needs it); null until
+ *  main has its first list. */
+export function useDeviceList(needed: boolean): DeviceList | null {
+  const [list, setList] = useState<DeviceList | null>(null)
   useEffect(() => {
     if (!needed) return
     let live = true
@@ -3732,13 +4100,13 @@ export function useDeviceList(needed: boolean): DeviceList {
       setList(next)
     })
     window.deck.devices.list().then((now) => {
-      if (live && !pushed) setList(now)
+      if (live && !pushed && now) setList(now)
     }, () => {})
     return () => {
       live = false
       off()
       stop()
-      setList(NOTHING)
+      setList(null)
     }
   }, [needed])
   return list
@@ -3778,14 +4146,17 @@ export function useDeviceProject(folder: string, active: boolean): [DeviceProjec
   return [project, pick]
 }
 
-/** The panel's view (panelView): a shown device that went away stays, as gone, for 10 s. */
-export function useHeldView(choice: PanelChoice, devices: DeviceInfo[]): PanelView {
-  const held = useRef<Held | null>(null)
+/** The panel's view (panelView): a shown device that went away stays, as gone, for 10 s, unless the
+ *  tab picks another device (`pick`: the tab's, else the project's) or moves to another project
+ *  (`root`). Nothing while `choice` is null: the project or the devices aren't known yet. */
+export function useHeldView(choice: PanelChoice | null, devices: DeviceInfo[], root: string | null, pick: string | null): PanelView {
+  const held = useRef<{ root: string | null; held: Held | null }>({ root: null, held: null })
   const [, rerender] = useState(0)
-  const result = panelView(choice, devices, held.current, Date.now())
-  // Written while rendering: for the same devices panelView answers the same, so a render React runs
+  const kept = held.current.root === root ? held.current.held : null
+  const result = choice ? panelView(choice, devices, kept, Date.now(), pick) : { view: NONE, held: null }
+  // Written while rendering: for the same inputs panelView answers the same, so a render React runs
   // twice (StrictMode) or throws away holds the same device since the same moment.
-  held.current = result.held
+  held.current = { root, held: result.held }
   const goneSince = result.held?.goneSince ?? null
   useEffect(() => {
     if (goneSince === null) return
@@ -3948,6 +4319,8 @@ interface DevicePanelProps {
   /** Every device adb sees, for the menu. */
   devices: DeviceInfo[]
   problem: DeviceList['problem']
+  /** The devices aren't known yet: adb is starting, or they're still saying what they are. */
+  looking: boolean
   /** Unfolded: one flag for the window, so every tab's panel folds together. */
   open: boolean
   onToggle(): void
@@ -3977,7 +4350,7 @@ export function DevicePanel(props: DevicePanelProps) {
   )
 }
 
-function PanelBody({ view, devices, problem, open, onToggle, visible, claudeRuns, onPick, onInsert }: DevicePanelProps) {
+function PanelBody({ view, devices, problem, looking, open, onToggle, visible, claudeRuns, onPick, onInsert }: DevicePanelProps) {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -4067,7 +4440,7 @@ function PanelBody({ view, devices, problem, open, onToggle, visible, claudeRuns
               ))}
             </div>
           )}
-          {view.kind === 'none' && <Nothing problem={problem} />}
+          {view.kind === 'none' && <Nothing problem={problem} looking={looking} />}
         </div>
       )}
       {menuAnchor && (
@@ -4078,7 +4451,8 @@ function PanelBody({ view, devices, problem, open, onToggle, visible, claudeRuns
 }
 
 /** The panel was asked for and there's nothing to show. */
-function Nothing({ problem }: { problem: DeviceList['problem'] }) {
+function Nothing({ problem, looking }: { problem: DeviceList['problem']; looking: boolean }) {
+  if (looking) return <State title="Looking for devices…" />
   if (problem === 'no-adb') {
     return <State title="Deck can't find adb, so it can't see Android devices." detail="Install Android Studio or Android's platform tools." />
   }
@@ -4086,11 +4460,11 @@ function Nothing({ problem }: { problem: DeviceList['problem'] }) {
   return <State title="No devices connected" detail="Plug in an Android phone with USB debugging on, or start an emulator." />
 }
 
-function State({ title, detail, error }: { title: string; detail: string; error?: boolean }) {
+function State({ title, detail, error }: { title: string; detail?: string; error?: boolean }) {
   return (
     <div className={error ? 'cp-state error' : 'cp-state'} role="status">
       <strong>{title}</strong>
-      <span className="cp-state-detail">{detail}</span>
+      {detail && <span className="cp-state-detail">{detail}</span>}
     </div>
   )
 }
@@ -4206,13 +4580,14 @@ Create `src/renderer/src/device/device.css`:
   padding: 8px;
   overflow: hidden;
 }
-/* The canvas is the screen's own size (DeviceScreen), centred in the area. */
+/* The canvas is the screen's own size (DeviceScreen), centred in the area. Its edge is a ring, not a
+   border: a border would squeeze the picture inside that size (blurring it) and shift touches. */
 .dp-screen {
   flex: none;
   display: block;
-  border: 1px solid var(--line-strong);
   border-radius: 8px;
   background: #000;
+  box-shadow: 0 0 0 1px var(--line-strong);
   outline: none;
   touch-action: none;
 }
@@ -4333,14 +4708,14 @@ Replace `src/renderer/src/App.tsx` with:
 
 ```tsx
 import { type CSSProperties, memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import type { AppInfo, ClipboardPreview, MenuCommand, ProjectAction, UsageState } from '@shared/types'
+import type { AppInfo, ClipboardPreview, DeviceInfo, MenuCommand, ProjectAction, UsageState } from '@shared/types'
 import { ClaudePanel } from './claude/ClaudePanel'
 import { shownSession, toResume } from './claude/resume'
 import { useClaudeSession } from './claude/useClaude'
 import { ClipboardCard } from './clipboard/ClipboardCard'
 import { useClipboardItem } from './clipboard/useClipboardItem'
 import { DevicePanel } from './device/DevicePanel'
-import { choosePanel, type PanelChoice } from './device/pick'
+import { choosePanel } from './device/pick'
 import { useDeviceList, useDeviceProject, useHeldView } from './device/useDevices'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
@@ -4380,7 +4755,7 @@ const DEVICE_SHARE = 0.6
 /** The device panel keeps its header and 120 px of screen; the Claude panel under it 160 px. */
 const DEVICE_MIN = 152
 const CLAUDE_MIN_BELOW = 160
-const NO_DEVICE: PanelChoice = { kind: 'none' }
+const NO_DEVICES: DeviceInfo[] = []
 
 /** `px` within min … share of the window, and within `room` (what the other panel and the terminal leave). */
 const clampWidth = (px: number, min: number, share: number, room = Infinity) =>
@@ -4632,15 +5007,17 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   }, [])
 
   // The device panel: the tab's project (read when the tab comes to the front), the devices adb sees
-  // while this tab may show one, and which one it shows.
+  // while this tab may show one (null until known), and which one it shows. Shown by hand, it works
+  // without a project too.
   const [project, pickForProject] = useDeviceProject(folder, active)
   const byHand = tab.deviceHidden === false
   const deviceNeeded = tab.deviceHidden !== true && (byHand || project?.android === true || Boolean(tab.device) || Boolean(project?.pick))
   const deviceList = useDeviceList(deviceNeeded)
-  const choice = project
-    ? choosePanel({ tab: tab.device, project: project.pick, android: project.android, byHand, devices: deviceList.devices })
-    : NO_DEVICE
-  const deviceView = useHeldView(choice, deviceList.devices)
+  const devices = deviceList?.devices ?? NO_DEVICES
+  const choice = deviceList && (project || byHand)
+    ? choosePanel({ tab: tab.device, project: project?.pick ?? null, android: project?.android ?? false, byHand, devices })
+    : null
+  const deviceView = useHeldView(choice, devices, project?.root ?? null, tab.device ?? project?.pick ?? null)
   const showDevice = tab.deviceHidden !== true && (deviceView.kind !== 'none' || byHand)
   const showRight = showClaude || showDevice
   const [deviceDrag, setDeviceDrag] = useState<number | null>(null)
@@ -4771,7 +5148,7 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
         <div className="claude-pane" ref={claudeRef} style={{ width: claudeDrag ?? claudeWidth }}>
           {showDevice && (
             <div className="device-slot" ref={deviceRef} style={deviceStyle}>
-              <DevicePanel view={deviceView} devices={deviceList.devices} problem={deviceList.problem}
+              <DevicePanel view={deviceView} devices={devices} problem={deviceList?.problem ?? null} looking={deviceList === null}
                 open={deviceOpen} onToggle={onDeviceToggle} visible={active && pageVisible} claudeRuns={claudeRuns}
                 onPick={pickDevice} onInsert={insert} />
             </div>
