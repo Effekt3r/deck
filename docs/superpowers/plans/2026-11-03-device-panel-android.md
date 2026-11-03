@@ -2031,6 +2031,7 @@ export async function startScrcpy(serial: string, server: ScrcpyServer, events: 
     const onChunk = (chunk: Buffer) => {
       for (const event of reader.feed(chunk)) {
         if (over) return
+        if (event.type === 'error') return finish(event.message)
         if (event.type === 'codec' && event.codec !== CODEC_H264) {
           return finish(reason(event.codec <= 1 ? "The device couldn't start its video." : `scrcpy sent another codec (${event.codec.toString(16)}).`))
         }
@@ -3587,10 +3588,11 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
   const onWheel = (e: WheelEvent<HTMLCanvasElement>) => {
     const point = at(e)
     if (!interactive || !point) return
-    // About one step per wheel notch: 100 px, 3 lines or a page.
+    // About one step per wheel notch: 100 px, 3 lines or a page. Android scrolls right for a
+    // positive dx, as the wheel's deltaX does, but up for a positive dy, against its deltaY.
     const unit = e.deltaMode === 1 ? 3 : e.deltaMode === 2 ? 1 : 100
-    const step = (delta: number) => Math.max(-16, Math.min(16, -delta / unit))
-    send({ type: 'scroll', ...point, dx: step(e.deltaX), dy: step(e.deltaY) })
+    const step = (delta: number) => Math.max(-16, Math.min(16, delta / unit))
+    send({ type: 'scroll', ...point, dx: step(e.deltaX), dy: step(-e.deltaY) })
   }
   const onKeyDown = (e: KeyboardEvent<HTMLCanvasElement>) => {
     if (!interactive) return
