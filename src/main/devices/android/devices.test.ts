@@ -16,6 +16,10 @@ const EMULATOR = 'emulator-5554          device product:sdk_gphone64_arm64 model
 // As adb would list the S25 over USB on Windows: no `usb:` field (Windows' own USB driver gives
 // adb no device path).
 const S25_USB_WIN = 'R5CW20XY7QZ            device product:r13sxxx model:SM_S731B device:r13s transport_id:3\n'
+// mDNS renames a Wi-Fi debugging service that clashes with one already resolved (the phone
+// announcing itself again after a reconnect), so adb lists a name with a space in it (scrcpy
+// issue #6248).
+const RENAMED_WIFI = 'adb-AEORQMSAOWNQ-N7Ger8 (2)._adb-tls-connect._tcp device product:husky model:Pixel_10_Pro device:husky transport_id:12\n'
 
 const identity = (over: Partial<Identity>): Identity => ({ serialNo: '', maker: '', model: '', release: '', booted: true, avd: '', name: '', ...over })
 const c66 = identity({ serialNo: '8d2e61a', maker: 'CHAINWAY', model: 'C66', release: '13', name: 'C66' })
@@ -35,6 +39,17 @@ describe('parseDeviceLines', () => {
     expect(parseDeviceLines('\n8d2e61a unauthorized usb:34603008X transport_id:7\n\n')).toEqual([
       { serial: '8d2e61a', state: 'unauthorized', usb: true, model: '', transport: '7' },
     ])
+  })
+
+  it('reads an adb name with a space in it (mDNS renamed it after a clash)', () => {
+    expect(parseDeviceLines(RENAMED_WIFI)).toEqual([
+      { serial: 'adb-AEORQMSAOWNQ-N7Ger8 (2)._adb-tls-connect._tcp', state: 'device', usb: false, model: 'Pixel_10_Pro', transport: '12' },
+    ])
+  })
+
+  it('reads "no permissions", whose state is itself two words', () => {
+    const line = '????????????       no permissions (missing udev rules?); see [http://developer.android.com/tools/device.html]\n'
+    expect(entry(line).state).toBe('no permissions')
   })
 })
 
@@ -94,10 +109,15 @@ describe('parseIdentity', () => {
 
   it('prefers the newer AVD property over the older one', () => {
     expect(parseIdentity('avd=\navd_old=Pixel_4\n').avd).toBe('Pixel_4')
+    expect(parseIdentity('avd=New\navd_old=Old\n').avd).toBe('New')
   })
 
   it('keeps the first value for a key, not a later one', () => {
     expect(parseIdentity('serial=REAL\nname=x\nserial=FAKE\n').serialNo).toBe('REAL')
+  })
+
+  it('is false when the boot-completed property is empty', () => {
+    expect(parseIdentity('booted=\n').booted).toBe(false)
   })
 })
 
@@ -115,6 +135,10 @@ describe('deviceId', () => {
   it('reads the serial out of a Wi-Fi (mDNS) name with a trailing dot', () => {
     const line = 'adb-R5CW20XY7QZ-Xk3Tq9._adb-tls-connect._tcp. device product:r13sxxx model:SM_S731B device:r13s transport_id:1\n'
     expect(deviceId({ entry: entry(line), identity: null })).toBe('android:R5CW20XY7QZ')
+  })
+
+  it('reads the serial out of a renamed Wi-Fi (mDNS) name that holds a space', () => {
+    expect(deviceId({ entry: entry(RENAMED_WIFI), identity: null })).toBe('android:AEORQMSAOWNQ')
   })
 
   it("is an ip:port Wi-Fi phone's own address before it answers", () => {

@@ -20,16 +20,24 @@ export interface AdbEntry {
 /** A network connection's adb name: `ip:port`, or an mDNS service name (Wi-Fi debugging). */
 const NETWORK = /:\d+$|\._adb(-tls-connect)?\._tcp\.?$/
 
+/** A device line: the adb name (which can hold spaces: mDNS renames a clashing Wi-Fi name to
+ *  `adb-<serial>-<x> (2)._adb-tls-connect._tcp`), the state, then `key:value` fields. */
+const LINE = /^(.+?)\s+(device|offline|unauthorized|authorizing|connecting|recovery|rescue|sideload|bootloader|host|detached|no permissions)(?=\s|$)(.*)$/
+
 /** Lines like `8d2e61a   device usb:34603008X product:C66 model:C66 device:C66 transport_id:32410`. */
 export function parseDeviceLines(text: string): AdbEntry[] {
   const entries: AdbEntry[] = []
   for (const line of text.split('\n')) {
-    const [serial, state, ...fields] = line.trim().split(/\s+/)
-    if (!serial || !state) continue
+    const m = LINE.exec(line.trim())
+    if (!m) continue
+    const [, serial, state, rest] = m
     const attrs = new Map<string, string>()
-    for (const field of fields) {
-      const i = field.indexOf(':')
-      if (i > 0) attrs.set(field.slice(0, i), field.slice(i + 1))
+    const fields = rest.trim()
+    if (fields) {
+      for (const field of fields.split(/\s+/)) {
+        const i = field.indexOf(':')
+        if (i > 0) attrs.set(field.slice(0, i), field.slice(i + 1))
+      }
     }
     // Windows' own USB driver gives adb no device path, so a cable there lists no `usb:` field
     // either: a name that isn't an emulator's or a network one counts as a cable too.
@@ -40,7 +48,8 @@ export function parseDeviceLines(text: string): AdbEntry[] {
 }
 
 /** `adb track-devices -l` writes each list as four hex digits of length, then that many bytes. The
- *  lists complete in `buf`, and what's left of the next one. Throws on a length that isn't hex. */
+ *  lists complete in `input`, and `rest` is what's left of the next one, with any "\r" already
+ *  dropped. Throws on a length that isn't hex. */
 export function readTrackFrames(input: Buffer): { lists: AdbEntry[][]; rest: Buffer } {
   // On Windows adb writes this stream in text mode, so each "\n" may arrive as "\r\n", which the
   // lengths don't count. adb's own lists hold no "\r": drop them all before counting.
