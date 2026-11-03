@@ -6,6 +6,9 @@ describe('controlMessages', () => {
   it('a touch, in the frame it was made for', () => {
     expect(controlMessages({ type: 'touch', action: 'move', x: 10, y: 20, width: 720, height: 1440 }))
       .toEqual([touchMessage({ action: 'move', x: 10, y: 20, width: 720, height: 1440 })])
+    // The last valid pixel index is width - 1.
+    expect(controlMessages({ type: 'touch', action: 'down', x: 719, y: 10, width: 720, height: 1440 }))
+      .toEqual([touchMessage({ action: 'down', x: 719, y: 10, width: 720, height: 1440 })])
   })
 
   it('a scroll', () => {
@@ -24,8 +27,11 @@ describe('controlMessages', () => {
     expect(controlMessages({ type: 'text', text: 'a'.repeat(301) })).toHaveLength(2)
     expect(controlMessages({ type: 'paste', text: 'line 1\nline 2' })).toEqual([setClipboardMessage('line 1\nline 2', true)])
 
+    // toEqual on a 256 KiB message is slow (hundreds of ms): compare bytes with Buffer.equals.
     const max = 'a'.repeat((1 << 18) - 14)
-    expect(controlMessages({ type: 'paste', text: max })).toEqual([setClipboardMessage(max, true)])
+    const paste = controlMessages({ type: 'paste', text: max })
+    expect(paste).toHaveLength(1)
+    expect(paste[0].equals(setClipboardMessage(max, true))).toBe(true)
   })
 
   it("nothing for input that isn't valid", () => {
@@ -36,6 +42,7 @@ describe('controlMessages', () => {
       { type: 'touch', action: 'down', x: 5, y: Number.NaN, width: 10, height: 10 },
       { type: 'touch', action: 'down', x: 720, y: 10, width: 720, height: 1440 }, // x at width: pixels are 0 … width - 1
       { type: 'touch', action: 'down', x: 800, y: 10, width: 720, height: 1440 }, // x past width
+      { type: 'touch', action: 'down', x: 719.5, y: 10, width: 720, height: 1440 }, // x not a whole pixel
       { type: 'touch', action: 'down', x: 10, y: 10, width: 65536, height: 1440 }, // width over 0xffff
       { type: 'touch', action: 'down', x: 10, y: 10, width: 720.5, height: 1440 }, // width not an integer
       { type: 'scroll', x: 1, y: 1, width: 2, height: 2, dx: 0, dy: 99 },

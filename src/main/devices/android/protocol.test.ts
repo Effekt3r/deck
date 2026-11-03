@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CODEC_H264, FINGER, keycodeMessage, resetVideoMessage, scrollMessage, setClipboardMessage, textMessage, textPieces, touchMessage, VideoReader } from './protocol'
+import { CODEC_H264, FINGER, keycodeMessage, resetVideoMessage, scrollMessage, setClipboardMessage, textMessage, textPieces, touchMessage, VideoEvent, VideoReader } from './protocol'
 
 // The expected bytes are scrcpy 5.0.1's own: app/tests/test_control_msg_serialize.c.
 describe('control messages', () => {
@@ -171,13 +171,19 @@ describe('VideoReader', () => {
     expect(reader.feed(sessionBuf(720, 1440))).toEqual([])
   })
 
-  it('an invalid screen size breaks the stream', () => {
-    const reader = new VideoReader()
-    const bytes = Buffer.concat([DUMMY, nameBuf('C66'), codecBuf(CODEC_H264), sessionBuf(0, 1440)])
-    expect(reader.feed(bytes)).toEqual([
+  it('an invalid screen size (zero, or over 0xffff) breaks the stream', () => {
+    const zero = new VideoReader()
+    expect(zero.feed(Buffer.concat([DUMMY, nameBuf('C66'), codecBuf(CODEC_H264), sessionBuf(0, 1440)]))).toEqual([
       { type: 'name', name: 'C66' },
       { type: 'codec', codec: CODEC_H264 },
       { type: 'error', message: 'scrcpy sent a 0×1440 screen.' },
+    ])
+
+    const tooWide = new VideoReader()
+    expect(tooWide.feed(Buffer.concat([DUMMY, nameBuf('C66'), codecBuf(CODEC_H264), sessionBuf(70_000, 1440)]))).toEqual([
+      { type: 'name', name: 'C66' },
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'error', message: 'scrcpy sent a 70000×1440 screen.' },
     ])
   })
 
@@ -187,11 +193,40 @@ describe('VideoReader', () => {
     for (let i = 0; i < payload.length; i++) payload[i] = i % 256
     const bytes = Buffer.concat([prefix, packetBuf((1n << 61n) | 16_666n, payload)])
 
-    const events: unknown[] = []
+    const events: VideoEvent[] = []
     for (let i = 0; i < bytes.length; i += 1448) events.push(...reader.feed(bytes.subarray(i, i + 1448)))
 
     expect(events).toHaveLength(4)
-    expect(events.at(-1)).toEqual({ type: 'packet', config: false, key: true, data: new Uint8Array(payload) })
+    const last = events.at(-1)
+    if (last?.type !== 'packet') throw new Error('expected a packet event')
+    expect(last.config).toBe(false)
+    expect(last.key).toBe(true)
+    // toEqual on a 2 MiB array is slow (seconds): compare bytes with Buffer.equals instead.
+    expect(Buffer.from(last.data).equals(payload)).toBe(true)
+  })
+
+  it('a 1 MiB packet fed in 13-byte chunks fills as bytes arrive: correct, and fast', () => {
+    const reader = new VideoReader()
+    const payload = Buffer.alloc(1024 * 1024)
+    for (let i = 0; i < payload.length; i++) payload[i] = i % 256
+    const bytes = Buffer.concat([prefix, packetBuf((1n << 61n) | 16_666n, payload)])
+
+    const start = performance.now()
+    const events: VideoEvent[] = []
+    for (let i = 0; i < bytes.length; i += 13) events.push(...reader.feed(bytes.subarray(i, i + 13)))
+    const ms = performance.now() - start
+
+    expect(events).toHaveLength(4)
+    const last = events.at(-1)
+    if (last?.type !== 'packet') throw new Error('expected a packet event')
+    expect(last.config).toBe(false)
+    expect(last.key).toBe(true)
+    expect(Buffer.from(last.data).equals(payload)).toBe(true)
+    // Before filling the packet as bytes arrive, every one of these ~80,700 tiny chunks sat in a
+    // list until the packet completed, then got shift()ed off one at a time in a single batched
+    // copy: O(chunk count²), which is seconds, not tens of milliseconds, once the count is large
+    // enough (a 2 MiB packet this same way measured in the seconds on the old code).
+    expect(ms).toBeLessThan(1000)
   })
 
   it('a second session header after packets gives a second size event (a rotation, or after reset video)', () => {

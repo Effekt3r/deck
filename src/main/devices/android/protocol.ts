@@ -34,8 +34,9 @@ export class VideoReader {
   private chunks: Buffer[] = []
   private len = 0
   private stage: 'dummy' | 'name' | 'codec' | 'packets' = 'dummy'
-  /** A packet header already read, waiting for its payload to arrive. */
-  private pending: { config: boolean; key: boolean; size: number } | null = null
+  /** A packet whose header is read (so its size is already validated) and is collecting its
+   *  payload as chunks arrive; `data` is allocated once, up front, and never grows. */
+  private filling: { data: Uint8Array; filled: number; config: boolean; key: boolean } | null = null
   private sawSize = false
   private broken = false
 
@@ -61,11 +62,12 @@ export class VideoReader {
         if (this.len < 4) break
         events.push({ type: 'codec', codec: this.take(4).readUInt32BE(0) })
         this.stage = 'packets'
-      } else if (this.pending) {
-        const { config, key, size } = this.pending
-        if (this.len < size) break
-        this.pending = null
-        events.push({ type: 'packet', config, key, data: this.takeOwned(size) })
+      } else if (this.filling) {
+        const f = this.filling
+        this.fill(f)
+        if (f.filled < f.data.length) break // chunks is now empty too
+        this.filling = null
+        events.push({ type: 'packet', config: f.config, key: f.key, data: f.data })
       } else {
         if (this.len < 12) break
         const head = this.take(12)
@@ -90,7 +92,10 @@ export class VideoReader {
           break
         }
         const flags = head.readBigUInt64BE(0)
-        this.pending = { config: (flags & FLAG_CONFIG) !== 0n, key: (flags & FLAG_KEY) !== 0n, size }
+        // Allocated now, filled as bytes arrive: a slow, tiny-chunked packet never has to sit
+        // fully buffered as a list, which is what made shift()ing it off, chunk by chunk, an
+        // O(chunk count²) stall once that count ran into the tens of thousands.
+        this.filling = { data: new Uint8Array(size), filled: 0, config: (flags & FLAG_CONFIG) !== 0n, key: (flags & FLAG_KEY) !== 0n }
       }
     }
     return events
@@ -101,10 +106,34 @@ export class VideoReader {
     this.broken = true
     this.chunks = []
     this.len = 0
+    this.filling = null
+  }
+
+  /** Copies as much of `f`'s remaining bytes as are currently buffered, consuming those chunks
+   *  (so the chunk list never holds more than the latest feed() added). Leaves `f.filled` short
+   *  of `f.data.length` when there still isn't enough: the chunk list is then empty too. */
+  private fill(f: { data: Uint8Array; filled: number }): void {
+    while (f.filled < f.data.length && this.chunks.length) {
+      const next = this.chunks[0]
+      const want = f.data.length - f.filled
+      if (next.length <= want) {
+        f.data.set(next, f.filled)
+        f.filled += next.length
+        this.len -= next.length
+        this.chunks.shift()
+      } else {
+        f.data.set(next.subarray(0, want), f.filled)
+        f.filled += want
+        this.len -= want
+        this.chunks[0] = next.subarray(want)
+      }
+    }
   }
 
   /** Consumes and returns the first `n` buffered bytes (already checked available): a view when
-   *  the first chunk alone has enough, else a fresh buffer built from however many chunks it takes. */
+   *  the first chunk alone has enough, else a fresh buffer built from however many chunks it takes.
+   *  Only for the small fixed-size fields (the dummy byte, the name, the codec id, a 12-byte
+   *  header): a packet's payload is collected by fill() instead, directly into its own buffer. */
   private take(n: number): Buffer {
     const first = this.chunks[0]
     let out: Buffer
@@ -124,35 +153,6 @@ export class VideoReader {
           this.chunks.shift()
         } else {
           next.copy(out, offset, 0, want)
-          this.chunks[0] = next.subarray(want)
-          offset += want
-        }
-      }
-    }
-    this.len -= n
-    return out
-  }
-
-  /** Like take(), but always a fresh, independent Uint8Array: the one copy a packet's payload
-   *  ever takes, however many chunks it was split across, and whatever `chunks[0]` does next. */
-  private takeOwned(n: number): Uint8Array {
-    const out = new Uint8Array(n)
-    const first = this.chunks[0]
-    if (first.length >= n) {
-      out.set(first.subarray(0, n))
-      if (first.length === n) this.chunks.shift()
-      else this.chunks[0] = first.subarray(n)
-    } else {
-      let offset = 0
-      while (offset < n) {
-        const next = this.chunks[0]
-        const want = n - offset
-        if (next.length <= want) {
-          out.set(next, offset)
-          offset += next.length
-          this.chunks.shift()
-        } else {
-          out.set(next.subarray(0, want), offset)
           this.chunks[0] = next.subarray(want)
           offset += want
         }
