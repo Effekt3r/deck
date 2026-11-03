@@ -84,8 +84,9 @@ describe('DeviceStreams', () => {
     const { streams, started, sent } = setup()
     streams.view('android:1')
     await flush()
+    const joined = sent.length
     streams.view('android:1') // the session exists but hasn't gone live: no stale state, no reset
-    expect(sent.at(-1)).toEqual(['android:1', { type: 'state', state: 'connecting' }])
+    expect(sent.slice(joined)).toEqual([['android:1', { type: 'state', state: 'connecting' }]])
     expect(started[0].session.send).not.toHaveBeenCalled()
 
     streams.pause()
@@ -205,6 +206,80 @@ describe('DeviceStreams', () => {
 })
 
 describe('DeviceStreams, the edges', () => {
+  it('a start that resolved is never timed out', async () => {
+    const { streams, started, sent } = setup()
+    streams.view('android:1')
+    await flush()
+    started[0].events.packet(frame)
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(states(sent)).toEqual(['connecting', 'live'])
+    expect(started).toHaveLength(1)
+    expect(started[0].session.stop).not.toHaveBeenCalled()
+  })
+
+  it("a timed-out start's own Stopped. isn't a second failure: one retry, one new start", async () => {
+    const signals: AbortSignal[] = []
+    const sent: [string, DeviceStreamEvent][] = []
+    const streams = new DeviceStreams({
+      start: (_id, _events, signal) =>
+        new Promise((_resolve, reject) => {
+          signals.push(signal)
+          signal.addEventListener('abort', () => reject(new Error('Stopped.'))) // as startScrcpy does
+        }),
+      send: (id, event) => sent.push([id, event]),
+    })
+    streams.view('android:1')
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(states(sent)).toEqual(['connecting', 'reconnecting'])
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(signals).toHaveLength(2)
+  })
+
+  it("a start that settles long after it was stopped doesn't cancel the next start's deadline", async () => {
+    const starts: { signal: AbortSignal; reject: (err: Error) => void }[] = []
+    const streams = new DeviceStreams({
+      start: (_id, _events, signal) => new Promise((_resolve, reject) => { starts.push({ signal, reject }) }),
+      send: () => {},
+    })
+    streams.view('android:1')
+    streams.pause() // locked mid-start: start 0 is aborted, but its adb step is still running
+    streams.resume()
+    await vi.advanceTimersByTimeAsync(5_000)
+    starts[0].reject(new Error('Stopped.')) // the adb step returns
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(starts[1].signal.aborted).toBe(true) // start 1 still met its 20 s deadline
+  })
+
+  it('a viewer joining a reconnected, not-yet-live session gets reconnecting, with no stale size or key-frame reset', async () => {
+    const { streams, started, sent } = setup()
+    streams.view('android:1')
+    await flush()
+    started[0].events.size(720, 1440)
+    started[0].events.packet(frame)
+    started[0].events.end('gone')
+    await vi.advanceTimersByTimeAsync(1000) // the retry begins a new, not-yet-live session
+    const before = sent.length
+    streams.view('android:1')
+    expect(sent.slice(before)).toEqual([['android:1', { type: 'state', state: 'reconnecting' }]])
+    expect(started[1].session.send).not.toHaveBeenCalled()
+  })
+
+  it('a stream live for exactly STEADY_MS (5000 ms) gets a fresh try; one ms short still counts towards the error', async () => {
+    for (const [ms, fresh] of [[5000, true], [4999, false]] as const) {
+      const { streams, started } = setup()
+      streams.view('android:1')
+      await flush()
+      started[0].events.end('x') // a break before going live: failures 0 → 1, next wait 2 s
+      await vi.advanceTimersByTimeAsync(1000)
+      started[1].events.packet(frame)
+      await vi.advanceTimersByTimeAsync(ms)
+      started[1].events.end('y')
+      await vi.advanceTimersByTimeAsync(1000) // a fresh try waits 1 s; a still-counted one waits 2 s
+      expect(started.length === 3).toBe(fresh)
+      streams.stopAll()
+    }
+  })
+
   it('waits exactly 1, 2 and 5 s between tries, then stops trying; retry() gives three fresh ones', async () => {
     let failing = false
     const { streams, started, sent, attempts } = setup(() => failing)

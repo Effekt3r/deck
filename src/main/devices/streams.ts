@@ -152,20 +152,21 @@ export class DeviceStreams {
     const generation = ++s.generation
     this.deps.send(id, { type: 'state', state: s.failures > 0 ? 'reconnecting' : 'connecting' })
     const current = () => this.streams.get(id) === s && s.generation === generation
-    const clearStartTimer = () => {
-      if (s.startTimer) {
-        clearTimeout(s.startTimer)
-        s.startTimer = null
-      }
-    }
-    s.startTimer = setTimeout(() => {
-      s.startTimer = null
-      if (!current()) return
+    // This start's own deadline: a start that settles late (aborted, then its adb step returned)
+    // must not clear the deadline of the start that replaced it.
+    const deadline = setTimeout(() => {
+      if (s.startTimer === deadline) s.startTimer = null
+      if (!current() || s.starting !== start) return
       s.generation++ // the abort's own "Stopped." rejection must not be heard
       start.abort()
       s.starting = null
-      this.failed(id, s, "The device didn't start its stream within 20 s.")
+      this.failed(id, s, `The device didn't start its stream within ${Math.max(1, Math.round(this.startMs / 1000))} s.`)
     }, this.startMs)
+    s.startTimer = deadline
+    const clearStartTimer = () => {
+      clearTimeout(deadline)
+      if (s.startTimer === deadline) s.startTimer = null
+    }
     const events: ScrcpyEvents = {
       size: (width, height) => {
         if (!current()) return
