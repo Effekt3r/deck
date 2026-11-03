@@ -48,31 +48,54 @@ export function serverArgs(version: string, scid: string): string[] {
   ]
 }
 
-/** The last error the server (or adb) printed, without the "[server] ERROR: " prefix; '' if none. */
+/** The last error the server (or adb) printed, without its prefix; '' if none. A line counts when
+ *  it has "ERROR", starts a Java exception/error's qualified name (`java.lang.FooException: …`),
+ *  continues one (`Caused by: …`, returned without that prefix), or is adb's own "error:" line; a
+ *  stack frame ("\tat …") never does. */
 export function serverError(text: string): string {
-  const lines = text.split(/\r?\n/).map((line) => line.trim())
-    .filter((line) => /\b(ERROR|Exception)\b/.test(line) || /^(adb: )?error:/i.test(line))
-  return (lines.at(-1) ?? '').replace(/^\[server\]\s*/, '').replace(/^ERROR:\s*/, '')
+  const isError = (line: string) =>
+    /\bERROR\b/.test(line) ||
+    /^[\w.$]+(Exception|Error)\b/.test(line) ||
+    line.startsWith('Caused by: ') ||
+    /^(adb: )?error:/i.test(line)
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(isError)
+  return (lines.at(-1) ?? '').replace(/^\[server\]\s*/, '').replace(/^ERROR:\s*/, '').replace(/^Caused by:\s*/, '')
+}
+
+/** The video codec id's four ASCII letters, the way scrcpy names them (0x68323634 is "h264"); the
+ *  hex value when the bytes aren't printable (a corrupt or unknown id). */
+function codecName(codec: number): string {
+  const bytes = Buffer.alloc(4)
+  bytes.writeUInt32BE(codec >>> 0)
+  const text = bytes.toString('latin1')
+  return /^[\x20-\x7e]{4}$/.test(text) ? text : `0x${codec.toString(16)}`
 }
 
 const connected = (socket: Socket) =>
   new Promise<void>((resolve, reject) => {
     socket.once('connect', () => resolve())
     socket.once('error', reject)
+    // Destroying a still-connecting socket (cleanUp after a stop, or the shell exiting right then)
+    // only ever emits 'close': without this, startScrcpy would hang instead of rejecting.
+    socket.once('close', () => reject(new Error('closed before connecting')))
   })
 
 /** Through a forward tunnel a connection succeeds even before the server listens (adb accepts it,
  *  then drops it), so scrcpy's dummy byte says the server is really there. Up to 100 tries, 100 ms
- *  apart, as scrcpy itself does. The socket comes back paused, with what it sent first. */
-async function firstAnswer(io: ScrcpyIo, port: number, gaveUp: () => boolean): Promise<{ socket: Socket; chunk: Buffer }> {
+ *  apart, as scrcpy itself does. The socket comes back paused, with what it sent first. `onAttempt`
+ *  reports the in-flight attempt's socket (null between attempts), so a stop can close it instead of
+ *  waiting out its 2 s cap. */
+async function firstAnswer(io: ScrcpyIo, port: number, gaveUp: () => boolean, onAttempt: (socket: Socket | null) => void): Promise<{ socket: Socket; chunk: Buffer }> {
   for (let attempt = 0; attempt < 100 && !gaveUp(); attempt++) {
     const answer = await new Promise<{ socket: Socket; chunk: Buffer } | null>((resolve) => {
       const socket = io.connect(port)
+      onAttempt(socket)
       let done = false
       const settle = (value: { socket: Socket; chunk: Buffer } | null) => {
         if (done) return
         done = true
         clearTimeout(timer)
+        onAttempt(null)
         if (!value) socket.destroy()
         resolve(value)
       }
@@ -91,22 +114,30 @@ async function firstAnswer(io: ScrcpyIo, port: number, gaveUp: () => boolean): P
 }
 
 /** Streams one device: copies the server, opens a tunnel, starts the server and connects to its
- *  video and control sockets. Resolves once video flows; rejects, cleaning up, when a step fails or
- *  `signal` stops it first. */
+ *  video and control sockets. Resolves once both sockets are connected (the server answered),
+ *  before any frame; rejects, cleaning up, when a step fails or `signal` stops it first. */
 export async function startScrcpy(serial: string, server: ScrcpyServer, events: ScrcpyEvents, io: ScrcpyIo, signal?: AbortSignal): Promise<ScrcpySession> {
   const scid = randomInt(0, 0x7fffffff).toString(16).padStart(8, '0')
   const adb = (args: string[], timeoutMs?: number) => io.run(['-s', serial, ...args], timeoutMs)
   let port = 0
   let shell: ChildProcess | null = null
+  let probe: Socket | null = null
   let video: Socket | null = null
   let control: Socket | null = null
   let said = ''
+  let sawPacket = false
+  let endTimer: NodeJS.Timeout | null = null
   let returned = false
   let over = false
   let why = ''
 
   /** Safe to run again: a step that finishes after a stop may have opened something since. */
   const cleanUp = () => {
+    if (endTimer) {
+      clearTimeout(endTimer)
+      endTimer = null
+    }
+    probe?.destroy()
     video?.destroy()
     control?.destroy()
     shell?.kill()
@@ -129,6 +160,17 @@ export async function startScrcpy(serial: string, server: ScrcpyServer, events: 
   const still = () => {
     if (over) throw new Error(why)
   }
+  /** A video or control close is reported at once, before the shell's own: its last words reach
+   *  Deck a moment later (adbd, then the adb client), and explain the drop better. Waits at most 1 s
+   *  for the shell to close first; one pending timer, so two closes can't race two reasons, and
+   *  finish() itself stays idempotent either way. */
+  const finishSoon = (fallback: string) => {
+    if (over || endTimer) return
+    endTimer = setTimeout(() => {
+      endTimer = null
+      finish(reason(fallback))
+    }, 1000)
+  }
   // Stopping a start under way: without it, a Deck that quit mid-start left the server running on
   // the device (seen on 2026-11-03).
   const stop = () => finish('Stopped.')
@@ -150,17 +192,38 @@ export async function startScrcpy(serial: string, server: ScrcpyServer, events: 
     child.stdout?.on('data', keep)
     child.stderr?.on('data', keep)
     child.on('error', (err) => finish(err.message))
-    child.on('close', (code) => finish(reason(`scrcpy's server stopped (exit code ${code}).`)))
+    child.on('close', (code, sig) => {
+      if (endTimer) {
+        clearTimeout(endTimer)
+        endTimer = null
+      }
+      finish(reason(sig ? `scrcpy's server was stopped (${sig}).` : `scrcpy's server stopped (exit code ${code}).`))
+    })
 
-    const first = await firstAnswer(io, port, () => over)
+    const first = await firstAnswer(io, port, () => over, (socket) => { probe = socket })
     video = first.socket
     still()
+    video.on('error', () => {})
+    video.on('close', () => finishSoon('The device stopped sending video.'))
+
     control = io.connect(port)
-    await connected(control)
+    try {
+      await connected(control)
+    } catch {
+      throw new Error("Couldn't connect to the device's control socket.")
+    }
     still()
+    control.setNoDelay(true) // scrcpy disables Nagle on its control socket: taps shouldn't wait.
+    // Nothing needs the tunnel once both sockets are through it; removing it now means a crash
+    // after this point leaves no forward behind.
+    if (port) {
+      const tunnel = port
+      port = 0
+      adb(['forward', '--remove', `tcp:${tunnel}`]).catch(() => {})
+    }
     control.on('error', () => {})
     control.on('data', () => {}) // device messages: none were asked for
-    control.on('close', () => finish(reason('The device closed the control connection.')))
+    control.on('close', () => finishSoon('The device closed the control connection.'))
 
     const reader = new VideoReader()
     const onChunk = (chunk: Buffer) => {
@@ -168,14 +231,18 @@ export async function startScrcpy(serial: string, server: ScrcpyServer, events: 
         if (over) return
         if (event.type === 'error') return finish(event.message)
         if (event.type === 'codec' && event.codec !== CODEC_H264) {
-          return finish(reason(event.codec <= 1 ? "The device couldn't start its video." : `scrcpy sent another codec (${event.codec.toString(16)}).`))
+          return finish(reason(event.codec <= 1 ? "The device couldn't start its video." : `scrcpy sent another codec (${codecName(event.codec)}).`))
         }
         if (event.type === 'size') events.size(event.width, event.height)
-        else if (event.type === 'packet') events.packet({ config: event.config, key: event.key, data: event.data })
+        else if (event.type === 'packet') {
+          if (!sawPacket) {
+            sawPacket = true
+            said = '' // a non-fatal startup line (e.g. a refused settings write) must not outlive it
+          }
+          events.packet({ config: event.config, key: event.key, data: event.data })
+        }
       }
     }
-    video.on('error', () => {})
-    video.on('close', () => finish(reason('The device stopped sending video.')))
     video.on('data', onChunk)
     onChunk(first.chunk)
     video.resume()
@@ -185,7 +252,7 @@ export async function startScrcpy(serial: string, server: ScrcpyServer, events: 
   } finally {
     signal?.removeEventListener('abort', stop)
   }
-  if (over) throw new Error(serverError(said) || why)
+  if (over) throw new Error(why === 'Stopped.' ? why : serverError(said) || why)
   returned = true
 
   return {
