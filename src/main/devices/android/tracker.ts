@@ -157,7 +157,12 @@ export class AndroidTracker {
   private update(): void {
     const keys = new Set(this.entries.map(keyOf))
     for (const key of this.asked.keys()) if (!keys.has(key)) this.asked.delete(key)
-    for (const entry of this.entries) if (entry.state === 'device') this.ask(entry, this.asked.get(keyOf(entry))?.due ?? false)
+    for (const entry of this.entries) {
+      if (entry.state !== 'device') continue
+      const asked = this.asked.get(keyOf(entry))
+      // A device waiting out its retry gap is asked by its timer, not by the next list.
+      if (!asked || asked.due) this.ask(entry, asked?.due ?? false)
+    }
     this.publish(null)
   }
 

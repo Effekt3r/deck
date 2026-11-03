@@ -110,7 +110,10 @@ describe('AndroidTracker', () => {
     vi.useFakeTimers()
     const { tracker, children, published } = setup(async () => c66)
     tracker.start()
-    children[0].stderr.emit('data', Buffer.from('* daemon not running; starting now at tcp:5037\n* daemon started successfully\n'))
+    children[0].stderr.emit(
+      'data',
+      Buffer.from("* daemon not running; starting now at tcp:5037\nadb server version (41) doesn't match this client (40); killing...\n* daemon started successfully\n"),
+    )
     children[0].stdout.emit('data', frame(''))
     children[0].emit('close', 0)
     expect(published.at(-1)?.error).toBe("adb's server stopped.")
@@ -124,6 +127,16 @@ describe('AndroidTracker', () => {
     children[0].stderr.emit('data', Buffer.from("error: protocol fault (couldn't read status): Connection reset by peer\n"))
     children[0].emit('close', 1)
     expect(published.at(-1)?.error).toBe("error: protocol fault (couldn't read status): Connection reset by peer")
+    tracker.stop()
+  })
+
+  it("uses adb's own error line over a later, unmarked one", () => {
+    vi.useFakeTimers()
+    const { tracker, children, published } = setup(async () => c66)
+    tracker.start()
+    children[0].stderr.emit('data', Buffer.from('error: closed\nsome other line\n'))
+    children[0].emit('close', 1)
+    expect(published.at(-1)?.error).toBe('error: closed')
     tracker.stop()
   })
 
@@ -175,7 +188,30 @@ describe('AndroidTracker', () => {
     tracker.stop()
   })
 
-  it('keeps tracking when publish throws, and tries again with the next list', async () => {
+  it('start() resets the backoff, even after restarts had grown it before a stop()', async () => {
+    vi.useFakeTimers()
+    const { tracker, children } = setup(async () => c66)
+    tracker.start()
+    children[0].emit('close', 1)
+    await vi.advanceTimersByTimeAsync(20)
+    expect(children).toHaveLength(2)
+    children[1].emit('close', 1)
+    await vi.advanceTimersByTimeAsync(40)
+    expect(children).toHaveLength(3)
+    // The backoff has grown to 80 ms by now.
+
+    tracker.stop()
+    tracker.start()
+    expect(children).toHaveLength(4)
+    children[3].emit('close', 1)
+    await vi.advanceTimersByTimeAsync(19)
+    expect(children).toHaveLength(4)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(children).toHaveLength(5)
+    tracker.stop()
+  })
+
+  it('keeps tracking when publish throws, and the next publish tries again', async () => {
     vi.useFakeTimers()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const calls: { devices: DeviceInfo[]; error: string | null }[] = []
@@ -194,6 +230,28 @@ describe('AndroidTracker', () => {
     expect(calls.at(-1)?.devices.map((d) => d.name)).toEqual(['C66'])
     // The throw didn't look like adb dying: no restart.
     expect(children).toHaveLength(1)
+    tracker.stop()
+    errorSpy.mockRestore()
+  })
+
+  it('tries again even when the repeated state is identical, since a failed publish leaves lastPublished unset', () => {
+    vi.useFakeTimers()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const calls: { devices: DeviceInfo[]; error: string | null }[] = []
+    let first = true
+    // An identify that never resolves keeps the device "pending" (held back, devices: []) for both
+    // lists, so the two publish computations are byte-for-byte identical.
+    const { tracker, children } = setup(() => new Promise<Identity>(() => {}), (devices, error) => {
+      if (first) {
+        first = false
+        throw new Error('boom')
+      }
+      calls.push({ devices, error })
+    })
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66))
+    children[0].stdout.emit('data', frame(C66))
+    expect(calls).toEqual([{ devices: [], error: null }])
     tracker.stop()
     errorSpy.mockRestore()
   })
@@ -226,6 +284,26 @@ describe('AndroidTracker', () => {
     tracker.stop()
   })
 
+  it("re-asks once it's a device again after a retry came due while it wasn't (due)", async () => {
+    vi.useFakeTimers()
+    const identify = vi.fn(async (): Promise<Identity> => ({ ...c66, booted: false }))
+    const { tracker, children } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(identify).toHaveBeenCalledTimes(1)
+
+    // The same connection goes offline before the 10 ms booting re-ask fires (no restart: one child).
+    children[0].stdout.emit('data', frame('8d2e61a offline transport_id:1\n'))
+    await vi.advanceTimersByTimeAsync(10)
+    expect(identify).toHaveBeenCalledTimes(1)
+
+    // It's a device again: the re-ask that came due while it wasn't ready fires now.
+    children[0].stdout.emit('data', frame(C66))
+    expect(identify).toHaveBeenCalledTimes(2)
+    tracker.stop()
+  })
+
   it('keeps a phone listed, as connecting, while its first ask is in flight', async () => {
     vi.useFakeTimers()
     let resolveIdentify: (identity: Identity) => void = () => {}
@@ -242,6 +320,28 @@ describe('AndroidTracker', () => {
     resolveIdentify(c66)
     await vi.advanceTimersByTimeAsync(0)
     expect(published.at(-1)?.devices).toEqual([expect.objectContaining({ id: 'android:8d2e61a', name: 'C66', state: 'ready' })])
+    tracker.stop()
+  })
+
+  it("a device waiting out its retry gap isn't re-asked early by another device's list change", async () => {
+    vi.useFakeTimers()
+    const identify = vi.fn(async (): Promise<Identity> => {
+      throw new Error('closed')
+    })
+    const { tracker, children } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(identify).toHaveBeenCalledTimes(1)
+
+    // A list arrives 5 ms later (e.g. another device's own state changed): the 10 ms identity gap
+    // isn't cut short by it.
+    await vi.advanceTimersByTimeAsync(5)
+    children[0].stdout.emit('data', frame(C66))
+    expect(identify).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(5)
+    expect(identify).toHaveBeenCalledTimes(2)
     tracker.stop()
   })
 
