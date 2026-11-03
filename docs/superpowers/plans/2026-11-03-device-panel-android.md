@@ -2698,14 +2698,14 @@ Create `src/main/devices/ipc.test.ts`:
 
 ```ts
 import { EventEmitter } from 'node:events'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/channels'
 import type { DeviceList, DeviceProject, InsertResult } from '@shared/types'
 import type { BrowserWindow } from 'electron'
-import { makeDir, removeRepos } from '../git/test-repo'
+import { commit, makeRepo, removeRepos } from '../git/test-repo'
 import { registerDeviceIpc } from './ipc'
 
 const ipc = vi.hoisted(() => ({
@@ -2763,13 +2763,14 @@ describe('registerDeviceIpc', () => {
   })
 
   it("describes a tab's project and remembers its device", async () => {
-    const app = makeDir('deck-devices-')
-    mkdirSync(join(app, 'app', 'src', 'main'), { recursive: true })
-    writeFileSync(join(app, 'app', 'src', 'main', 'AndroidManifest.xml'), '<manifest/>')
+    // Only git repositories are looked into for an app.
+    const app = makeRepo()
+    commit(app, 'app', { 'app/src/main/AndroidManifest.xml': '<manifest/>' })
     expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, pick: null })
     await call(IPC.devicesPick, app, 'android:8d2e61a')
     expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, pick: 'android:8d2e61a' })
     await expect(call(IPC.devicesProject, 42)).rejects.toThrow('No folder given.')
+    await expect(call(IPC.devicesProject, 'relative/app')).rejects.toThrow('No folder given.')
   })
 
   it('turns a screenshot into the quoted path Claude reads', async () => {
@@ -2797,6 +2798,7 @@ Create `src/main/devices/ipc.ts`:
 
 ```ts
 import { spawn } from 'node:child_process'
+import { isAbsolute } from 'node:path'
 import { type BrowserWindow, ipcMain, powerMonitor } from 'electron'
 import { IPC } from '@shared/channels'
 import { quotePath } from '@shared/quote'
@@ -2883,6 +2885,20 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     publish(NOTHING)
   }
 
+  /** A folder's project, for 30 s: asked whenever a tab comes to the front, and each look runs git
+   *  and a few dozen stats. The pick is read fresh every time. */
+  const projects = new Map<string, { at: number; value: Promise<{ root: string; android: boolean }> }>()
+  const describe = (folder: string) => {
+    const now = Date.now()
+    const cached = projects.get(folder)
+    if (cached && now - cached.at < 30_000) return cached.value
+    if (projects.size > 200) projects.clear()
+    const value = describeProject(folder, opts.home)
+    projects.set(folder, { at: now, value })
+    value.catch(() => projects.delete(folder))
+    return value
+  }
+
   // ipcMain.on listeners check their arguments: a throw there becomes an error dialog.
   ipcMain.on(IPC.devicesWatch, () => {
     if (++watchers === 1) void startWatching()
@@ -2892,9 +2908,14 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   })
   ipcMain.handle(IPC.devicesList, () => list)
   ipcMain.handle(IPC.devicesProject, async (_e, folder: unknown): Promise<DeviceProject> => {
-    if (typeof folder !== 'string' || !folder) throw new Error('No folder given.')
-    const { root, android } = await describeProject(folder)
-    return { root, android, pick: await picks.get(root) }
+    if (typeof folder !== 'string' || !isAbsolute(folder)) throw new Error('No folder given.')
+    const { root, android } = await describe(folder)
+    // An unreadable devices.json must not hide every tab's panel: no pick, then.
+    const pick = await picks.get(root).catch((err: unknown) => {
+      console.error('devices: reading devices.json failed', err)
+      return null
+    })
+    return { root, android, pick }
   })
   ipcMain.handle(IPC.devicesPick, async (_e, root: unknown, id: unknown) => {
     if (typeof root !== 'string' || !root || typeof id !== 'string' || !id) throw new Error('No project or device given.')
