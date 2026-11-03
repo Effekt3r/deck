@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { isAbsolute } from 'node:path'
 import { type BrowserWindow, ipcMain, powerMonitor } from 'electron'
 import { IPC } from '@shared/channels'
-import { quotePath } from '@shared/quote'
+import { quoteImagePath } from '@shared/quote'
 import type { DeviceList, DeviceProject, InsertResult, Platform } from '@shared/types'
 import { adbCandidates, findAdb, runAdb } from './android/adb'
 import { IDENTITY_SCRIPT, parseIdentity } from './android/devices'
@@ -34,6 +34,12 @@ export interface DeviceIpc {
 }
 
 const NOTHING: DeviceList = { devices: [], problem: null }
+
+/** A screenshot this large is corrupt, not a real capture: scrcpy's own max_size=1600 output is far
+ *  smaller than this. */
+const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024
+const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+const isPng = (data: Uint8Array): boolean => PNG_SIGNATURE.every((byte, i) => data[i] === byte)
 
 /** The device panel's main side: Android devices adb sees (looked for only while a tab needs them),
  *  each project's device, scrcpy streams for the devices viewed, and screenshots for Claude. */
@@ -90,13 +96,17 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
    *  and a few dozen stats. The pick is read fresh every time. */
   const projects = new Map<string, { at: number; value: Promise<{ root: string; android: boolean }> }>()
   const describe = (folder: string) => {
-    const now = Date.now()
+    const now = performance.now()
     const cached = projects.get(folder)
     if (cached && now - cached.at < 30_000) return cached.value
     if (projects.size > 200) projects.clear()
     const value = describeProject(folder, opts.home)
     projects.set(folder, { at: now, value })
-    value.catch(() => projects.delete(folder))
+    // A later look at the same folder may already have replaced this entry (its own, newer value):
+    // a failure must only clear the entry it caused, never a fresher one that's since taken its place.
+    value.catch(() => {
+      if (projects.get(folder)?.value === value) projects.delete(folder)
+    })
     return value
   }
 
@@ -119,11 +129,15 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     return { root, android, pick }
   })
   ipcMain.handle(IPC.devicesPick, async (_e, root: unknown, id: unknown) => {
-    if (typeof root !== 'string' || !root || typeof id !== 'string' || !id) throw new Error('No project or device given.')
+    if (typeof root !== 'string' || !isAbsolute(root) || root.length > 4096 || typeof id !== 'string' || !id || id.length > 4096) {
+      throw new Error('No project or device given.')
+    }
     await picks.set(root, id)
   })
   ipcMain.on(IPC.devicesView, (_e, id: unknown) => {
-    if (typeof id === 'string' && id) streams.view(id)
+    // A stale id (the renderer's own state, or a device that's since disconnected) would only ever
+    // fail to start: skip the doomed connecting → retrying → error cycle for it.
+    if (typeof id === 'string' && id && list.devices.some((d) => d.id === id)) streams.view(id)
   })
   ipcMain.on(IPC.devicesUnview, (_e, id: unknown) => {
     if (typeof id === 'string') streams.unview(id)
@@ -139,9 +153,11 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     for (const message of controlMessages(input)) streams.input(id, message)
   })
   ipcMain.handle(IPC.devicesScreenshot, async (_e, png: unknown): Promise<InsertResult> => {
-    if (!(png instanceof Uint8Array) || png.length === 0) return { error: 'There was no screenshot to add.' }
+    if (!(png instanceof Uint8Array) || png.length === 0 || png.length > MAX_SCREENSHOT_BYTES || !isPng(png)) {
+      return { error: 'There was no screenshot to add.' }
+    }
     try {
-      const text = quotePath(await opts.saveImage(png), opts.platform)
+      const text = quoteImagePath(await opts.saveImage(png), opts.platform)
       return text === null ? { error: "The screenshot's path can't be pasted safely." } : { text: `${text} ` }
     } catch (err) {
       return { error: `Couldn't save the screenshot for Claude: ${err instanceof Error ? err.message : String(err)}` }

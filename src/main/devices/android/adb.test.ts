@@ -118,4 +118,11 @@ describe('runAdb', () => {
     const failing = runAdb(process.execPath, ['-e', 'setTimeout(() => {}, 10_000)'], 200)
     await expect(failing).rejects.toThrow(new AdbError("adb didn't answer within 1 s."))
   })
+
+  it('a signal aborted mid-run rejects at once with Stopped.', async () => {
+    const controller = new AbortController()
+    const failing = runAdb(process.execPath, ['-e', 'setTimeout(() => {}, 10_000)'], 15_000, controller.signal)
+    setTimeout(() => controller.abort(), 50)
+    await expect(failing).rejects.toThrow(new AdbError('Stopped.'))
+  })
 })

@@ -1,4 +1,4 @@
-import { quotePath, quotePaths } from '@shared/quote'
+import { quoteImagePath, quotePaths } from '@shared/quote'
 import type { InsertResult, Platform } from '@shared/types'
 import type { ClipboardContent } from './item'
 
@@ -29,7 +29,7 @@ export async function insertFor(content: ClipboardContent, claude: boolean, deps
     case 'image':
       if (!claude) return null
       try {
-        const text = quotePath(await deps.saveImage(content.png), deps.platform)
+        const text = quoteImagePath(await deps.saveImage(content.png), deps.platform)
         return text === null ? { error: UNSAFE } : { text: text + ' ' }
       } catch (err) {
         return { error: `Couldn't save the image for Claude: ${err instanceof Error ? err.message : String(err)}` }

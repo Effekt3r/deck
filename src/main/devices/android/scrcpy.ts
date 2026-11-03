@@ -24,14 +24,14 @@ export interface ScrcpySession {
 
 /** How a session reaches adb and the tunnel; tests replace it. */
 export interface ScrcpyIo {
-  run(args: string[], timeoutMs?: number): Promise<string>
+  run(args: string[], timeoutMs?: number, signal?: AbortSignal): Promise<string>
   spawn(args: string[]): ChildProcess
   connect(port: number): Socket
 }
 
 export function adbIo(adb: string): ScrcpyIo {
   return {
-    run: (args, timeoutMs) => runAdb(adb, args, timeoutMs),
+    run: (args, timeoutMs, signal) => runAdb(adb, args, timeoutMs, signal),
     spawn: (args) => spawn(adb, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }),
     connect: (port) => connect({ host: '127.0.0.1', port }),
   }
@@ -138,7 +138,9 @@ async function firstAnswer(io: ScrcpyIo, port: number, gaveUp: () => boolean, on
  *  before any frame; rejects, cleaning up, when a step fails or `signal` stops it first. */
 export async function startScrcpy(serial: string, server: ScrcpyServer, events: ScrcpyEvents, io: ScrcpyIo, signal?: AbortSignal): Promise<ScrcpySession> {
   const scid = randomInt(0, 0x7fffffff).toString(16).padStart(8, '0')
-  const adb = (args: string[], timeoutMs?: number) => io.run(['-s', serial, ...args], timeoutMs)
+  // sig is passed only for the push, so a stop ends it at once; the forward isn't cancelled, or its
+  // port (needed to remove it) would stay unknown.
+  const adb = (args: string[], timeoutMs?: number, sig?: AbortSignal) => io.run(['-s', serial, ...args], timeoutMs, sig)
   let port = 0
   let shell: ChildProcess | null = null
   let probe: Socket | null = null
@@ -201,7 +203,7 @@ export async function startScrcpy(serial: string, server: ScrcpyServer, events: 
   try {
     if (signal?.aborted) stop()
     still()
-    await adb(['push', server.path, REMOTE_PATH], 60_000)
+    await adb(['push', server.path, REMOTE_PATH], 60_000, signal)
     still()
     port = Number.parseInt((await adb(['forward', 'tcp:0', `localabstract:scrcpy_${scid}`])).trim(), 10)
     still()

@@ -233,6 +233,27 @@ describe('startScrcpy', () => {
     expect(runs).toHaveLength(1)
   })
 
+  it('a fake push that rejects when its signal aborts: a stop during the push rejects at once', async () => {
+    const runs: string[][] = []
+    const shell = fakeShell()
+    const io: ScrcpyIo = {
+      run: (args, _timeoutMs, signal) =>
+        new Promise((_resolve, reject) => {
+          runs.push(args)
+          if (args.includes('push')) signal?.addEventListener('abort', () => reject(new Error('Stopped.')), { once: true })
+        }),
+      spawn: vi.fn(() => shell),
+      connect: () => connect({ host: '127.0.0.1', port: 0 }),
+    }
+    const stop = new AbortController()
+    const started = startScrcpy('8d2e61a', server, quiet, io, stop.signal)
+    await vi.waitFor(() => expect(runs).toEqual([['-s', '8d2e61a', 'push', '/res/scrcpy-server', REMOTE_PATH]]))
+    stop.abort()
+    await expect(started).rejects.toThrow('Stopped.')
+    expect(shell.kill).not.toHaveBeenCalled()
+    expect(runs).toHaveLength(1)
+  })
+
   it('a stop during the forward still removes the tunnel it opened', async () => {
     const runs: string[][] = []
     const shell = fakeShell()

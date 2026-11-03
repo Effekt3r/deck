@@ -44,12 +44,15 @@ export async function findAdb(candidates: readonly string[]): Promise<string | n
 }
 
 /** stdout of `adb <args>`, as utf8 text. Throws AdbError with adb's own error line ("adb: device
- *  offline"), else the output's last line, else a summary of how adb failed; cut to 500 characters. */
-export function runAdb(adb: string, args: readonly string[], timeoutMs = 15_000): Promise<string> {
+ *  offline"), else the output's last line, else a summary of how adb failed; cut to 500 characters.
+ *  `signal` ends the call at once, rejecting with AdbError('Stopped.'): a stop shouldn't wait out
+ *  adb's own timeout. */
+export function runAdb(adb: string, args: readonly string[], timeoutMs = 15_000, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = execFile(adb, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true },
+    const child = execFile(adb, args, { encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024, windowsHide: true, signal },
       (err, stdout, stderr) => {
         if (!err) return resolve(stdout)
+        if (signal?.aborted) return reject(new AdbError('Stopped.'))
         if (err.killed) return reject(new AdbError(`adb didn't answer within ${Math.max(1, Math.round(timeoutMs / 1000))} s.`))
         if (err.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return reject(new AdbError('adb printed more than 16 MiB.'))
         const fallback = typeof err.code === 'number' ? `adb exited with code ${err.code}.` : err.signal ? `adb was stopped (${err.signal}).` : err.message
