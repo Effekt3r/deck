@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DeviceStreamEvent } from '@shared/types'
-import type { ScrcpyEvents } from './android/scrcpy'
+import type { ScrcpyEvents, ScrcpySession } from './android/scrcpy'
 import { DeviceStreams } from './streams'
 
 interface Started {
@@ -9,11 +9,15 @@ interface Started {
   session: { send: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }
 }
 
+/** `attempts()` counts every call to start(), the failed ones included, for tests that care how many
+ *  tries were made rather than how many succeeded. */
 function setup(failing: () => boolean = () => false) {
   const started: Started[] = []
   const sent: [string, DeviceStreamEvent][] = []
+  let attempts = 0
   const streams = new DeviceStreams({
     start: async (id, events) => {
+      attempts++
       if (failing()) throw new Error('device offline')
       const session = { send: vi.fn(), stop: vi.fn() }
       started.push({ id, events, session })
@@ -21,7 +25,7 @@ function setup(failing: () => boolean = () => false) {
     },
     send: (id, event) => sent.push([id, event]),
   })
-  return { streams, started, sent }
+  return { streams, started, sent, attempts: () => attempts }
 }
 
 const states = (sent: [string, DeviceStreamEvent][]) => sent.flatMap(([, e]) => (e.type === 'state' ? [e.state] : []))
@@ -76,14 +80,48 @@ describe('DeviceStreams', () => {
     expect(started).toHaveLength(2)
   })
 
-  it('a stream that went live and broke gets three fresh tries', async () => {
+  it('a viewer joining before the first packet gets connecting and no key-frame reset; a viewer joining while paused gets connecting', async () => {
+    const { streams, started, sent } = setup()
+    streams.view('android:1')
+    await flush()
+    streams.view('android:1') // the session exists but hasn't gone live: no stale state, no reset
+    expect(sent.at(-1)).toEqual(['android:1', { type: 'state', state: 'connecting' }])
+    expect(started[0].session.send).not.toHaveBeenCalled()
+
+    streams.pause()
+    const before = sent.length
+    streams.view('android:2')
+    expect(sent.slice(before)).toEqual([['android:2', { type: 'state', state: 'connecting' }]])
+  })
+
+  it('a stream that goes live and breaks at once, again and again, reaches the error after its three retries', async () => {
+    const { streams, started, sent } = setup()
+    streams.view('android:1')
+    await flush()
+    started[0].events.packet(frame)
+    started[0].events.end('gone') // breaks right after going live: not steady for 5 s, so it still counts
+    await vi.advanceTimersByTimeAsync(1000)
+    started[1].events.packet(frame)
+    started[1].events.end('gone')
+    await vi.advanceTimersByTimeAsync(2000)
+    started[2].events.packet(frame)
+    started[2].events.end('gone')
+    await vi.advanceTimersByTimeAsync(5000)
+    started[3].events.packet(frame)
+    started[3].events.end('gone')
+    expect(started).toHaveLength(4)
+    expect(sent.at(-1)).toEqual(['android:1', { type: 'state', state: 'error', message: 'gone' }])
+  })
+
+  it('a stream that stays live 6 s before breaking gets three fresh tries', async () => {
     const { streams, started } = setup()
     streams.view('android:1')
     await flush()
     for (let i = 0; i < 4; i++) {
       started[i].events.packet(frame)
+      await vi.advanceTimersByTimeAsync(6_000) // past STEADY_MS: this break doesn't count against it
       started[i].events.end('gone')
-      await vi.advanceTimersByTimeAsync(1000)
+      await vi.advanceTimersByTimeAsync(1000) // always the first (shortest) wait: a fresh try each time
     }
     expect(started).toHaveLength(5)
   })
@@ -130,5 +168,191 @@ describe('DeviceStreams', () => {
     streams.view('android:2')
     streams.pause()
     expect(signals[1].aborted).toBe(true)
+  })
+
+  it("a packet after end() doesn't flip the stream back to live", async () => {
+    const { streams, started, sent } = setup()
+    streams.view('android:1')
+    await flush()
+    started[0].events.end('gone')
+    const before = sent.length
+    started[0].events.packet(frame) // a straggler, raced with the teardown
+    expect(sent.slice(before)).toEqual([])
+  })
+
+  it("a start past its deadline is aborted and retried after 1 s; the retries' error is the deadline's", async () => {
+    const signals: AbortSignal[] = []
+    const sent: [string, DeviceStreamEvent][] = []
+    const streams = new DeviceStreams({
+      start: (_id, _events, signal) => {
+        signals.push(signal)
+        return new Promise(() => {}) // adb or the device hung: this start never settles on its own
+      },
+      send: (id, event) => sent.push([id, event]),
+    })
+    streams.view('android:1')
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(signals[0].aborted).toBe(true)
+    expect(states(sent).slice(-1)).toEqual(['reconnecting'])
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(signals).toHaveLength(2)
+
+    // Two more deadlines, 2 s and 5 s apart, before the third retry gives up.
+    await vi.advanceTimersByTimeAsync(20_000 + 2_000 + 20_000 + 5_000 + 20_000)
+    expect(signals).toHaveLength(4)
+    expect(sent.at(-1)).toEqual(['android:1', { type: 'state', state: 'error', message: "The device didn't start its stream within 20 s." }])
+  })
+})
+
+describe('DeviceStreams, the edges', () => {
+  it('waits exactly 1, 2 and 5 s between tries, then stops trying; retry() gives three fresh ones', async () => {
+    let failing = false
+    const { streams, started, sent, attempts } = setup(() => failing)
+    streams.view('android:1')
+    await flush()
+    failing = true
+    started[0].events.end('gone')
+    for (const wait of [1000, 2000, 5000]) {
+      const before = attempts()
+      await vi.advanceTimersByTimeAsync(wait - 1)
+      expect(attempts()).toBe(before)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(attempts()).toBe(before + 1)
+    }
+    expect(states(sent)).toEqual(['connecting', 'reconnecting', 'reconnecting', 'reconnecting', 'reconnecting', 'reconnecting', 'reconnecting', 'error'])
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(attempts()).toBe(4)
+
+    streams.retry('android:1')
+    streams.view('android:1') // a second viewer during the new start isn't shown the old error
+    expect(states(sent).slice(-2)).toEqual(['connecting', 'connecting'])
+    await vi.advanceTimersByTimeAsync(1000 + 2000 + 5000)
+    expect(attempts()).toBe(8)
+  })
+
+  it('stopAll() stops every session and forgets every viewer', async () => {
+    const { streams, started } = setup()
+    streams.view('android:1')
+    await flush()
+    streams.stopAll()
+    expect(started[0].session.stop).toHaveBeenCalled()
+    streams.view('android:1') // the reloaded window's one viewer
+    await flush()
+    expect(started).toHaveLength(2)
+    streams.unview('android:1')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(started[1].session.stop).toHaveBeenCalled()
+  })
+
+  it('a start that finishes after its stream stopped is stopped at once', async () => {
+    let finish!: (session: ScrcpySession) => void
+    const session = { send: vi.fn(), stop: vi.fn() }
+    const streams = new DeviceStreams({ start: () => new Promise((resolve) => { finish = resolve }), send: () => {} })
+    streams.view('android:1')
+    streams.pause()
+    finish(session)
+    await flush()
+    expect(session.stop).toHaveBeenCalled()
+  })
+
+  it('pause() forgets streams in their grace and starts nothing; resume() starts only the viewed ones', async () => {
+    const { streams, started } = setup()
+    streams.view('android:1')
+    streams.view('android:2')
+    await flush()
+    streams.unview('android:2')
+    streams.pause()
+    streams.view('android:3')
+    await flush()
+    expect(started).toHaveLength(2)
+    streams.resume()
+    await flush()
+    expect(started.map((s) => s.id)).toEqual(['android:1', 'android:2', 'android:1', 'android:3'])
+  })
+
+  it('resume() gives a stream that was retrying three fresh tries', async () => {
+    const { streams, started, attempts } = setup(() => attempts() > 1)
+    streams.view('android:1')
+    await flush()
+    started[0].events.end('gone')
+    await vi.advanceTimersByTimeAsync(1000 + 2000) // two failed tries: the next wait would be 5 s
+    streams.pause()
+    streams.resume()
+    await flush()
+    const before = attempts()
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(attempts()).toBe(before + 1)
+  })
+
+  it('a viewer joining a retry wait waits for it; retry() only acts on an error', async () => {
+    const { streams, started, sent } = setup()
+    streams.view('android:1')
+    await flush()
+    streams.retry('android:1')
+    started[0].events.end('gone')
+    const before = sent.length
+    streams.view('android:1')
+    streams.retry('android:1')
+    expect(sent.slice(before)).toEqual([['android:1', { type: 'state', state: 'reconnecting' }]])
+    expect(started).toHaveLength(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(started).toHaveLength(2)
+  })
+
+  it('a viewer joining an error is told it; a stream that broke gets no input; no retry() while paused', async () => {
+    let failing = false
+    const { streams, started, sent, attempts } = setup(() => failing)
+    streams.view('android:1')
+    await flush()
+    failing = true
+    started[0].events.end('gone')
+    streams.input('android:1', Buffer.from([2]))
+    streams.keyframe('android:1')
+    expect(started[0].session.send).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1000 + 2000 + 5000)
+    const before = sent.length
+    streams.view('android:1')
+    expect(sent.slice(before)).toEqual([['android:1', { type: 'state', state: 'error', message: 'device offline' }]])
+    streams.pause()
+    const tries = attempts()
+    streams.retry('android:1')
+    expect(attempts()).toBe(tries)
+  })
+
+  it('a stream nobody views that breaks is forgotten at once', async () => {
+    const { streams, started, sent } = setup()
+    streams.view('android:1')
+    await flush()
+    started[0].events.packet(frame)
+    streams.unview('android:1')
+    const before = sent.length
+    started[0].events.end('gone')
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(sent).toHaveLength(before)
+    expect(started).toHaveLength(1)
+  })
+
+  it('an unview too many changes nothing', async () => {
+    const { streams, started } = setup()
+    streams.unview('android:1')
+    streams.view('android:1')
+    await flush()
+    streams.unview('android:1')
+    streams.unview('android:1')
+    streams.view('android:1')
+    streams.unview('android:1')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(started[0].session.stop).toHaveBeenCalled()
+  })
+
+  it('the grace is 10 s to the millisecond', async () => {
+    const { streams, started } = setup()
+    streams.view('android:1')
+    await flush()
+    streams.unview('android:1')
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(started[0].session.stop).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(started[0].session.stop).toHaveBeenCalled()
   })
 })

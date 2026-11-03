@@ -2,6 +2,11 @@ import type { DeviceStreamEvent } from '@shared/types'
 import { resetVideoMessage } from './android/protocol'
 import type { ScrcpyEvents, ScrcpySession } from './android/scrcpy'
 
+/** How long a stream must stay live before a break counts as recovered rather than a continuation
+ *  of the same problem: without this, a device that drops the stream right after every reconnect
+ *  would retry forever instead of reaching the error state. */
+const STEADY_MS = 5000
+
 export interface StreamsDeps {
   /** Starts device `id`'s stream; `signal` stops a start still under way. */
   start(id: string, events: ScrcpyEvents, signal: AbortSignal): Promise<ScrcpySession>
@@ -11,6 +16,8 @@ export interface StreamsDeps {
   graceMs?: number
   /** The waits before each new start after a stream broke; then it's an error. */
   retryMs?: readonly number[]
+  /** How long a start may run before it's treated as failed and retried. */
+  startMs?: number
 }
 
 interface Stream {
@@ -18,15 +25,22 @@ interface Stream {
   session: ScrcpySession | null
   /** The start under way; aborting it stops it. */
   starting: AbortController | null
-  /** Breaks in a row; a stream that goes live counts from 0 again. */
+  /** Breaks in a row; reset once a live stream has stayed up for STEADY_MS before breaking again. */
   failures: number
   graceTimer: ReturnType<typeof setTimeout> | null
   retryTimer: ReturnType<typeof setTimeout> | null
-  /** Set once the retries ran out, until retry(). */
+  /** The start under way's deadline; cleared once it settles, or in halt(). */
+  startTimer: ReturnType<typeof setTimeout> | null
+  /** Set once the retries ran out; cleared by begin() (retry(), resume(), or a fresh view after
+   *  every viewer had left and dropped the stream). */
   error: string | null
-  /** The latest capture size, for a viewer that joins a running stream. */
+  /** The latest capture size, for a viewer that joins a running stream; cleared on a restart, since
+   *  a reconnected stream's size comes with its new session. */
   size: { width: number; height: number } | null
   live: boolean
+  /** Date.now() at the current session's first packet; null until then. Tells a fresh break from a
+   *  steady stream's (see STEADY_MS). */
+  liveAt: number | null
   /** Bumped at every start and stop, so an older session's news is dropped. */
   generation: number
 }
@@ -34,22 +48,27 @@ interface Stream {
 /** One stream per device viewed, shared by its viewers (tabs). It keeps running 10 s after the last
  *  viewer leaves, so switching tabs and back doesn't restart it: a viewer that comes back asks for a
  *  key frame instead. A stream that breaks is started again after 1, 2 and 5 s, then reports the
- *  error until retry(). While the Mac is locked or asleep (pause) nothing streams. */
+ *  error until retry() — every viewer leaving (the stream is dropped, so the next one starts clean)
+ *  and resume() clear an error too. A stream only counts as recovered, resetting its failure count,
+ *  once it has stayed live for STEADY_MS; breaking sooner still counts towards the error. While the
+ *  Mac is locked or asleep (pause) nothing streams. */
 export class DeviceStreams {
   private readonly streams = new Map<string, Stream>()
   private paused = false
   private readonly graceMs: number
   private readonly retryMs: readonly number[]
+  private readonly startMs: number
 
   constructor(private readonly deps: StreamsDeps) {
     this.graceMs = deps.graceMs ?? 10_000
     this.retryMs = deps.retryMs ?? [1000, 2000, 5000]
+    this.startMs = deps.startMs ?? 20_000
   }
 
   view(id: string): void {
     let s = this.streams.get(id)
     if (!s) {
-      s = { viewers: 0, session: null, starting: null, failures: 0, graceTimer: null, retryTimer: null, error: null, size: null, live: false, generation: 0 }
+      s = { viewers: 0, session: null, starting: null, failures: 0, graceTimer: null, retryTimer: null, startTimer: null, error: null, size: null, live: false, liveAt: null, generation: 0 }
       this.streams.set(id, s)
     }
     s.viewers++
@@ -57,11 +76,12 @@ export class DeviceStreams {
       clearTimeout(s.graceTimer)
       s.graceTimer = null
     }
-    if (this.paused) return
+    if (this.paused) return this.deps.send(id, { type: 'state', state: 'connecting' }) // resume() starts it
     if (s.error) return this.deps.send(id, { type: 'state', state: 'error', message: s.error })
     if (s.session) {
       if (s.size) this.deps.send(id, { type: 'size', ...s.size })
-      if (s.live) this.deps.send(id, { type: 'state', state: 'live' })
+      if (!s.live) return this.deps.send(id, { type: 'state', state: s.failures > 0 ? 'reconnecting' : 'connecting' })
+      this.deps.send(id, { type: 'state', state: 'live' })
       s.session.send(resetVideoMessage()) // the new viewer's decoder starts from a key frame
       return
     }
@@ -126,10 +146,26 @@ export class DeviceStreams {
     const start = new AbortController()
     s.starting = start
     s.live = false
+    s.liveAt = null
+    s.size = null // a reconnected stream's size comes with its new session
     s.error = null
     const generation = ++s.generation
     this.deps.send(id, { type: 'state', state: s.failures > 0 ? 'reconnecting' : 'connecting' })
     const current = () => this.streams.get(id) === s && s.generation === generation
+    const clearStartTimer = () => {
+      if (s.startTimer) {
+        clearTimeout(s.startTimer)
+        s.startTimer = null
+      }
+    }
+    s.startTimer = setTimeout(() => {
+      s.startTimer = null
+      if (!current()) return
+      s.generation++ // the abort's own "Stopped." rejection must not be heard
+      start.abort()
+      s.starting = null
+      this.failed(id, s, "The device didn't start its stream within 20 s.")
+    }, this.startMs)
     const events: ScrcpyEvents = {
       size: (width, height) => {
         if (!current()) return
@@ -140,25 +176,31 @@ export class DeviceStreams {
         if (!current()) return
         if (!s.live) {
           s.live = true
-          s.failures = 0
+          s.liveAt = Date.now()
           this.deps.send(id, { type: 'state', state: 'live' })
         }
         this.deps.send(id, { type: 'packet', ...packet })
       },
       end: (why) => {
         if (!current()) return
+        s.generation++ // nothing more is heard from this session
+        if (s.liveAt !== null && Date.now() - s.liveAt >= STEADY_MS) s.failures = 0
         s.session = null
+        s.starting = null
         s.live = false
+        s.liveAt = null
         this.failed(id, s, why)
       },
     }
     this.deps.start(id, events, start.signal).then(
       (session) => {
+        clearStartTimer()
         if (!current()) return session.stop()
         s.starting = null
         s.session = session
       },
       (err: unknown) => {
+        clearStartTimer()
         if (!current()) return
         s.starting = null
         this.failed(id, s, err instanceof Error ? err.message : String(err))
@@ -186,8 +228,10 @@ export class DeviceStreams {
   private halt(s: Stream): void {
     if (s.graceTimer) clearTimeout(s.graceTimer)
     if (s.retryTimer) clearTimeout(s.retryTimer)
+    if (s.startTimer) clearTimeout(s.startTimer)
     s.graceTimer = null
     s.retryTimer = null
+    s.startTimer = null
     s.generation++
     s.session?.stop()
     s.session = null
