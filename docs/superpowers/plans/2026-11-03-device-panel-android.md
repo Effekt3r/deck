@@ -3992,7 +3992,12 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
       }, () => {})
       return
     }
-    const key = deviceKey(e.nativeEvent, platform)
+    // Built by hand: a KeyboardEvent says whether AltGr is held only through getModifierState.
+    const native = e.nativeEvent
+    const key = deviceKey({
+      key: native.key, shiftKey: native.shiftKey, ctrlKey: native.ctrlKey, metaKey: native.metaKey, altKey: native.altKey,
+      altGraph: native.getModifierState('AltGraph'), isComposing: native.isComposing,
+    }, platform)
     if (!key) return
     e.preventDefault()
     send('keycode' in key ? { type: 'key', ...key } : { type: 'text', text: key.text })
