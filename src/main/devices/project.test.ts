@@ -94,16 +94,37 @@ describe('describeProject', () => {
     expect(await describeProject(tree, home)).toEqual({ root: repo, android: true })
   })
 
-  it('does not scan a plain folder outside git', async () => {
+  it("does not scan a plain folder that isn't itself a Gradle build", async () => {
     const dir = makeDir('deck-dev-')
-    touch(join(dir, 'x', 'app', 'src', 'main', 'AndroidManifest.xml'))
+    touch(join(dir, 'app', 'src', 'main', 'AndroidManifest.xml'))
     const home = makeDir('deck-dev-home-')
     expect(await describeProject(dir, home)).toEqual({ root: dir, android: false })
+  })
+
+  it('scans a plain folder that is itself a Gradle build, directly or through android/', async () => {
+    const dir = makeDir('deck-dev-')
+    touch(join(dir, 'settings.gradle'))
+    touch(join(dir, 'app', 'src', 'main', 'AndroidManifest.xml'))
+    const home = makeDir('deck-dev-home-')
+    expect(await describeProject(dir, home)).toEqual({ root: dir, android: true })
+
+    const flutter = makeDir('deck-dev-')
+    touch(join(flutter, 'Android', 'settings.gradle'))
+    touch(join(flutter, 'Android', 'app', 'src', 'main', 'AndroidManifest.xml'))
+    expect(await describeProject(flutter, home)).toEqual({ root: flutter, android: true })
   })
 
   it('does not scan the home folder, even inside a repo', async () => {
     const repo = makeRepo()
     commit(repo, 'app', { 'app/src/main/AndroidManifest.xml': '<manifest/>' })
     expect(await describeProject(repo, repo)).toEqual({ root: repo, android: false })
+  })
+
+  it('resolves the home folder through a symlink before comparing', async () => {
+    const repo = makeRepo()
+    commit(repo, 'app', { 'app/src/main/AndroidManifest.xml': '<manifest/>' })
+    const link = join(makeDir('deck-dev-links-'), 'home-link')
+    symlinkSync(repo, link, 'junction')
+    expect(await describeProject(repo, link)).toEqual({ root: repo, android: false })
   })
 })

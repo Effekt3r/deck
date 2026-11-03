@@ -48,6 +48,16 @@ const hasManifest = async (module: string): Promise<boolean> =>
 const isGradleBuild = async (dir: string): Promise<boolean> =>
   (await Promise.all(['settings.gradle', 'settings.gradle.kts'].map((f) => isFile(join(dir, f))))).some(Boolean)
 
+/** Outside git, only a folder that builds itself with Gradle — directly, or through a first-level
+ *  `android` folder (any case) — is worth scanning: a project that was copied or unpacked rather
+ *  than cloned (no `.git`) is still found, without statting into every plain
+ *  folder on disk. */
+async function isGradleProject(root: string): Promise<boolean> {
+  if (await isGradleBuild(root)) return true
+  const android = (await subfolders(root)).filter((dir) => basename(dir).toLowerCase() === 'android')
+  return (await Promise.all(android.map(isGradleBuild))).some(Boolean)
+}
+
 /** An Android app has an AndroidManifest.xml in `src/main/` or `src/androidMain/` of a module one
  *  level down (`app/src/main/`, `composeApp/src/androidMain/`), or two levels down inside a
  *  first-level folder named `android` in any case (Flutter, React Native), or one that is a Gradle
@@ -59,16 +69,21 @@ export async function isAndroidApp(root: string): Promise<boolean> {
   const look = await Promise.all(
     first.map(async (dir) => basename(dir).toLowerCase() === 'android' || (await isGradleBuild(dir))),
   )
-  const second = (await Promise.all(first.filter((_, i) => look[i]).map(subfolders))).flat()
+  // Capped again, flattened: otherwise up to MAX_FOLDERS nested builds could each contribute up to
+  // MAX_FOLDERS modules, and every one of those would get stat'd for a manifest.
+  const second = (await Promise.all(first.filter((_, i) => look[i]).map(subfolders))).flat().slice(0, MAX_FOLDERS)
   return (await Promise.all(second.map(hasManifest))).some(Boolean)
 }
 
-/** `android` is false without scanning when `folder` isn't inside a git repository (a plain
- *  folder: the home folder, a volume holding many projects) or when the project is the home folder
- *  itself (some people keep `~` as a dotfiles repo): scanning would stat into `~/Desktop`,
- *  `~/Documents` and `~/Downloads`, which can raise a macOS privacy prompt for Deck. */
+/** `android` is never scanned for the home folder — resolved with `realpath` first, so a `$HOME`
+ *  given in another case or through a symlink still matches (some people keep `~` as a dotfiles
+ *  repo: scanning would stat into `~/Desktop`, `~/Documents` and `~/Downloads`, which can raise a
+ *  macOS privacy prompt for Deck). Inside git the whole project is scanned; outside it (a copied or
+ *  unpacked project, no `.git`), only when the folder is itself a Gradle build. */
 export async function describeProject(folder: string, home: string): Promise<{ root: string; android: boolean }> {
   const { root, git } = await findRoot(folder)
-  if (!git || pathKey(resolve(root)) === pathKey(resolve(home))) return { root, android: false }
+  const realHome = await realpath(home).catch(() => resolve(home))
+  if (pathKey(resolve(root)) === pathKey(realHome)) return { root, android: false }
+  if (!git && !(await isGradleProject(root))) return { root, android: false }
   return { root, android: await isAndroidApp(root) }
 }
