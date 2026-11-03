@@ -18,10 +18,12 @@ export function nalUnits(data: Uint8Array): Uint8Array[] {
 const hex2 = (n: number) => n.toString(16).padStart(2, '0')
 
 /** WebCodecs' codec string for the H.264 stream a config packet opens: avc1.PPCCLL (profile,
- *  constraint flags and level, from its SPS); null when it holds no SPS. */
+ *  constraint flags and level, from its SPS); null when it holds no SPS. The constraint byte's two
+ *  reserved bits are masked off: some encoders set them, and Chromium refuses a codec string that
+ *  carries them. */
 export function avcCodec(config: Uint8Array): string | null {
   for (const nal of nalUnits(config)) {
-    if ((nal[0] & 0x1f) === 7 && nal.length >= 4) return `avc1.${hex2(nal[1])}${hex2(nal[2])}${hex2(nal[3])}`
+    if ((nal[0] & 0x1f) === 7 && nal.length >= 4) return `avc1.${hex2(nal[1])}${hex2(nal[2] & 0xfc)}${hex2(nal[3])}`
   }
   return null
 }

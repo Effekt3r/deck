@@ -26,26 +26,53 @@ describe('choosePanel', () => {
     expect(choosePanel({ ...base, android: false, byHand: true, devices: [c66] })).toEqual({ kind: 'device', device: c66 })
     expect(choosePanel({ ...base, android: false, project: c66.id, devices: [c66, s25] })).toEqual({ kind: 'device', device: c66 })
   })
+
+  it('an unauthorized device counts as the only one that fits', () => {
+    const unauth = { ...c66, state: 'unauthorized' as const }
+    expect(choosePanel({ ...base, devices: [unauth] })).toEqual({ kind: 'device', device: unauth })
+  })
 })
 
 describe('panelView', () => {
   it('keeps a device that went away, as gone, for 10 s, then moves on', () => {
-    const shown = panelView({ kind: 'device', device: c66 }, [c66, emu], null, 0)
-    const gone = panelView({ kind: 'device', device: emu }, [emu], shown.held, 1000)
+    const shown = panelView({ kind: 'device', device: c66 }, [c66, emu], null, 0, null)
+    const gone = panelView({ kind: 'device', device: emu }, [emu], shown.held, 1000, null)
     expect(gone.view).toEqual({ kind: 'device', device: c66, gone: true })
-    expect(panelView({ kind: 'device', device: emu }, [emu], gone.held, 1000 + GONE_MS - 1).view).toEqual({ kind: 'device', device: c66, gone: true })
-    expect(panelView({ kind: 'device', device: emu }, [emu], gone.held, 1000 + GONE_MS).view).toEqual({ kind: 'device', device: emu, gone: false })
+    expect(panelView({ kind: 'device', device: emu }, [emu], gone.held, 1000 + GONE_MS - 1, null).view).toEqual({ kind: 'device', device: c66, gone: true })
+    expect(panelView({ kind: 'device', device: emu }, [emu], gone.held, 1000 + GONE_MS, null).view).toEqual({ kind: 'device', device: emu, gone: false })
   })
 
   it('takes the device back when it returns in time', () => {
-    const shown = panelView({ kind: 'device', device: c66 }, [c66], null, 0)
-    const gone = panelView({ kind: 'none' }, [], shown.held, 100)
+    const shown = panelView({ kind: 'device', device: c66 }, [c66], null, 0, null)
+    const gone = panelView({ kind: 'none' }, [], shown.held, 100, null)
     expect(gone.view).toEqual({ kind: 'device', device: c66, gone: true })
-    expect(panelView({ kind: 'device', device: c66 }, [c66], gone.held, 200).view).toEqual({ kind: 'device', device: c66, gone: false })
+    expect(panelView({ kind: 'device', device: c66 }, [c66], gone.held, 200, null).view).toEqual({ kind: 'device', device: c66, gone: false })
   })
 
   it('shows a new pick of a connected device at once', () => {
-    const shown = panelView({ kind: 'device', device: c66 }, [c66, s25], null, 0)
-    expect(panelView({ kind: 'device', device: s25 }, [c66, s25], shown.held, 1).view).toEqual({ kind: 'device', device: s25, gone: false })
+    const shown = panelView({ kind: 'device', device: c66 }, [c66, s25], null, 0, null)
+    expect(panelView({ kind: 'device', device: s25 }, [c66, s25], shown.held, 1, null).view).toEqual({ kind: 'device', device: s25, gone: false })
+  })
+
+  it('a new pick ends a gone hold: the new device shows at once', () => {
+    const shown = panelView({ kind: 'device', device: c66 }, [c66], null, 0, c66.id)
+    const gone = panelView({ kind: 'none' }, [], shown.held, 100, c66.id)
+    expect(gone.view).toEqual({ kind: 'device', device: c66, gone: true })
+    const picked = panelView({ kind: 'device', device: s25 }, [s25], gone.held, 150, s25.id)
+    expect(picked.view).toEqual({ kind: 'device', device: s25, gone: false })
+  })
+
+  it('a device shown alone stays shown when a second one arrives to choose from', () => {
+    const shown = panelView({ kind: 'device', device: c66 }, [c66], null, 0, null)
+    const result = panelView({ kind: 'choose', devices: [c66, emu] }, [c66, emu], shown.held, 50, null)
+    expect(result.view).toEqual({ kind: 'device', device: c66, gone: false })
+  })
+
+  it('a returning device comes back as the fresh object, even with a changed state', () => {
+    const shown = panelView({ kind: 'device', device: c66 }, [c66], null, 0, null)
+    const gone = panelView({ kind: 'none' }, [], shown.held, 50, null)
+    const backC66 = { ...c66, state: 'unauthorized' as const }
+    const back = panelView({ kind: 'choose', devices: [backC66, emu] }, [backC66, emu], gone.held, 100, null)
+    expect(back.view).toEqual({ kind: 'device', device: backC66, gone: false })
   })
 })

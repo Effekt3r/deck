@@ -41,15 +41,28 @@ export type PanelView =
 export interface Held {
   device: DeviceInfo
   goneSince: number | null
+  /** The pick (`choosePanel`'s `tab ?? project`, or null) in force when it was shown. */
+  pick: string | null
 }
 
-/** What the panel shows: the choice, except that a shown device that went away stays, as gone, for
- *  10 s, so a cable that wiggles doesn't move the pane. Also what to hold for next time. */
-export function panelView(choice: PanelChoice, devices: DeviceInfo[], held: Held | null, now: number): { view: PanelView; held: Held | null } {
-  if (held && !devices.some((d) => d.id === held.device.id)) {
-    const goneSince = held.goneSince ?? now
-    if (now - goneSince < GONE_MS) return { view: { kind: 'device', device: held.device, gone: true }, held: { device: held.device, goneSince } }
+/** What the panel shows: the choice, except, as long as the pick in force hasn't changed since the
+ *  held device was shown: (1) a device that went away stays, as gone, for 10 s, so a cable that
+ *  wiggles doesn't move the pane, and (2) a still-connected device stays shown rather than jumping
+ *  to the chooser when a second device arrives — Franco switches with the menu instead. A new pick
+ *  (the tab or project pick changed) ends both at once, showing the new choice straight away.
+ *  `pick` is the tab's own pick, else the project's, else null — `choosePanel`'s `picked` input.
+ *  Also what to hold for next time. */
+export function panelView(choice: PanelChoice, devices: DeviceInfo[], held: Held | null, now: number, pick: string | null): { view: PanelView; held: Held | null } {
+  if (held && held.pick === pick) {
+    const current = devices.find((d) => d.id === held.device.id)
+    if (!current) {
+      const goneSince = held.goneSince ?? now
+      if (now - goneSince < GONE_MS) return { view: { kind: 'device', device: held.device, gone: true }, held: { ...held, goneSince } }
+    } else if (choice.kind === 'choose') {
+      // Still connected: it stays when a second device arrives (the menu switches).
+      return { view: { kind: 'device', device: current, gone: false }, held: { device: current, goneSince: null, pick } }
+    }
   }
-  if (choice.kind === 'device') return { view: { kind: 'device', device: choice.device, gone: false }, held: { device: choice.device, goneSince: null } }
+  if (choice.kind === 'device') return { view: { kind: 'device', device: choice.device, gone: false }, held: { device: choice.device, goneSince: null, pick } }
   return { view: choice, held: null }
 }
