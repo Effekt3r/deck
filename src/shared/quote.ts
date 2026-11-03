@@ -15,9 +15,10 @@ export function quotePath(path: string, platform: Platform): string | null {
   return `'${path.replace(/'/g, "'\\''")}'`
 }
 
-/** A path for Claude Code's prompt, which attaches a pasted image path as [Image #N]. On Windows
- *  Claude Code drops the quotes and unescapes backslashes, as a POSIX shell would, so each
- *  backslash is doubled; elsewhere it's quotePath. null when it can't be pasted safely. */
+/** A path for Claude Code's prompt, which attaches a pasted image path as [Image #N]. Claude Code
+ *  strips the outer quotes and then drops each backslash that escapes a character (even inside
+ *  single quotes, unlike a shell; Windows paths under WSL aside), so a Windows path doubles its
+ *  backslashes; elsewhere it's quotePath. null when it can't be pasted safely. */
 export function quoteImagePath(path: string, platform: Platform): string | null {
   if (platform !== 'win32') return quotePath(path, platform)
   if (path === '' || CONTROL.test(path)) return null

@@ -31,6 +31,11 @@ describe('insertFor', () => {
     expect(await insertFor({ kind: 'files', paths: ["C:\\it's\\a.txt"] }, false, { ...deps, platform: 'win32' })).toEqual({ text: "'C:\\it''s\\a.txt' " })
   })
 
+  it('an image, with Claude running, on Windows: backslashes doubled for Claude Code, not PowerShell quoting', async () => {
+    const win = { ...deps, platform: 'win32' as const, saveImage: async () => 'C:\\Users\\Franco\\AppData\\Local\\Temp\\Deck clipboard\\1\\clipboard-ab.png' }
+    expect(await insertFor(image, true, win)).toEqual({ text: "'C:\\\\Users\\\\Franco\\\\AppData\\\\Local\\\\Temp\\\\Deck clipboard\\\\1\\\\clipboard-ab.png' " })
+  })
+
   it("a file name with control characters: refused, it can't be pasted safely", async () => {
     expect(await insertFor({ kind: 'files', paths: ['/ok.txt', '/bad\u001b[201~name'] }, true, deps)).toEqual({ error: UNSAFE })
   })

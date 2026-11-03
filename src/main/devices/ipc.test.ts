@@ -77,6 +77,10 @@ const devices = registerDeviceIpc({
 })
 const { win, sent } = fakeWindow()
 devices.attach(win)
+// A backstop for the locked/streaming test below: if it times out, its own finally never runs, and
+// without this the fake adb (and the sleep standing in for its persistent track-devices) would be
+// left running. afterAll runs even then.
+afterAll(() => devices.dispose())
 
 describe('registerDeviceIpc', () => {
   it("says so when adb can't be found, and forgets it when nothing needs devices", async () => {
@@ -172,10 +176,11 @@ describe('registerDeviceIpc', () => {
     const fakeAdbDir = join(root, 'fake-adb')
     mkdirSync(fakeAdbDir, { recursive: true })
     const fakeAdb = join(fakeAdbDir, 'adb')
-    // exec, not a plain `sleep 86400`: that would leave sleep running as an orphaned grandchild once
-    // the tracker kills this script's shell (SIGTERM only reaches the shell, not its own children).
-    // exec replaces the shell with sleep in the same process, so killing this pid kills the sleep.
-    writeFileSync(fakeAdb, ['#!/bin/sh', 'if [ "$1" = "track-devices" ]; then', "  printf '0013FAKE01\\tunauthorized'", '  exec sleep 86400', 'fi', 'exit 0', ''].join('\n'))
+    // exec, not a plain `sleep`: that would leave sleep running as an orphaned grandchild once the
+    // tracker kills this script's shell (SIGTERM only reaches the shell, not its own children). exec
+    // replaces the shell with sleep in the same process, so killing this pid kills the sleep. 60 s,
+    // not longer: the afterAll above is a backstop, not the only way this ever stops.
+    writeFileSync(fakeAdb, ['#!/bin/sh', 'if [ "$1" = "track-devices" ]; then', "  printf '0013FAKE01\\tunauthorized'", '  exec sleep 60', 'fi', 'exit 0', ''].join('\n'))
     chmodSync(fakeAdb, 0o755)
 
     env.PATH = fakeAdbDir
