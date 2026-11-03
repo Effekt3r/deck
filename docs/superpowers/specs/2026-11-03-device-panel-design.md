@@ -78,8 +78,8 @@ Rejected:
 
 ### Which device
 
-- **A tab keeps its own pick**, so two tabs on two tasks in AccessControl_Android can show the emulator
-  and the S25 FE.
+- **A tab keeps its own pick** while it stays in that project, so two tabs on two tasks in
+  AccessControl_Android can show the emulator and the S25 FE.
 - **A project remembers the last device picked in it** (`devices.json` in Deck's data folder). A tab
   that hasn't picked shows that one, so every Guard tab shows the C66 once it has been picked there.
 - **Nothing picked, or the pick isn't connected:**
@@ -287,9 +287,10 @@ and likewise for iOS.
 
 - The view keeps the last decoded frame. The camera button draws it at full size into a PNG and sends
   it to main.
-- Main saves it in the clipboard card's image folder (`<temp>/Deck clipboard/<instance>/`, cleared at
-  start and quit) as `<device> <time>.png` and returns the quoted path. The renderer types it into the
-  tab's terminal through `pasteSafe()`, as Add to Claude does.
+- Main saves it as the clipboard card saves a pasted image: in its image folder
+  (`<temp>/Deck clipboard/<instance>/`, cleared at start and quit), named by its content, and returns
+  the quoted path. The renderer types it into the tab's terminal through `pasteSafe()`, as Add to
+  Claude does.
 
 ### Code
 
