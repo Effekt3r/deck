@@ -17,6 +17,8 @@ function fakeChild(): FakeChild {
 const frame = (text: string) => Buffer.from(Buffer.byteLength(text).toString(16).padStart(4, '0') + text)
 const C66 = '8d2e61a device usb:34603008X product:C66 model:C66 device:C66 transport_id:1\n'
 const c66: Identity = { serialNo: '8d2e61a', maker: 'CHAINWAY', model: 'C66', release: '13', avd: '', name: 'C66', booted: true }
+const EMULATOR = 'emulator-5554 device product:sdk_gphone64_arm64 model:sdk_gphone64_arm64 device:emu64a transport_id:2\n'
+const emu: Identity = { serialNo: 'EMULATOR37X2X12X0', maker: 'Google', model: 'sdk_gphone64_arm64', release: '15', avd: 'Pixel_9', name: 'sdk_gphone64_arm64', booted: true }
 
 function setup(
   identify: (serial: string) => Promise<Identity>,
@@ -224,8 +226,10 @@ describe('AndroidTracker', () => {
       calls.push({ devices, error })
     })
     tracker.start()
-    children[0].stdout.emit('data', frame(C66))
+    // No device to wait for: the first list goes out at once, and that publish throws.
+    children[0].stdout.emit('data', frame(''))
     expect(errorSpy).toHaveBeenCalledWith('devices: publishing the list failed', expect.any(Error))
+    children[0].stdout.emit('data', frame(C66))
     await vi.advanceTimersByTimeAsync(0)
     expect(calls.at(-1)?.devices.map((d) => d.name)).toEqual(['C66'])
     // The throw didn't look like adb dying: no restart.
@@ -239,9 +243,7 @@ describe('AndroidTracker', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     const calls: { devices: DeviceInfo[]; error: string | null }[] = []
     let first = true
-    // An identify that never resolves keeps the device "pending" (held back, devices: []) for both
-    // lists, so the two publish computations are byte-for-byte identical.
-    const { tracker, children } = setup(() => new Promise<Identity>(() => {}), (devices, error) => {
+    const { tracker, children } = setup(async () => c66, (devices, error) => {
       if (first) {
         first = false
         throw new Error('boom')
@@ -249,8 +251,9 @@ describe('AndroidTracker', () => {
       calls.push({ devices, error })
     })
     tracker.start()
-    children[0].stdout.emit('data', frame(C66))
-    children[0].stdout.emit('data', frame(C66))
+    // The same empty list twice: the second is published, since the first never was.
+    children[0].stdout.emit('data', frame(''))
+    children[0].stdout.emit('data', frame(''))
     expect(calls).toEqual([{ devices: [], error: null }])
     tracker.stop()
     errorSpy.mockRestore()
@@ -301,6 +304,72 @@ describe('AndroidTracker', () => {
     // It's a device again: the re-ask that came due while it wasn't ready fires now.
     children[0].stdout.emit('data', frame(C66))
     expect(identify).toHaveBeenCalledTimes(2)
+    tracker.stop()
+  })
+
+  it('holds the first list until every ready device has answered once', async () => {
+    vi.useFakeTimers()
+    let answerEmulator: (identity: Identity) => void = () => {}
+    const identify = vi.fn((serial: string) =>
+      serial === '8d2e61a' ? Promise.resolve(c66) : new Promise<Identity>((resolve) => { answerEmulator = resolve }))
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66 + EMULATOR))
+    await vi.advanceTimersByTimeAsync(0)
+    // The C66 has answered, the emulator not yet: nothing goes out, not even an empty list.
+    expect(published).toEqual([])
+    answerEmulator(emu)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published.map((p) => p.devices.map((d) => d.id))).toEqual([['android:8d2e61a', 'emulator:Pixel_9']])
+    tracker.stop()
+  })
+
+  it('publishes the first list after 3 s without a device that is slow to answer', async () => {
+    vi.useFakeTimers()
+    const identify = vi.fn((serial: string) => (serial === '8d2e61a' ? Promise.resolve(c66) : new Promise<Identity>(() => {})))
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66 + EMULATOR))
+    await vi.advanceTimersByTimeAsync(2999)
+    expect(published).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(published.map((p) => p.devices.map((d) => d.id))).toEqual([['android:8d2e61a']])
+    tracker.stop()
+  })
+
+  it('publishes the first list once a first ask fails, without that device', async () => {
+    vi.useFakeTimers()
+    const identify = vi.fn(async (): Promise<Identity> => {
+      throw new Error('closed')
+    })
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66))
+    expect(published).toEqual([])
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published).toEqual([{ devices: [], error: null }])
+    tracker.stop()
+  })
+
+  it('waits for the devices again after adb restarts', async () => {
+    vi.useFakeTimers()
+    let answer: (identity: Identity) => void = () => {}
+    const identify = vi.fn(() => new Promise<Identity>((resolve) => { answer = resolve }))
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(''))
+    expect(published).toEqual([{ devices: [], error: null }])
+    children[0].emit('close', 1)
+    expect(published.at(-1)?.error).toBeTruthy()
+    const before = published.length
+    await vi.advanceTimersByTimeAsync(20) // restartMin
+    children[1].stdout.emit('data', frame(C66))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published).toHaveLength(before)
+    answer(c66)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published).toHaveLength(before + 1)
+    expect(published.at(-1)).toEqual({ devices: [expect.objectContaining({ name: 'C66' })], error: null })
     tracker.stop()
   })
 

@@ -12,12 +12,18 @@ export interface TrackerDeps {
   publish(devices: DeviceInfo[], error: string | null): void
   /** ms; tests shorten them. */
   retryMs?: { identity: number; booting: number; restartMin: number; restartMax: number }
+  /** ms the first list after a (re)start waits at most for every ready device's first answer;
+   *  tests shorten it. */
+  settleMs?: number
 }
 
 /** A connection that doesn't answer is asked this many times, then listed as adb names it. */
 const IDENTITY_TRIES = 3
 /** A phone still starting up is asked again, this many times at most (about two minutes). */
 const BOOT_TRIES = 40
+
+/** After track-devices (re)starts, the first list waits this long at most for its devices' answers. */
+const SETTLE_MS = 3000
 
 interface Asked {
   identity: Identity | null
@@ -31,7 +37,8 @@ interface Asked {
 }
 
 /** Follows the Android devices adb sees with one long-running `adb track-devices -l`, and asks each
- *  connected device once what it is (again while it's still starting up). Runs while a tab needs
+ *  connected device once what it is (again while it's still starting up); after each start, the
+ *  first list waits for every ready device's first answer (3 s at most). Runs while a tab needs
  *  Android devices. adb's server going away ends track-devices; it's started again after 1 s, then
  *  up to 30 s apart while it keeps failing. */
 export class AndroidTracker {
@@ -48,6 +55,11 @@ export class AndroidTracker {
   private readonly retry: NonNullable<TrackerDeps['retryMs']>
   private restartMs: number
   private lastPublished = ''
+  /** Since track-devices (re)started, until every ready device has answered once (or SETTLE_MS has
+   *  passed): the list isn't published yet, so it holds every device that answers in time rather
+   *  than growing one at a time. A project with two devices would otherwise show whichever answered
+   *  first. */
+  private settling = false
 
   constructor(private readonly deps: TrackerDeps) {
     this.retry = deps.retryMs ?? { identity: 1500, booting: 3000, restartMin: 1000, restartMax: 30_000 }
@@ -98,6 +110,12 @@ export class AndroidTracker {
       return this.ended(err instanceof Error ? err.message : String(err), 0)
     }
     this.child = child
+    this.settling = true
+    this.later(this.deps.settleMs ?? SETTLE_MS, () => {
+      if (this.child !== child || !this.settling) return
+      this.settling = false
+      this.publish(null)
+    })
     let pending: Buffer = Buffer.alloc(0)
     let said = ''
     let done = false
@@ -188,6 +206,8 @@ export class AndroidTracker {
         if (this.asked.get(key) !== asked) return
         asked.asking = false
         if (++asked.tries >= IDENTITY_TRIES) return this.publish(null)
+        // A first list held for this answer goes out without the device.
+        if (this.settling) this.publish(null)
         this.askLater(key, asked, this.retry.identity)
       },
     )
@@ -203,6 +223,10 @@ export class AndroidTracker {
   }
 
   private publish(error: string | null): void {
+    if (this.settling) {
+      if (error === null && this.firstAsks()) return
+      this.settling = false
+    }
     // A ready device is listed once it has said what it is (or Deck stopped asking), so its id (an
     // emulator's AVD name) never changes under the panel. One already listed (e.g. unauthorized)
     // stays listed, as connecting, while its first ask is in flight, so allowing it on the device
@@ -228,6 +252,14 @@ export class AndroidTracker {
     } catch (err) {
       console.error('devices: publishing the list failed', err)
     }
+  }
+
+  /** A ready device hasn't answered its first ask yet. */
+  private firstAsks(): boolean {
+    return this.entries.some((entry) => {
+      const asked = this.asked.get(keyOf(entry))
+      return entry.state === 'device' && !asked?.identity && (asked?.tries ?? 0) === 0
+    })
   }
 }
 

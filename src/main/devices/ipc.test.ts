@@ -83,12 +83,16 @@ devices.attach(win)
 afterAll(() => devices.dispose())
 
 describe('registerDeviceIpc', () => {
-  it("says so when adb can't be found, and forgets it when nothing needs devices", async () => {
+  it("answers null until the first list, says so when adb can't be found, and forgets it when nothing needs devices", async () => {
+    expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
     emit(IPC.devicesWatch)
     await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
-    expect(await call<DeviceList>(IPC.devicesList)).toEqual({ devices: [], problem: 'no-adb' })
+    expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [], problem: 'no-adb' })
+    const pushes = sent.length
     emit(IPC.devicesUnwatch)
-    expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: null }]])
+    // Nobody listens any more: nothing is pushed, and the list is unknown again.
+    expect(sent).toHaveLength(pushes)
+    expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
   })
 
   it("describes a tab's project and remembers its device", async () => {
@@ -158,10 +162,11 @@ describe('registerDeviceIpc', () => {
     await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
 
     win.webContents.emit('did-start-loading')
-    expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: null }]])
+    expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
 
+    const pushes = sent.length
     emit(IPC.devicesUnwatch) // the old page's effect cleanup, arriving late: watchers is already 0
-    expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: null }]])
+    expect(sent).toHaveLength(pushes)
 
     emit(IPC.devicesWatch) // the new page watches again
     await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))

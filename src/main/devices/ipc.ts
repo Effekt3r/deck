@@ -33,8 +33,6 @@ export interface DeviceIpc {
   dispose(): void
 }
 
-const NOTHING: DeviceList = { devices: [], problem: null }
-
 /** A screenshot this large is corrupt, not a real capture: scrcpy's own max_size=1600 output is far
  *  smaller than this. */
 const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024
@@ -46,7 +44,9 @@ const isPng = (data: Uint8Array): boolean => PNG_SIGNATURE.every((byte, i) => da
 export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   const picks = new PicksStore(opts.picksFile)
   let win: BrowserWindow | null = null
-  let list: DeviceList = NOTHING
+  /** null until the first list after watching starts, and again once nothing watches: a tab waits
+   *  for the list rather than taking "no devices" for an answer. */
+  let list: DeviceList | null = null
   let watchers = 0
   let tracker: AndroidTracker | null = null
   /** Looked for again at each start of watching, so an SDK installed since is found. */
@@ -89,7 +89,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     generation++
     tracker?.stop()
     tracker = null
-    publish(NOTHING)
+    list = null
   }
 
   /** A folder's project, for 30 s: asked whenever a tab comes to the front, and each look runs git
@@ -137,7 +137,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   ipcMain.on(IPC.devicesView, (_e, id: unknown) => {
     // A stale id (the renderer's own state, or a device that's since disconnected) would only ever
     // fail to start: skip the doomed connecting → retrying → error cycle for it.
-    if (typeof id === 'string' && id && list.devices.some((d) => d.id === id)) streams.view(id)
+    if (typeof id === 'string' && id && list?.devices.some((d) => d.id === id)) streams.view(id)
   })
   ipcMain.on(IPC.devicesUnview, (_e, id: unknown) => {
     if (typeof id === 'string') streams.unview(id)
