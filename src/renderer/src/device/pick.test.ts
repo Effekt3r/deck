@@ -75,4 +75,19 @@ describe('panelView', () => {
     const back = panelView({ kind: 'choose', devices: [backC66, emu] }, [backC66, emu], gone.held, 100, null)
     expect(back.view).toEqual({ kind: 'device', device: backC66, gone: false })
   })
+
+  it("the pick is the stored id, not choosePanel's resolved device: the tab's own pick unplugging doesn't hand the hold to the project's", () => {
+    const pick = s25.id // the tab's own pick; the project's is C66, also connected throughout
+    const shown = panelView({ kind: 'device', device: s25 }, [c66, s25], null, 0, pick)
+    expect(shown.view).toEqual({ kind: 'device', device: s25, gone: false })
+    // S25 unplugs. If `pick` were choosePanel's resolved device instead of the stored id, it would
+    // now resolve to C66 (still connected) and the hold would end at once; it doesn't, because the
+    // tab's own pick hasn't changed.
+    const at1s = panelView({ kind: 'device', device: c66 }, [c66], shown.held, 1000, pick)
+    expect(at1s.view).toEqual({ kind: 'device', device: s25, gone: true })
+    const at9_9s = panelView({ kind: 'device', device: c66 }, [c66], at1s.held, 1000 + GONE_MS - 100, pick)
+    expect(at9_9s.view).toEqual({ kind: 'device', device: s25, gone: true })
+    const at10s = panelView({ kind: 'device', device: c66 }, [c66], at9_9s.held, 1000 + GONE_MS, pick)
+    expect(at10s.view).toEqual({ kind: 'device', device: c66, gone: false })
+  })
 })

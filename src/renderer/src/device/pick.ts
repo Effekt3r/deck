@@ -41,17 +41,19 @@ export type PanelView =
 export interface Held {
   device: DeviceInfo
   goneSince: number | null
-  /** The pick (`choosePanel`'s `tab ?? project`, or null) in force when it was shown. */
+  /** The pick in force when it was shown: the tab's own pick, else the project's, else null — the
+   *  stored id itself, never `choosePanel`'s resolved device. Passing the resolved device would end
+   *  the hold the moment a tab's own pick unplugs and the project's pick takes its place. */
   pick: string | null
 }
 
 /** What the panel shows: the choice, except, as long as the pick in force hasn't changed since the
  *  held device was shown: (1) a device that went away stays, as gone, for 10 s, so a cable that
  *  wiggles doesn't move the pane, and (2) a still-connected device stays shown rather than jumping
- *  to the chooser when a second device arrives — Franco switches with the menu instead. A new pick
- *  (the tab or project pick changed) ends both at once, showing the new choice straight away.
- *  `pick` is the tab's own pick, else the project's, else null — `choosePanel`'s `picked` input.
- *  Also what to hold for next time. */
+ *  to the chooser when a second device arrives — the menu switches instead. A new pick (the tab or
+ *  project pick changed) ends both at once, showing the new choice straight away. `pick` is the
+ *  tab's own pick, else the project's, else null: the stored ids themselves (see `Held.pick`), not
+ *  `choosePanel`'s resolved device. Also what to hold for next time. */
 export function panelView(choice: PanelChoice, devices: DeviceInfo[], held: Held | null, now: number, pick: string | null): { view: PanelView; held: Held | null } {
   if (held && held.pick === pick) {
     const current = devices.find((d) => d.id === held.device.id)

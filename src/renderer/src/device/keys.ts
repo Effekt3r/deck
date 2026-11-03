@@ -19,12 +19,15 @@ const KEYS: Record<string, number> = {
   End: KEYCODE.MOVE_END, PageUp: KEYCODE.PAGE_UP, PageDown: KEYCODE.PAGE_DOWN,
 }
 
-/** macOS's word-wise editing keys (Option+Backspace/Delete/←/→ moves or deletes by word). Android's
- *  own Alt modifier instead moves/deletes by line, so these are sent with Ctrl, Android's word-wise
- *  modifier, instead of Alt. */
-const WORD_WISE: Record<string, number> = {
-  Backspace: KEYCODE.DEL, Delete: KEYCODE.FORWARD_DEL, ArrowLeft: KEYCODE.DPAD_LEFT, ArrowRight: KEYCODE.DPAD_RIGHT,
-}
+/** macOS's word-wise deletes (Option+Backspace/Delete): Android's own Alt modifier instead deletes
+ *  the whole line, so Ctrl goes instead, Android's word-wise modifier. Never with Shift: Android's
+ *  text fields do nothing for Ctrl+Shift+Backspace (BaseKeyListener), while Option+Shift+Delete
+ *  still just deletes a word on a Mac too, the same as Option+Delete. */
+const WORD_DELETE: Record<string, number> = { Backspace: KEYCODE.DEL, Delete: KEYCODE.FORWARD_DEL }
+
+/** macOS's word-wise selection (Option+←/→): Ctrl again, keeping Shift this time (word-wise
+ *  selection, same as Android's own). */
+const WORD_MOVE: Record<string, number> = { ArrowLeft: KEYCODE.DPAD_LEFT, ArrowRight: KEYCODE.DPAD_RIGHT }
 
 export interface KeyPress {
   key: string
@@ -39,28 +42,42 @@ export interface KeyPress {
 
 /** What a key pressed on the device's screen sends: an Android key code (Return, Backspace, the
  *  arrows …) with Shift and Alt, or a typed character as text. null leaves the key to Deck: Cmd
- *  shortcuts (Cmd+Left/Right excepted: macOS's line start/end), Ctrl ones (but Ctrl+Alt off macOS
- *  is AltGr, which types), dead keys while composing, and keys Android has no use for — off macOS,
- *  an Alt combo that isn't AltGr is a menu key (Alt+F), an Alt code (Alt+0233) or the window menu
- *  (Alt+Space), none of them text for the device. */
+ *  shortcuts (Cmd+Left/Right/Up/Down excepted: macOS's line or text start/end), Ctrl ones (but
+ *  Ctrl+Alt off macOS is AltGr, which types), dead keys while composing, and keys Android has no
+ *  use for — off macOS, an Alt combo that isn't AltGr is a menu key (Alt+F), an Alt code
+ *  (Alt+0233) or the window menu (Alt+Space), none of them text for the device. */
 export function deviceKey(e: KeyPress, platform: Platform): { keycode: number; meta: number } | { text: string } | null {
   if (e.isComposing) return null
   const mac = platform === 'darwin'
   if (e.metaKey) {
-    // Cmd+Left/Right is macOS's line start/end; every other Cmd combo (copy/paste, Deck's own
-    // shortcuts, tab switching, …) is left alone.
-    if (mac && !e.ctrlKey && !e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) {
-      return { keycode: e.key === 'ArrowLeft' ? KEYCODE.MOVE_HOME : KEYCODE.MOVE_END, meta: e.shiftKey ? META_SHIFT : 0 }
+    // Cmd+Left/Right is the line's start/end, like Home/End; Cmd+Up/Down is the whole text's,
+    // which Android reaches with Ctrl+Home/Ctrl+End instead. Every other Cmd combo (copy/paste,
+    // Deck's own shortcuts, tab switching, Cmd+Backspace included — Android's nearest key,
+    // Alt+Backspace, deletes the whole line rather than just up to the cursor — …) is left alone.
+    if (mac && !e.ctrlKey && !e.altKey) {
+      const shift = e.shiftKey ? META_SHIFT : 0
+      if (e.key === 'ArrowLeft') return { keycode: KEYCODE.MOVE_HOME, meta: shift }
+      if (e.key === 'ArrowRight') return { keycode: KEYCODE.MOVE_END, meta: shift }
+      if (e.key === 'ArrowUp') return { keycode: KEYCODE.MOVE_HOME, meta: META_CTRL | shift }
+      if (e.key === 'ArrowDown') return { keycode: KEYCODE.MOVE_END, meta: META_CTRL | shift }
     }
     return null
   }
-  // Off macOS, a browser that reports AltGr (`getModifierState('AltGraph')`) is trusted over
-  // guessing it from Ctrl+Alt.
-  const altGr = !mac && (e.altGraph ?? (e.ctrlKey && e.altKey))
+  // Off macOS, Windows itself treats Ctrl+Alt as AltGr whenever it produces a character, and
+  // Chromium may report AltGraph only for the right-hand key: a reported value can only add to
+  // that guess, never take it away, or a real AltGr character would be dropped.
+  const altGr = !mac && (e.altGraph === true || (e.ctrlKey && e.altKey))
   if (e.ctrlKey && !altGr) return null
   if (mac && e.altKey) {
-    const keycode = WORD_WISE[e.key]
-    if (keycode !== undefined) return { keycode, meta: META_CTRL | (e.shiftKey ? META_SHIFT : 0) }
+    const del = WORD_DELETE[e.key]
+    if (del !== undefined) return { keycode: del, meta: META_CTRL }
+    const move = WORD_MOVE[e.key]
+    if (move !== undefined) return { keycode: move, meta: META_CTRL | (e.shiftKey ? META_SHIFT : 0) }
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      // Android's Alt+Up/Down jump to the text's start/end; Option+Up/Down do neither on a Mac, so
+      // the plain key goes through instead, Shift only.
+      return { keycode: e.key === 'ArrowUp' ? KEYCODE.DPAD_UP : KEYCODE.DPAD_DOWN, meta: e.shiftKey ? META_SHIFT : 0 }
+    }
   }
   const keycode = KEYS[e.key]
   if (keycode !== undefined) return { keycode, meta: (e.shiftKey ? META_SHIFT : 0) | (e.altKey && !altGr ? META_ALT : 0) }

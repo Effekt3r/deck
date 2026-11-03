@@ -35,17 +35,35 @@ describe('deviceKey', () => {
     expect(deviceKey(k('a', { isComposing: true }), 'darwin')).toBeNull()
   })
 
-  it("macOS Option is word-wise (Android's own Alt deletes the line), keeping Shift", () => {
+  it("macOS Option deletes by word (Android's own Alt deletes the line), never with Shift", () => {
     expect(deviceKey(k('Backspace', { altKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.DEL, meta: 0x1000 })
     expect(deviceKey(k('Delete', { altKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.FORWARD_DEL, meta: 0x1000 })
+    // Option+Shift+Backspace/Delete still just deletes a word, as on a Mac: Android's text fields
+    // do nothing for Ctrl+Shift+Backspace, so Shift must not be carried along.
+    expect(deviceKey(k('Backspace', { altKey: true, shiftKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.DEL, meta: 0x1000 })
+    expect(deviceKey(k('Delete', { altKey: true, shiftKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.FORWARD_DEL, meta: 0x1000 })
+  })
+
+  it('macOS Option selects by word left/right, keeping Shift', () => {
     expect(deviceKey(k('ArrowRight', { altKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.DPAD_RIGHT, meta: 0x1000 })
     expect(deviceKey(k('ArrowLeft', { altKey: true, shiftKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.DPAD_LEFT, meta: 0x1001 })
   })
 
-  it("Cmd+Left/Right is macOS's line start/end; every other Cmd key stays Deck's", () => {
+  it("macOS Option+Up/Down is a plain arrow (Android's Alt+Up/Down jumps to the text's start/end, which Option+Up/Down never does on a Mac)", () => {
+    expect(deviceKey(k('ArrowUp', { altKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.DPAD_UP, meta: 0 })
+    expect(deviceKey(k('ArrowDown', { altKey: true, shiftKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.DPAD_DOWN, meta: 1 })
+  })
+
+  it("Cmd+Left/Right/Up/Down is macOS's line or text start/end; every other Cmd key stays Deck's", () => {
     expect(deviceKey(k('ArrowRight', { metaKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.MOVE_END, meta: 0 })
     expect(deviceKey(k('ArrowLeft', { metaKey: true, shiftKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.MOVE_HOME, meta: 1 })
+    // Cmd+Up/Down is the whole text's start/end, not just the line's: Android reaches that with
+    // Ctrl+Home/Ctrl+End.
+    expect(deviceKey(k('ArrowUp', { metaKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.MOVE_HOME, meta: 0x1000 })
+    expect(deviceKey(k('ArrowDown', { metaKey: true, shiftKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.MOVE_END, meta: 0x1001 })
     expect(deviceKey(k('v', { metaKey: true }), 'darwin')).toBeNull()
+    // Android's nearest key, Alt+Backspace, deletes the whole line, not just up to the cursor.
+    expect(deviceKey(k('Backspace', { metaKey: true }), 'darwin')).toBeNull()
   })
 
   it("off macOS, Alt alone is a menu or system key, not Deck's to send on", () => {
@@ -53,10 +71,13 @@ describe('deviceKey', () => {
     expect(deviceKey(k(' ', { altKey: true }), 'win32')).toBeNull()
   })
 
-  it('a browser-reported AltGr is trusted over guessing from Ctrl+Alt', () => {
+  it('a browser-reported AltGr can only add to the Ctrl+Alt guess, never remove it', () => {
     expect(deviceKey(k('@', { ctrlKey: true, altKey: true, altGraph: true }), 'win32')).toEqual({ text: '@' })
-    expect(deviceKey(k('t', { ctrlKey: true, altKey: true, altGraph: false }), 'win32')).toBeNull()
+    // Windows itself treats Ctrl+Alt as AltGr whenever it produces a character, and Chromium may
+    // report AltGraph only for the right-hand key, so a reported false must not drop it.
+    expect(deviceKey(k('t', { ctrlKey: true, altKey: true, altGraph: false }), 'win32')).toEqual({ text: 't' })
     expect(deviceKey(k('@', { ctrlKey: true, altKey: true }), 'win32')).toEqual({ text: '@' })
     expect(deviceKey(k('ArrowLeft', { altKey: true, altGraph: true }), 'win32')).toEqual({ keycode: KEYCODE.DPAD_LEFT, meta: 0 })
+    expect(deviceKey(k('@', { altGraph: true }), 'win32')).toEqual({ text: '@' })
   })
 })
