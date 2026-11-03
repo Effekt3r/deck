@@ -11,6 +11,7 @@ import { registerClaudeIpc } from './claude/ipc'
 import { registerClipboardIpc } from './clipboard/ipc'
 import { TempImages } from './clipboard/temp'
 import { externalUrl } from './external'
+import { registerDeviceIpc } from './devices/ipc'
 import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
 import { registerProjectsIpc } from './projects/ipc'
@@ -127,11 +128,21 @@ async function start(): Promise<void> {
     settingsFile: claudeSettingsFile(),
     platform: process.platform as Platform,
   })
+  const devices = registerDeviceIpc({
+    picksFile: join(userData, 'devices.json'),
+    // scrcpy's server: in the app's resources when packaged, the repo's resources/ in a dev build.
+    resources: app.isPackaged ? process.resourcesPath : join(app.getAppPath(), 'resources'),
+    platform: process.platform as Platform,
+    home: homedir(),
+    env: process.env,
+    saveImage: (png) => clip.saveImage(png),
+  })
 
   Menu.setApplicationMenu(buildMenu((cmd) => send(IPC.appMenu, cmd)))
   win = createWindow()
   clip.attach(win)
   usage.attach(win)
+  devices.attach(win)
   // A reload starts a fresh renderer whose tabs know nothing of the old shells.
   win.webContents.on('did-start-loading', () => {
     rendererReady = false
@@ -146,6 +157,7 @@ async function start(): Promise<void> {
   app.on('will-quit', () => {
     clip.dispose()
     usage.dispose()
+    devices.dispose()
   })
 }
 
