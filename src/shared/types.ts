@@ -333,7 +333,8 @@ export type DeviceStreamEvent =
  *  scrcpy ignores a touch made for another size. */
 export type DeviceInput =
   | { type: 'touch'; action: 'down' | 'move' | 'up'; x: number; y: number; width: number; height: number }
-  /** dx, dy: scroll steps, -16 … 16; a positive dy scrolls up, like a wheel pushed away. */
+  /** dx, dy: scroll steps, -16 … 16; a positive dx scrolls right, a positive dy up (like a wheel
+   *  pushed away). */
   | { type: 'scroll'; x: number; y: number; width: number; height: number; dx: number; dy: number }
   /** An Android key code pressed and let go, with Android's meta state (shift 1, alt 2). */
   | { type: 'key'; keycode: number; meta: number }

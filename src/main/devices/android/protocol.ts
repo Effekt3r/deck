@@ -1,66 +1,164 @@
 // scrcpy 5.0.1's wire format, as its server reads and writes it. The protocol is internal to
 // scrcpy and changes between versions: it must match resources/scrcpy-server.json's version.
 
-/** The video codec id for H.264 ("h264"). 0 and 1 mean the device couldn't start its video. */
+/** The video codec id for H.264 ("h264"). scrcpy writes 0 or 1 on its *audio* socket when audio
+ *  is disabled or its capture fails; on the video socket a failing encoder closes the socket
+ *  instead, so this reader never needs to treat 0 or 1 as a valid video codec. */
 export const CODEC_H264 = 0x68323634
 /** The device's name, NUL-padded, on the first socket. */
 const NAME_LENGTH = 64
 const FLAG_SESSION = 0x80
 const FLAG_CONFIG = 1n << 62n
 const FLAG_KEY = 1n << 61n
+/** Far above any frame at scrcpy's max_size=1600 (a raw 1600×720 frame is 1.7 MB): a bigger
+ *  declared size is a corrupt stream, not a real packet. */
+const MAX_PACKET = 16 * 1024 * 1024
 
 export type VideoEvent =
   | { type: 'name'; name: string }
   | { type: 'codec'; codec: number }
   | { type: 'size'; width: number; height: number }
   | { type: 'packet'; config: boolean; key: boolean; data: Uint8Array }
+  /** The stream makes no sense; this reader is done, and feed() now only ever returns []. */
+  | { type: 'error'; message: string }
 
 /** Reads scrcpy's video socket as it arrives, in chunks cut anywhere: the forward tunnel's dummy
  *  byte, the device's name (64 bytes), the codec id (4), then 12-byte headers: a capture session's
- *  (first bit set; width and height follow) or a packet's (flags and PTS, its size, then it). */
+ *  (first bit set; width and height follow) or a packet's (flags and PTS, its size, then it).
+ *
+ *  Chunks are kept as a list, not concatenated: a corrupt or absurd declared size must never cost
+ *  a reallocation (and recopy) of everything received so far, and a bad size is caught from the
+ *  12-byte header alone, without first waiting for that many bytes to arrive. Once broken, feed()
+ *  never throws and only ever returns []: a confused or hostile server can't wedge main. */
 export class VideoReader {
-  private buf: Buffer = Buffer.alloc(0)
+  private chunks: Buffer[] = []
+  private len = 0
   private stage: 'dummy' | 'name' | 'codec' | 'packets' = 'dummy'
+  /** A packet header already read, waiting for its payload to arrive. */
+  private pending: { config: boolean; key: boolean; size: number } | null = null
+  private sawSize = false
+  private broken = false
 
   feed(chunk: Buffer): VideoEvent[] {
-    this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk
+    if (this.broken) return []
+    if (chunk.length) {
+      this.chunks.push(chunk)
+      this.len += chunk.length
+    }
     const events: VideoEvent[] = []
     for (;;) {
       if (this.stage === 'dummy') {
-        if (this.buf.length < 1) break
+        if (this.len < 1) break
         this.take(1)
         this.stage = 'name'
       } else if (this.stage === 'name') {
-        if (this.buf.length < NAME_LENGTH) break
+        if (this.len < NAME_LENGTH) break
         const raw = this.take(NAME_LENGTH)
         const end = raw.indexOf(0)
         events.push({ type: 'name', name: raw.toString('utf8', 0, end < 0 ? NAME_LENGTH : end) })
         this.stage = 'codec'
       } else if (this.stage === 'codec') {
-        if (this.buf.length < 4) break
+        if (this.len < 4) break
         events.push({ type: 'codec', codec: this.take(4).readUInt32BE(0) })
         this.stage = 'packets'
+      } else if (this.pending) {
+        const { config, key, size } = this.pending
+        if (this.len < size) break
+        this.pending = null
+        events.push({ type: 'packet', config, key, data: this.takeOwned(size) })
       } else {
-        if (this.buf.length < 12) break
-        if (this.buf[0] & FLAG_SESSION) {
-          const head = this.take(12)
-          events.push({ type: 'size', width: head.readUInt32BE(4), height: head.readUInt32BE(8) })
+        if (this.len < 12) break
+        const head = this.take(12)
+        if (head[0] & FLAG_SESSION) {
+          const width = head.readUInt32BE(4)
+          const height = head.readUInt32BE(8)
+          if (width === 0 || width > 0xffff || height === 0 || height > 0xffff) {
+            this.fail(events, `scrcpy sent a ${width}×${height} screen.`)
+            break
+          }
+          this.sawSize = true
+          events.push({ type: 'size', width, height })
           continue
         }
-        const size = this.buf.readUInt32BE(8)
-        if (this.buf.length < 12 + size) break
-        const flags = this.buf.readBigUInt64BE(0)
-        const packet = this.take(12 + size)
-        // Copied, so the buffer it came in can go.
-        events.push({ type: 'packet', config: (flags & FLAG_CONFIG) !== 0n, key: (flags & FLAG_KEY) !== 0n, data: new Uint8Array(packet.subarray(12)) })
+        const size = head.readUInt32BE(8)
+        if (size === 0 || size > MAX_PACKET) {
+          this.fail(events, `scrcpy sent a ${size}-byte packet.`)
+          break
+        }
+        if (!this.sawSize) {
+          this.fail(events, "scrcpy sent a frame before the screen's size.")
+          break
+        }
+        const flags = head.readBigUInt64BE(0)
+        this.pending = { config: (flags & FLAG_CONFIG) !== 0n, key: (flags & FLAG_KEY) !== 0n, size }
       }
     }
     return events
   }
 
+  private fail(events: VideoEvent[], message: string): void {
+    events.push({ type: 'error', message })
+    this.broken = true
+    this.chunks = []
+    this.len = 0
+  }
+
+  /** Consumes and returns the first `n` buffered bytes (already checked available): a view when
+   *  the first chunk alone has enough, else a fresh buffer built from however many chunks it takes. */
   private take(n: number): Buffer {
-    const out = this.buf.subarray(0, n)
-    this.buf = this.buf.subarray(n)
+    const first = this.chunks[0]
+    let out: Buffer
+    if (first.length >= n) {
+      out = first.subarray(0, n)
+      if (first.length === n) this.chunks.shift()
+      else this.chunks[0] = first.subarray(n)
+    } else {
+      out = Buffer.alloc(n)
+      let offset = 0
+      while (offset < n) {
+        const next = this.chunks[0]
+        const want = n - offset
+        if (next.length <= want) {
+          next.copy(out, offset)
+          offset += next.length
+          this.chunks.shift()
+        } else {
+          next.copy(out, offset, 0, want)
+          this.chunks[0] = next.subarray(want)
+          offset += want
+        }
+      }
+    }
+    this.len -= n
+    return out
+  }
+
+  /** Like take(), but always a fresh, independent Uint8Array: the one copy a packet's payload
+   *  ever takes, however many chunks it was split across, and whatever `chunks[0]` does next. */
+  private takeOwned(n: number): Uint8Array {
+    const out = new Uint8Array(n)
+    const first = this.chunks[0]
+    if (first.length >= n) {
+      out.set(first.subarray(0, n))
+      if (first.length === n) this.chunks.shift()
+      else this.chunks[0] = first.subarray(n)
+    } else {
+      let offset = 0
+      while (offset < n) {
+        const next = this.chunks[0]
+        const want = n - offset
+        if (next.length <= want) {
+          out.set(next, offset)
+          offset += next.length
+          this.chunks.shift()
+        } else {
+          out.set(next.subarray(0, want), offset)
+          this.chunks[0] = next.subarray(want)
+          offset += want
+        }
+      }
+    }
+    this.len -= n
     return out
   }
 }
@@ -70,7 +168,7 @@ const TYPE = { keycode: 0, text: 1, touch: 2, scroll: 3, setClipboard: 9, resetV
 const ACTION = { down: 0, up: 1, move: 2 } as const
 /** scrcpy's POINTER_ID_GENERIC_FINGER (-2): injected as a finger, not a mouse. */
 export const FINGER = 0xfffffffffffffffen
-/** scrcpy reads at most 300 bytes of text per message. */
+/** scrcpy's own client never sends more than 300 bytes of text per message. */
 export const TEXT_MAX_BYTES = 300
 
 export function keycodeMessage(action: 'down' | 'up', keycode: number, repeat = 0, meta = 0): Buffer {

@@ -48,6 +48,11 @@ describe('control messages', () => {
     expect(textPieces('a'.repeat(301))).toEqual(['a'.repeat(300), 'a'])
     expect(textPieces('é'.repeat(200)).map((piece) => Buffer.byteLength(piece))).toEqual([300, 100])
     expect(textPieces('')).toEqual([])
+    // Both fixtures above divide evenly into 300 bytes; a boundary that lands mid-character
+    // (an odd split) needs its own check.
+    const mixed = textPieces('a' + 'é'.repeat(150))
+    expect(mixed.map((piece) => Buffer.byteLength(piece))).toEqual([299, 2])
+    expect(mixed.join('')).toEqual('a' + 'é'.repeat(150))
   })
 })
 
@@ -95,5 +100,137 @@ describe('VideoReader', () => {
     const events: unknown[] = []
     for (let i = 0; i < all.length; i++) events.push(...reader.feed(all.subarray(i, i + 1)))
     expect(events).toEqual(expected)
+  })
+
+  // --- A corrupt stream must break cleanly: one error, nothing more, never a throw. ---
+
+  const DUMMY = Buffer.from([0])
+  function nameBuf(s: string): Buffer {
+    const b = Buffer.alloc(64)
+    b.write(s)
+    return b
+  }
+  function codecBuf(id: number): Buffer {
+    const b = Buffer.alloc(4)
+    b.writeUInt32BE(id)
+    return b
+  }
+  function sessionBuf(width: number, height: number): Buffer {
+    const b = Buffer.alloc(12)
+    b.writeUInt32BE(0x80000000, 0)
+    b.writeUInt32BE(width, 4)
+    b.writeUInt32BE(height, 8)
+    return b
+  }
+  function packetBuf(flags: bigint, data: number[] | Buffer): Buffer {
+    const payload = Buffer.isBuffer(data) ? data : Buffer.from(data)
+    const head = Buffer.alloc(12)
+    head.writeBigUInt64BE(flags, 0)
+    head.writeUInt32BE(payload.length, 8)
+    return Buffer.concat([head, payload])
+  }
+  /** A packet header whose declared size needn't match any bytes that follow: for provoking the
+   *  size check without having to supply (or wait for) that many bytes. */
+  function packetHeader(flags: bigint, size: number): Buffer {
+    const head = Buffer.alloc(12)
+    head.writeBigUInt64BE(flags, 0)
+    head.writeUInt32BE(size, 8)
+    return head
+  }
+  const prefix = Buffer.concat([DUMMY, nameBuf('C66'), codecBuf(CODEC_H264), sessionBuf(720, 1440)])
+
+  it('a bad packet size (zero, or far too large) breaks the stream: one error, nothing after it, even when more valid bytes follow', () => {
+    const trailing = packetBuf(33_333n, [0, 0, 0, 1, 0x41, 0xbb])
+
+    const huge = new VideoReader()
+    expect(huge.feed(Buffer.concat([prefix, packetHeader(0n, 100 * 1024 * 1024), trailing]))).toEqual([
+      { type: 'name', name: 'C66' },
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'size', width: 720, height: 1440 },
+      { type: 'error', message: 'scrcpy sent a 104857600-byte packet.' },
+    ])
+    expect(huge.feed(trailing)).toEqual([]) // a later, perfectly valid chunk: still ignored
+
+    const zero = new VideoReader()
+    expect(zero.feed(Buffer.concat([prefix, packetHeader(0n, 0), trailing]))).toEqual([
+      { type: 'name', name: 'C66' },
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'size', width: 720, height: 1440 },
+      { type: 'error', message: 'scrcpy sent a 0-byte packet.' },
+    ])
+  })
+
+  it('a packet before any session header breaks the stream', () => {
+    const reader = new VideoReader()
+    const bytes = Buffer.concat([DUMMY, nameBuf('C66'), codecBuf(CODEC_H264), packetBuf(33_333n, [0, 0, 0, 1, 0x41, 0xbb])])
+    expect(reader.feed(bytes)).toEqual([
+      { type: 'name', name: 'C66' },
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'error', message: "scrcpy sent a frame before the screen's size." },
+    ])
+    expect(reader.feed(sessionBuf(720, 1440))).toEqual([])
+  })
+
+  it('an invalid screen size breaks the stream', () => {
+    const reader = new VideoReader()
+    const bytes = Buffer.concat([DUMMY, nameBuf('C66'), codecBuf(CODEC_H264), sessionBuf(0, 1440)])
+    expect(reader.feed(bytes)).toEqual([
+      { type: 'name', name: 'C66' },
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'error', message: 'scrcpy sent a 0×1440 screen.' },
+    ])
+  })
+
+  it('a 2 MiB key frame fed in 1448-byte chunks parses into one packet with the right bytes', () => {
+    const reader = new VideoReader()
+    const payload = Buffer.alloc(2 * 1024 * 1024)
+    for (let i = 0; i < payload.length; i++) payload[i] = i % 256
+    const bytes = Buffer.concat([prefix, packetBuf((1n << 61n) | 16_666n, payload)])
+
+    const events: unknown[] = []
+    for (let i = 0; i < bytes.length; i += 1448) events.push(...reader.feed(bytes.subarray(i, i + 1448)))
+
+    expect(events).toHaveLength(4)
+    expect(events.at(-1)).toEqual({ type: 'packet', config: false, key: true, data: new Uint8Array(payload) })
+  })
+
+  it('a second session header after packets gives a second size event (a rotation, or after reset video)', () => {
+    const reader = new VideoReader()
+    const bytes = Buffer.concat([
+      prefix,
+      packetBuf(1n << 62n, [0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28]),
+      packetBuf((1n << 61n) | 16_666n, [0, 0, 0, 1, 0x65, 0xaa]),
+      sessionBuf(1440, 720), // a rotation
+      packetBuf(1n << 62n, [0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28]),
+    ])
+    expect(reader.feed(bytes)).toEqual([
+      { type: 'name', name: 'C66' },
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'size', width: 720, height: 1440 },
+      { type: 'packet', config: true, key: false, data: new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28]) },
+      { type: 'packet', config: false, key: true, data: new Uint8Array([0, 0, 0, 1, 0x65, 0xaa]) },
+      { type: 'size', width: 1440, height: 720 },
+      { type: 'packet', config: true, key: false, data: new Uint8Array([0, 0, 0, 1, 0x67, 0x64, 0x00, 0x28]) },
+    ])
+  })
+
+  it('a 64-byte name with no NUL keeps all 64 characters', () => {
+    const reader = new VideoReader()
+    const name = Buffer.alloc(64, 'A'.charCodeAt(0))
+    expect(reader.feed(Buffer.concat([DUMMY, name]))).toEqual([{ type: 'name', name: 'A'.repeat(64) }])
+  })
+
+  it("each packet's data has its own buffer, independent of the chunk it arrived in", () => {
+    const reader = new VideoReader()
+    const chunk = Buffer.concat([prefix, packetBuf((1n << 61n) | 16_666n, [0, 0, 0, 1, 0x65, 0xaa])])
+    const events = reader.feed(chunk)
+    const last = events.at(-1)
+    if (last?.type !== 'packet') throw new Error('expected a packet event')
+    expect(last.data.byteOffset).toBe(0)
+    expect(last.data.buffer.byteLength).toBe(last.data.length)
+
+    const before = Buffer.from(last.data)
+    chunk.fill(0xff) // mutate the fed chunk after feed() returned
+    expect(Buffer.from(last.data)).toEqual(before)
   })
 })
