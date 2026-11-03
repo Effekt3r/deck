@@ -18,7 +18,11 @@ const frame = (text: string) => Buffer.from(Buffer.byteLength(text).toString(16)
 const C66 = '8d2e61a device usb:34603008X product:C66 model:C66 device:C66 transport_id:1\n'
 const c66: Identity = { serialNo: '8d2e61a', maker: 'CHAINWAY', model: 'C66', release: '13', avd: '', name: 'C66', booted: true }
 
-function setup(identify: (serial: string) => Promise<Identity>, publish?: (devices: DeviceInfo[], error: string | null) => void) {
+function setup(
+  identify: (serial: string) => Promise<Identity>,
+  publish?: (devices: DeviceInfo[], error: string | null) => void,
+  retryMs?: { identity: number; booting: number; restartMin: number; restartMax: number },
+) {
   const children: FakeChild[] = []
   const published: { devices: DeviceInfo[]; error: string | null }[] = []
   const tracker = new AndroidTracker({
@@ -29,7 +33,7 @@ function setup(identify: (serial: string) => Promise<Identity>, publish?: (devic
     },
     identify,
     publish: publish ?? ((devices, error) => published.push({ devices, error })),
-    retryMs: { identity: 10, booting: 10, restartMin: 20, restartMax: 80 },
+    retryMs: retryMs ?? { identity: 10, booting: 10, restartMin: 20, restartMax: 80 },
   })
   return { tracker, children, published }
 }
@@ -194,27 +198,31 @@ describe('AndroidTracker', () => {
     errorSpy.mockRestore()
   })
 
-  it('a re-ask timer orphaned by a restart asks nothing; the restarted list is asked once more', async () => {
+  it('a re-ask timer orphaned by a restart asks nothing, even once the restart lists the same key again', async () => {
     vi.useFakeTimers()
-    const identify = vi.fn(async (): Promise<Identity> => ({ ...c66, booted: false }))
-    const { tracker, children } = setup(identify)
+    const answers: Identity[] = [{ ...c66, booted: false }, c66]
+    const identify = vi.fn(async (): Promise<Identity> => answers.shift() ?? c66)
+    const { tracker, children } = setup(identify, undefined, { identity: 10, booting: 50, restartMin: 20, restartMax: 80 })
     tracker.start()
     children[0].stdout.emit('data', frame(C66))
     await vi.advanceTimersByTimeAsync(0)
     expect(identify).toHaveBeenCalledTimes(1)
 
-    // adb's server goes away before the 10 ms booting re-ask fires.
+    // adb's server goes away before the 50 ms booting re-ask fires.
     children[0].emit('close', 1)
-    await vi.advanceTimersByTimeAsync(10)
-    expect(identify).toHaveBeenCalledTimes(1)
 
-    // The 20 ms restart spawns a new track-devices, which lists the same device again.
-    await vi.advanceTimersByTimeAsync(10)
+    // The 20 ms restart spawns a new track-devices; a new server numbers transports from 1 again,
+    // so the same key reappears and starts its own, unrelated ask chain, which finishes at once.
+    await vi.advanceTimersByTimeAsync(20)
     expect(children).toHaveLength(2)
     children[1].stdout.emit('data', frame(C66))
+    await vi.advanceTimersByTimeAsync(0)
     expect(identify).toHaveBeenCalledTimes(2)
 
-    await vi.advanceTimersByTimeAsync(0)
+    // The orphaned timer comes due only now, after that second chain already finished: it must not
+    // start a third ask on it.
+    await vi.advanceTimersByTimeAsync(31)
+    expect(identify).toHaveBeenCalledTimes(2)
     tracker.stop()
   })
 
