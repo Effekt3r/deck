@@ -3395,17 +3395,25 @@ git add src/renderer/src/device/
 git -c user.email=franco@effektstudios.com commit -m "Device panel: which device a tab shows, letterboxing, keys and the codec string" -m "Claude-Session: https://claude.ai/code/session_012TidnAXmFkf7jwBCQQo4jJ"
 ```
 
-**After review (commit `99b052b`), the code above changed:**
+**After review, the code above changed:**
 - `Held` also keeps the pick in force (`pick: string | null`), and `panelView(choice, devices, held, now, pick)`
   takes the tab's pick (else the project's, else null). A new pick ends a hold at once. While the pick
   is unchanged, a shown device that's still connected stays when a second arrives (the menu switches).
 - `fitSize` floors the box first, so sizes are whole CSS px for fractional boxes.
 - `avcCodec` masks the constraint byte's two reserved bits.
 - `deviceKey`:
-  - macOS: Option+Backspace/Delete/←/→ go with Android's Ctrl (`META_CTRL_ON`, 0x1000), since they're
-    word-wise and Android's Alt works by line. Cmd+←/→ go to `MOVE_HOME`/`MOVE_END`.
-  - Off macOS: `KeyPress.altGraph` (from `getModifierState('AltGraph')`, else Ctrl+Alt) tells AltGr from
-    Alt. An Alt combination that isn't AltGr types nothing.
+  - macOS:
+    - Option+Backspace/Delete go with Android's Ctrl (`META_CTRL_ON`, 0x1000), never with Shift.
+      They're word-wise on a Mac, Android's Alt works by line, and Android deletes nothing for
+      Ctrl+Shift.
+    - Option+←/→ go with Ctrl and keep Shift.
+    - Option+↑/↓ are plain arrows, since Android's Alt+↑/↓ jump to the text's start or end.
+    - Cmd+←/→ go to `MOVE_HOME`/`MOVE_END`, and Cmd+↑/↓ to the same with Ctrl (the text's start and end).
+  - Off macOS:
+    - AltGr is `KeyPress.altGraph` (from `getModifierState('AltGraph')`) *or* Ctrl+Alt. Windows makes
+      characters from Ctrl+Alt too, so a reported AltGraph only adds to the guess and no typed character
+      is lost.
+    - An Alt combination that isn't AltGr types nothing.
 
 ---
 
@@ -5376,6 +5384,57 @@ These need hands on the devices; list them for him in the final message:
 - Modify: `README.md` (the features list and the keys line)
 - Modify: `docs/DECK.md` (M5)
 - Modify: `docs/TESTING.md` (Windows steps)
+
+- [ ] **Step 0: What the reviews changed**
+
+The reviews of tasks 1–15 changed or added the following, and the steps below were written before
+them. Each item goes into CLAUDE.md's device panel section where it explains code. Where it changes
+behaviour, it goes into the spec too (`docs/superpowers/specs/2026-11-03-device-panel-design.md`:
+"Which device", "Using the device", Known limits, Code), and where it asks for a check, into
+TESTING.md. The spec records the design decisions made along the way, for Franco's review.
+
+Things that changed from the plan, to record in CLAUDE.md's device panel section (and the spec where noted):
+
+- Task 1: `scripts/before-pack.cjs` (electron-builder `beforePack`) stops a build whose `resources/scrcpy-server` is missing or wrong (electron-builder only warns about a missing extraResources file). The fetch script times out after 120 s and logs `err.cause`.
+- Task 3 (adb lists):
+  - Windows writes `track-devices` in text mode: each "\n" may arrive as "\r\n", which the 4-digit lengths don't count; `readTrackFrames` drops every "\r" first. From adb's source, not yet seen on Windows: add a TESTING.md step to capture `adb track-devices -l` once on Windows.
+  - Windows' own USB driver gives adb no device path, so cables list no `usb:` field: a connection counts as a cable unless its adb name is an emulator's or a network one (`ip:port`, mDNS). Unverified on Windows.
+  - An emulator still starting (not ready, unanswered) isn't listed, so its id never changes under the panel.
+  - A phone still booting (`sys.boot_completed` not 1) is asked again every 3 s, up to 40 times, so a phone rebooted while plugged in gets its own name back.
+  - mDNS renames a clashing Wi-Fi name with spaces (`adb-<serial>-<x> (2)._adb-tls-connect._tcp`): device lines are read up to the first adb state word.
+  - The first value of each key wins in the identity answer (a name can't spoof the serial).
+  - Known limits: two devices sharing an id (cheap boards' `0123456789ABCDEF` serial; two copies of one AVD with -read-only); Linux `no permissions` (including the form without a reason, which is dropped); recovery/sideload devices are told to "unplug"; devices with the same name look alike in the menu.
+- Task 4 (adb): `runAdb`'s error is adb's own `adb:`/`error:` line (stderr before stdout, daemon chatter skipped), at most 500 characters; only absolute PATH entries; quoted Windows PATH entries; `env` must be the live `process.env` on Windows.
+- Task 5 (tracker): adb's startup chatter is never shown as the error; the restart wait (1 s doubling to 30 s) resets only after a run that lasted 30 s, so two adb versions killing each other's server don't restart every second; a throwing publish doesn't stop tracking; re-ask timers belong to their record; a phone already listed stays listed as "connecting" while asked (no "disconnected" flash after tapping Allow); a device waiting out its retry gap isn't asked again by the next list.
+  - Known limit: when Claude or the user runs an adb of a different version, it kills Deck's server; if Deck had run 30 s or more, it restarts within 1 s and kills theirs (cutting off a long `adb logcat`). Deck prefers the SDK's adb, as Android Studio does.
+- Task 6 (protocol): the video reader caps packets at 16 MiB and reports a broken stream (0/oversized packet, a frame before the screen's size, a 0 or >65535 screen) as an error event; packets are filled as their bytes arrive (no quadratic copying, memory ~one packet). The 300-byte text and 256 KiB clipboard limits are scrcpy's client limits, not the server's. Touch/scroll take whole pixels 0…size−1. Horizontal scroll: a positive dx scrolls right (same sign as the wheel's deltaX), a positive dy up (against deltaY).
+- Task 7 (session): the forward is removed once both sockets are connected (as scrcpy does); a stop cancels a start in flight (AbortSignal) and closes what it opened; `connected()` rejects on close; after the start, a socket close waits up to 1 s for the shell's own close so the server's last error is reported; `serverError` takes Java exception messages, `Caused by:` roots, "<ERROR line> (<Exception>)" for a bare exception. Killing the local `adb shell` ends the server on the device (adbd SIGHUPs `sh -c`, mksh hangs up its foreground job), and scrcpy's cleanup restores `stay_on_while_plugged_in` (traced in AOSP source).
+  - Known limit: a Deck crash during the ~1 s start window leaves the adb client and the server waiting (screen kept on), as with scrcpy itself.
+  - The spec's jar name was fixed (deck-scrcpy-server.jar).
+- Task 8 (streams): view() always answers with a state; a stream counts as recovered only after 5 s live (one that dies right after its first frame reaches the error after 1, 2, 5 s); a start has a 20 s deadline; an ended session is never heard from again; each start's deadline is its own.
+- Task 9 (projects): the spec's Android rule changed: a git repository is scanned (as a whole); outside git only a Gradle build (settings.gradle[.kts] at its root or in `android/`); the home folder never (scanning `~` would stat inside Desktop/Documents/Downloads, which can raise macOS privacy prompts for Deck, and a "Don't Allow" also blocks the terminals there); a module's manifest in `src/main` or `src/androidMain`; the second level inside `android/` in any case or a first-level Gradle build of its own; at most 200 folders per level and in total at the second level. Task 10 caches {root, android} per folder for 30 s.
+  - Known limits: a folder outside git holding several Gradle builds isn't found (show the panel by hand); a temporary git failure is cached as "outside git" for 30 s; each worktree of a bare repository is its own project; a single-module app at the repository root isn't found; repositories with only an Android library count as apps.
+  - A one-line comment on `gitDirs` (src/main/git/summary.ts:26): it resolves git's relative common dir against the path given, so callers should pass a real path (project.ts realpaths first).
+  - TESTING.md 18p: the folder must be a git repository or a Gradle build.
+- Task 16 also: scrcpy's device-side check after a quit mid-start (already in task 15's text).
+- Task 10 (main wiring):
+  - Claude Code (2.1.283) strips a pasted path's quotes and, except under WSL, unescapes backslashes before checking it's absolute, so on Windows image paths for Claude double their backslashes (`quoteImagePath` in `src/shared/quote.ts`), used by the clipboard card's image paste and the screenshot. Found by reading Claude Code's paste code; unverified on Windows: add a TESTING.md Windows step (a screenshot and a copied image both arrive as `[Image #N]`).
+  - IPC checks: screenshots at most 32 MiB and PNG only; picks need an absolute root; views of unlisted devices are ignored; a stop ends an in-flight push (`runAdb` takes a signal).
+  - Security notes for the M4 list: `devices:input` (taps and typing on a phone) joins "check the IPC sender frame"; on Windows `devices:project` accepts UNC paths from the tab's folder (which other programs' output can set), the same accepted risk as the git panel.
+  - Docs to fix for the clipboard too (task 10's quoteImagePath changed its Windows behaviour): CLAUDE.md:~220 ("Claude Code attaches an image only when a paste is one image path…"): add that Claude Code strips the outer quotes and then drops each backslash that escapes a character (even inside single quotes; Windows paths under WSL aside), so Windows image paths are pasted with doubled backslashes; docs/TESTING.md step 18b: its "Windows paths may need double quotes" guess is wrong now: expect `[Image #1]`.
+  - The tracker's identity asks take no signal (up to 10 s after a stop; quick in practice).
+- Task 11 (renderer pure parts), from its review:
+  - A "gone" hold ends at once when the tab picks another device or moves to another project (a pick right after a disconnect used to wait 10 s); a shown device stays when a second one arrives (the panel doesn't drop to "Which device?"; the menu switches). Spec: record both rules.
+  - macOS: Option+Backspace/Delete/←/→ are word-wise, so they go to Android with Ctrl (Android's Alt+Backspace deletes the whole line); Cmd+←/→ go to the line's start/end; every other Cmd key stays Deck's. Windows: Alt alone never types (Alt+F is a menu key, Alt+0233 an Alt code, Alt+Space the window menu); AltGr does (`getModifierState('AltGraph')`, falling back to Ctrl+Alt). Spec's key list: add Home/End/PageUp/PageDown.
+  - The codec string masks the constraint byte's two reserved bits (Chromium refuses the string otherwise).
+  - Known limit to check in task 15: dead keys and IME on the device screen (macOS should compose "é"; Windows unverified).
+  - Spec drift: the renderer's file names (pick.ts, fit.ts, keys.ts, codec.ts).
+- Task 11b (main): the first list after adb's tracking (re)starts waits for every ready device's first answer (3 s at most), so a project with two devices doesn't show whichever answered first; `devices:list` answers null until that list and again once nothing watches (no push at stop); the panel says "Looking for devices…" meanwhile.
+- Tasks 12–14: the canvas follows `devicePixelRatio` changes (another display, zoom); a touch in progress when the frame changes size (rotation) is lifted at its last point for both sizes, since scrcpy drops a touch made for another size and may switch before or after it says so; the canvas's edge is a box-shadow ring, since a border squeezed the picture inside the canvas's size and shifted touches.
+- Task 11 re-review (approved), for task 16:
+  - Task 16 must also EDIT THE SPEC (its plan text doesn't list spec edits): "Which device" gets the keep-the-shown-device rule and "a new pick or another project ends a hold"; "Using the device" gets Option word-wise (Ctrl on Android, Shift dropped on deletes), Option+↑/↓ plain arrows, Cmd+←/→ line start/end, Cmd+↑/↓ text start/end (Ctrl+Home/End), Home/End/PageUp/PageDown; Known limits gets: no input methods (Chinese, Japanese, Korean), dead keys unverified on Windows; the Code section's renderer file names (codec.ts, fit.ts, keys.ts, pick.ts; not decoder.ts/input.ts).
+  - TESTING.md (Windows): German layout: AltGr+Q and Ctrl+Alt+Q type "@" on the device; Alt+F does nothing on the device.
+  - Task 15 check: Shift+arrows select text in a classic (View-based) EditText? Android's TextView takes selection from a separate Shift key event (MetaKeyKeyListener state), not from the arrow's Shift flag; scrcpy sends Shift as its own key. If it doesn't select, main's input.ts should wrap a Shift-flagged key in Shift down/up.
 
 - [ ] **Step 1: CLAUDE.md**
 
