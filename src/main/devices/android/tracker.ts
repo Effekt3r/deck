@@ -1,6 +1,7 @@
 import type { ChildProcess } from 'node:child_process'
 import type { DeviceInfo } from '@shared/types'
-import { type AdbEntry, type Identity, mergeDevices, readTrackFrames, type Seen } from './devices'
+import { lastWord } from './adb'
+import { type AdbEntry, deviceId, type Identity, mergeDevices, readTrackFrames, type Seen } from './devices'
 
 export interface TrackerDeps {
   /** Starts `adb track-devices -l`. */
@@ -25,12 +26,14 @@ interface Asked {
   asking: boolean
   /** Answers given while the device was still starting up. */
   boots: number
+  /** A re-ask came due while the device wasn't ready: ask when it is. */
+  due: boolean
 }
 
 /** Follows the Android devices adb sees with one long-running `adb track-devices -l`, and asks each
- *  connected device once what it is (again while it's still starting up). Runs while a tab needs Android devices. adb's server going
- *  away ends track-devices; it's started again after 1 s, then up to 30 s apart while it keeps
- *  failing. */
+ *  connected device once what it is (again while it's still starting up). Runs while a tab needs
+ *  Android devices. adb's server going away ends track-devices; it's started again after 1 s, then
+ *  up to 30 s apart while it keeps failing. */
 export class AndroidTracker {
   private running = false
   private child: ChildProcess | null = null
@@ -38,6 +41,9 @@ export class AndroidTracker {
   /** By adb name and connection (transport id). */
   private readonly asked = new Map<string, Asked>()
   private serials = new Map<string, string>()
+  /** Ids of the last computed list, so a device already shown can stay listed (as connecting)
+   *  through its first ask instead of flashing as disconnected. */
+  private lastIds = new Set<string>()
   private readonly timers = new Set<ReturnType<typeof setTimeout>>()
   private readonly retry: NonNullable<TrackerDeps['retryMs']>
   private restartMs: number
@@ -51,6 +57,7 @@ export class AndroidTracker {
   start(): void {
     if (this.running) return
     this.running = true
+    this.restartMs = this.retry.restartMin
     this.spawn()
   }
 
@@ -64,6 +71,7 @@ export class AndroidTracker {
     this.entries = []
     this.asked.clear()
     this.serials.clear()
+    this.lastIds.clear()
     this.lastPublished = ''
   }
 
@@ -82,11 +90,12 @@ export class AndroidTracker {
   }
 
   private spawn(): void {
+    const startedAt = Date.now()
     let child: ChildProcess
     try {
       child = this.deps.track()
     } catch (err) {
-      return this.ended(err instanceof Error ? err.message : String(err))
+      return this.ended(err instanceof Error ? err.message : String(err), 0)
     }
     this.child = child
     let pending: Buffer = Buffer.alloc(0)
@@ -96,35 +105,48 @@ export class AndroidTracker {
       if (done || this.child !== child) return
       done = true
       this.child = null
-      this.ended(why)
+      this.ended(why, Date.now() - startedAt)
     }
     child.stdout?.on('data', (chunk: Buffer) => {
       if (this.child !== child) return
+      let latest: AdbEntry[] | undefined
       try {
         const { lists, rest } = readTrackFrames(pending.length ? Buffer.concat([pending, chunk]) : chunk)
         pending = rest
-        const latest = lists.at(-1)
-        if (!latest) return
-        this.restartMs = this.retry.restartMin
-        this.entries = latest
-        this.update()
+        latest = lists.at(-1)
       } catch (err) {
         said = err instanceof Error ? err.message : String(err)
         child.kill()
+        return
       }
+      if (!latest) return
+      // What adb printed while starting its server (e.g. "* daemon started successfully") isn't an
+      // error: a list means it's up.
+      said = ''
+      this.entries = latest
+      this.update()
     })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      said = `${said}${chunk.toString()}`.slice(-2000)
+    child.stderr?.setEncoding('utf8')
+    child.stderr?.on('data', (chunk: string) => {
+      said = `${said}${chunk}`.slice(-2000)
     })
     child.on('error', (err) => end(err.message))
-    child.on('close', (code) => end(lastLine(said) || `adb track-devices stopped (exit code ${code}).`))
+    child.on('close', (code, signal) =>
+      end(
+        lastWord(said) ??
+          (signal ? `adb track-devices was stopped (${signal}).` : code === 0 ? "adb's server stopped." : `adb track-devices stopped (exit code ${code}).`),
+      ),
+    )
   }
 
-  private ended(why: string): void {
+  private ended(why: string, ranMs: number): void {
     if (!this.running) return
     this.entries = []
     this.asked.clear()
     this.publish(why)
+    // A run that lasted as long as the longest wait means adb is healthy again: back off from
+    // scratch next time, rather than keep the slow pace a past failure earned.
+    if (ranMs >= this.retry.restartMax) this.restartMs = this.retry.restartMin
     const wait = this.restartMs
     this.restartMs = Math.min(this.restartMs * 2, this.retry.restartMax)
     this.later(wait, () => {
@@ -135,17 +157,18 @@ export class AndroidTracker {
   private update(): void {
     const keys = new Set(this.entries.map(keyOf))
     for (const key of this.asked.keys()) if (!keys.has(key)) this.asked.delete(key)
-    for (const entry of this.entries) if (entry.state === 'device') this.ask(entry)
+    for (const entry of this.entries) if (entry.state === 'device') this.ask(entry, this.asked.get(keyOf(entry))?.due ?? false)
     this.publish(null)
   }
 
   /** `again`: ask once more a device that failed to answer, or answered while still starting up. */
   private ask(entry: AdbEntry, again = false): void {
     const key = keyOf(entry)
-    const asked = this.asked.get(key) ?? { identity: null, tries: 0, asking: false, boots: 0 }
+    const asked = this.asked.get(key) ?? { identity: null, tries: 0, asking: false, boots: 0, due: false }
     this.asked.set(key, asked)
     if ((asked.identity && !again) || asked.asking || asked.tries >= IDENTITY_TRIES) return
     asked.asking = true
+    asked.due = false
     this.deps.identify(entry.serial).then(
       (identity) => {
         if (this.asked.get(key) !== asked) return
@@ -154,41 +177,53 @@ export class AndroidTracker {
         asked.identity = identity
         this.publish(null)
         // Still starting up: Android's settings, and with them the phone's own name, aren't there yet.
-        if (!identity.booted && ++asked.boots < BOOT_TRIES) this.askLater(key, this.retry.booting)
+        if (!identity.booted && ++asked.boots < BOOT_TRIES) this.askLater(key, asked, this.retry.booting)
       },
       () => {
         if (this.asked.get(key) !== asked) return
         asked.asking = false
         if (++asked.tries >= IDENTITY_TRIES) return this.publish(null)
-        this.askLater(key, this.retry.identity)
+        this.askLater(key, asked, this.retry.identity)
       },
     )
   }
 
-  private askLater(key: string, ms: number): void {
+  private askLater(key: string, asked: Asked, ms: number): void {
     this.later(ms, () => {
+      if (this.asked.get(key) !== asked) return
       const now = this.entries.find((e) => keyOf(e) === key)
       if (now?.state === 'device') this.ask(now, true)
+      else asked.due = true
     })
   }
 
   private publish(error: string | null): void {
     // A ready device is listed once it has said what it is (or Deck stopped asking), so its id (an
-    // emulator's AVD name) never changes under the panel.
+    // emulator's AVD name) never changes under the panel. One already listed (e.g. unauthorized)
+    // stays listed, as connecting, while its first ask is in flight, so allowing it on the device
+    // doesn't make it flash as disconnected.
     const seen: Seen[] = []
     for (const entry of this.entries) {
       const asked = this.asked.get(keyOf(entry))
-      if (entry.state === 'device' && !asked?.identity && (asked?.asking || (asked?.tries ?? 0) < IDENTITY_TRIES)) continue
+      if (entry.state === 'device' && !asked?.identity && (asked?.asking || (asked?.tries ?? 0) < IDENTITY_TRIES)) {
+        const connecting: Seen = { entry: { ...entry, state: 'connecting' }, identity: null }
+        if (this.lastIds.has(deviceId(connecting))) seen.push(connecting)
+        continue
+      }
       seen.push({ entry, identity: asked?.identity ?? null })
     }
     const { devices, serials } = mergeDevices(seen)
+    this.lastIds = new Set(devices.map((d) => d.id))
     this.serials = serials
     const text = JSON.stringify([devices, error])
     if (text === this.lastPublished) return
-    this.lastPublished = text
-    this.deps.publish(devices, error)
+    try {
+      this.deps.publish(devices, error)
+      this.lastPublished = text
+    } catch (err) {
+      console.error('devices: publishing the list failed', err)
+    }
   }
 }
 
 const keyOf = (e: AdbEntry) => `${e.serial}#${e.transport}`
-const lastLine = (text: string) => text.split('\n').map((line) => line.trim()).filter(Boolean).at(-1) ?? ''

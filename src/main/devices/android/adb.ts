@@ -63,7 +63,7 @@ export function runAdb(adb: string, args: readonly string[], timeoutMs = 15_000)
 
 /** adb's own error lines start with "adb:" or "error:" (an unauthorized device's is followed by
  *  hints); "* daemon …" lines are chatter. Else the last line said. */
-function lastWord(text: string): string | undefined {
+export function lastWord(text: string): string | undefined {
   const lines = text.split('\n').map((line) => line.trim()).filter((line) => line && !line.startsWith('* '))
   return lines.findLast((line) => /^(adb: |error: )/.test(line)) ?? lines.at(-1)
 }
