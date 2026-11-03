@@ -7,7 +7,8 @@ export interface AdbEntry {
   serial: string
   /** device, unauthorized, offline, authorizing, connecting, recovery … */
   state: string
-  /** By cable: adb lists a `usb:` field. */
+  /** By cable: adb lists a `usb:` field, except with Windows' own USB driver, so a name that isn't
+   *  an emulator's or a network one counts as a cable too. */
   usb: boolean
   /** adb's model field (`SM_S731B`); '' when adb doesn't know it. */
   model: string
@@ -15,6 +16,9 @@ export interface AdbEntry {
    *  is asked again what it is. */
   transport: string
 }
+
+/** A network connection's adb name: `ip:port`, or an mDNS service name (Wi-Fi debugging). */
+const NETWORK = /:\d+$|\._adb(-tls-connect)?\._tcp\.?$/
 
 /** Lines like `8d2e61a   device usb:34603008X product:C66 model:C66 device:C66 transport_id:32410`. */
 export function parseDeviceLines(text: string): AdbEntry[] {
@@ -27,14 +31,20 @@ export function parseDeviceLines(text: string): AdbEntry[] {
       const i = field.indexOf(':')
       if (i > 0) attrs.set(field.slice(0, i), field.slice(i + 1))
     }
-    entries.push({ serial, state, usb: attrs.has('usb'), model: attrs.get('model') ?? '', transport: attrs.get('transport_id') ?? '' })
+    // Windows' own USB driver gives adb no device path, so a cable there lists no `usb:` field
+    // either: a name that isn't an emulator's or a network one counts as a cable too.
+    const usb = attrs.has('usb') || !(serial.startsWith('emulator-') || NETWORK.test(serial))
+    entries.push({ serial, state, usb, model: attrs.get('model') ?? '', transport: attrs.get('transport_id') ?? '' })
   }
   return entries
 }
 
 /** `adb track-devices -l` writes each list as four hex digits of length, then that many bytes. The
  *  lists complete in `buf`, and what's left of the next one. Throws on a length that isn't hex. */
-export function readTrackFrames(buf: Buffer): { lists: AdbEntry[][]; rest: Buffer } {
+export function readTrackFrames(input: Buffer): { lists: AdbEntry[][]; rest: Buffer } {
+  // On Windows adb writes this stream in text mode, so each "\n" may arrive as "\r\n", which the
+  // lengths don't count. adb's own lists hold no "\r": drop them all before counting.
+  const buf = input.includes(0x0d) ? Buffer.from(input.toString('latin1').replace(/\r/g, ''), 'latin1') : input
   const lists: AdbEntry[][] = []
   let at = 0
   while (buf.length - at >= 4) {
@@ -54,8 +64,10 @@ export const IDENTITY_SCRIPT = [
   'echo "maker=$(getprop ro.product.manufacturer)"',
   'echo "model=$(getprop ro.product.model)"',
   'echo "release=$(getprop ro.build.version.release)"',
-  // ro.boot on recent emulator images, ro.kernel on older ones; empty on phones.
-  'echo "avd=$(getprop ro.boot.qemu.avd_name)$(getprop ro.kernel.qemu.avd_name)"',
+  'echo "booted=$(getprop sys.boot_completed)"',
+  // ro.boot on recent emulator images, ro.kernel on older ones; both empty on phones.
+  'echo "avd=$(getprop ro.boot.qemu.avd_name)"',
+  'echo "avd_old=$(getprop ro.kernel.qemu.avd_name)"',
   'echo "name=$(settings get global device_name 2>/dev/null)"',
 ].join('; ')
 
@@ -64,6 +76,8 @@ export interface Identity {
   maker: string
   model: string
   release: string
+  /** Android has finished starting; before that the phone's own name can't be read. */
+  booted: boolean
   /** An emulator's AVD name; '' on a phone. */
   avd: string
   /** The name set on the phone; '' when there's none. */
@@ -74,14 +88,26 @@ export function parseIdentity(stdout: string): Identity {
   const values = new Map<string, string>()
   for (const line of stdout.split(/\r?\n/)) {
     const i = line.indexOf('=')
-    if (i > 0) values.set(line.slice(0, i).trim(), line.slice(i + 1).trim())
+    if (i <= 0) continue
+    const key = line.slice(0, i).trim()
+    // The first value for a key wins: the name is printed last, and one holding a newline plus
+    // "serial=…" must not replace the device's real serial.
+    if (!values.has(key)) values.set(key, line.slice(i + 1).trim())
   }
   // `settings get` prints "null" for a setting that isn't there.
   const get = (key: string) => {
     const value = values.get(key) ?? ''
     return value === 'null' ? '' : value
   }
-  return { serialNo: get('serial'), maker: get('maker'), model: get('model'), release: get('release'), avd: get('avd'), name: get('name') }
+  return {
+    serialNo: get('serial'),
+    maker: get('maker'),
+    model: get('model'),
+    release: get('release'),
+    booted: get('booted') === '1',
+    avd: get('avd') || get('avd_old'),
+    name: get('name'),
+  }
 }
 
 /** An adb entry and what the device said it is: null before it answered, or when it can't
@@ -121,6 +147,9 @@ const rank = (s: Seen) => STATES.indexOf(stateOf(s.entry.state)) * 2 + (s.entry.
 export function mergeDevices(seen: readonly Seen[]): { devices: DeviceInfo[]; serials: Map<string, string> } {
   const groups = new Map<string, Seen[]>()
   for (const s of seen) {
+    // An emulator that hasn't answered yet (still starting) is known only by its port: listed, its
+    // name and id would change once it answers.
+    if (isEmulator(s) && !s.identity && stateOf(s.entry.state) !== 'ready') continue
     const id = deviceId(s)
     groups.set(id, [...(groups.get(id) ?? []), s])
   }
