@@ -5360,6 +5360,12 @@ These need hands on the devices; list them for him in the final message:
 4. Two tabs in AccessControl_Android: one on the emulator, one on the S25 FE; switching tabs
    switches the screen.
 5. With Claude running in the tab, the camera button adds `[Image #N]` to Claude's prompt.
+6. Typing into a text field on the C66 or S25 FE, with the screen selected:
+   - Option+Backspace deletes a word, and Option+←/→ move by word.
+   - Cmd+←/→ go to the line's start or end.
+   - Shift+arrows select. If the cursor moves without selecting, main's `input.ts` must send Shift as
+     its own key, as scrcpy does.
+   - Option+E then E types "é".
 
 ---
 
