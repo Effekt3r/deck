@@ -202,17 +202,17 @@ and likewise for iOS.
 
 ### Android
 
-1. **Copy the server:** `adb -s <serial> push <server> /data/local/tmp/deck-scrcpy.jar`.
+1. **Copy the server:** `adb -s <serial> push <server> /data/local/tmp/deck-scrcpy-server.jar`.
 2. **Tunnel:** `adb -s <serial> forward tcp:0 localabstract:scrcpy_<id>`, with a random 31-bit `<id>`;
-   adb picks a free port on 127.0.0.1.
-3. **Start:** `adb -s <serial> shell CLASSPATH=/data/local/tmp/deck-scrcpy.jar app_process /
+   adb picks a free port on 127.0.0.1. Removed again once both sockets are connected, as scrcpy does.
+3. **Start:** `adb -s <serial> shell CLASSPATH=/data/local/tmp/deck-scrcpy-server.jar app_process /
    com.genymobile.scrcpy.Server 5.0.1 scid=<id> tunnel_forward=true audio=false video_codec=h264
    max_size=1600 max_fps=60 stay_awake=true clipboard_autosync=false`, at scrcpy's default bit rate
    (8 Mbit/s).
 4. **Connect** twice, video then control. The video socket starts with a dummy byte (Deck retries
    until it comes), the device's name and the codec, then a size packet per capture session (a
    rotation starts one) and frames, each behind scrcpy's 12-byte header.
-5. **Stop:** close the sockets, end the `adb shell` and remove the forward.
+5. **Stop:** close the sockets and end the `adb shell` (and remove the forward if it's still there).
 
 - **What it changes on the device**, only while shown:
   - the screen is turned on and stays on while the device is plugged in (`stay_awake`);

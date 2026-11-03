@@ -4921,7 +4921,10 @@ for s in 8d2e61a R5CW20XY7QZ emulator-5554; do echo "$s $($ADB -s $s shell setti
 
 Expected: the same values as Step 1. Show the window again (`set visible … to true`): the stream comes
 back within a couple of seconds. Last, pick a device and quit the dev build within a second (while
-its stream is starting): afterwards `pgrep -fl deck-scrcpy` and `$ADB forward --list` show nothing.
+its stream is starting): afterwards `pgrep -fl deck-scrcpy` and `$ADB forward --list` show nothing,
+and on the device `$ADB -s 8d2e61a shell pgrep -f com.genymobile.scrcpy.Server` prints nothing and
+`settings get global stay_on_while_plugged_in` is back to its Step 1 value. (On the device the jar's
+path is in the environment, not the command line, so `deck-scrcpy` won't match there.)
 
 - [ ] **Step 7: What it costs**
 
