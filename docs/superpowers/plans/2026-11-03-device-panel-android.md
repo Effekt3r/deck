@@ -922,7 +922,7 @@ function fakeChild(): FakeChild {
 
 const frame = (text: string) => Buffer.from(Buffer.byteLength(text).toString(16).padStart(4, '0') + text)
 const C66 = '8d2e61a device usb:34603008X product:C66 model:C66 device:C66 transport_id:1\n'
-const c66: Identity = { serialNo: '8d2e61a', maker: 'CHAINWAY', model: 'C66', release: '13', avd: '', name: 'C66' }
+const c66: Identity = { serialNo: '8d2e61a', maker: 'CHAINWAY', model: 'C66', release: '13', avd: '', name: 'C66', booted: true }
 
 function setup(identify: (serial: string) => Promise<Identity>) {
   const children: FakeChild[] = []
@@ -935,7 +935,7 @@ function setup(identify: (serial: string) => Promise<Identity>) {
     },
     identify,
     publish: (devices, error) => published.push({ devices, error }),
-    retryMs: { identity: 10, restartMin: 20, restartMax: 80 },
+    retryMs: { identity: 10, booting: 10, restartMin: 20, restartMax: 80 },
   })
   return { tracker, children, published }
 }
@@ -965,6 +965,17 @@ describe('AndroidTracker', () => {
     children[0].stdout.emit('data', frame(C66))
     await vi.waitFor(() => expect(published.at(-1)?.devices.map((d) => d.id)).toEqual(['android:8d2e61a']))
     expect(identify).toHaveBeenCalledTimes(3)
+    tracker.stop()
+  })
+
+  it('asks a phone that is still starting up again until it has booted', async () => {
+    const answers: Identity[] = [{ ...c66, name: '', booted: false }, c66]
+    const { tracker, children, published } = setup(async () => answers.shift() ?? c66)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66))
+    await vi.waitFor(() => expect(published.at(-1)?.devices.map((d) => d.name)).toEqual(['C66']))
+    // Named by maker and model until Android had started.
+    expect(published.map((p) => p.devices[0]?.name)).toContain('CHAINWAY C66')
     tracker.stop()
   })
 
@@ -1021,20 +1032,25 @@ export interface TrackerDeps {
   /** The devices changed; `error` while adb's track-devices is down. */
   publish(devices: DeviceInfo[], error: string | null): void
   /** ms; tests shorten them. */
-  retryMs?: { identity: number; restartMin: number; restartMax: number }
+  retryMs?: { identity: number; booting: number; restartMin: number; restartMax: number }
 }
 
-/** A connection is asked this many times what it is, then listed as adb names it. */
+/** A connection that doesn't answer is asked this many times, then listed as adb names it. */
 const IDENTITY_TRIES = 3
+/** A phone still starting up is asked again, this many times at most (about two minutes). */
+const BOOT_TRIES = 40
 
 interface Asked {
   identity: Identity | null
+  /** Failed asks in a row. */
   tries: number
   asking: boolean
+  /** Answers given while the device was still starting up. */
+  boots: number
 }
 
 /** Follows the Android devices adb sees with one long-running `adb track-devices -l`, and asks each
- *  connected device once what it is. Runs while a tab needs Android devices. adb's server going
+ *  connected device once what it is (again while it's still starting up). Runs while a tab needs Android devices. adb's server going
  *  away ends track-devices; it's started again after 1 s, then up to 30 s apart while it keeps
  *  failing. */
 export class AndroidTracker {
@@ -1050,7 +1066,7 @@ export class AndroidTracker {
   private lastPublished = ''
 
   constructor(private readonly deps: TrackerDeps) {
-    this.retry = deps.retryMs ?? { identity: 1500, restartMin: 1000, restartMax: 30_000 }
+    this.retry = deps.retryMs ?? { identity: 1500, booting: 3000, restartMin: 1000, restartMax: 30_000 }
     this.restartMs = this.retry.restartMin
   }
 
@@ -1145,30 +1161,37 @@ export class AndroidTracker {
     this.publish(null)
   }
 
-  private ask(entry: AdbEntry): void {
+  /** `again`: ask once more a device that failed to answer, or answered while still starting up. */
+  private ask(entry: AdbEntry, again = false): void {
     const key = keyOf(entry)
-    const asked = this.asked.get(key) ?? { identity: null, tries: 0, asking: false }
+    const asked = this.asked.get(key) ?? { identity: null, tries: 0, asking: false, boots: 0 }
     this.asked.set(key, asked)
-    if (asked.identity || asked.asking || asked.tries >= IDENTITY_TRIES) return
+    if ((asked.identity && !again) || asked.asking || asked.tries >= IDENTITY_TRIES) return
     asked.asking = true
-    asked.tries++
     this.deps.identify(entry.serial).then(
       (identity) => {
         if (this.asked.get(key) !== asked) return
         asked.asking = false
+        asked.tries = 0
         asked.identity = identity
         this.publish(null)
+        // Still starting up: Android's settings, and with them the phone's own name, aren't there yet.
+        if (!identity.booted && ++asked.boots < BOOT_TRIES) this.askLater(key, this.retry.booting)
       },
       () => {
         if (this.asked.get(key) !== asked) return
         asked.asking = false
-        if (asked.tries >= IDENTITY_TRIES) return this.publish(null)
-        this.later(this.retry.identity, () => {
-          const now = this.entries.find((e) => keyOf(e) === key)
-          if (now?.state === 'device') this.ask(now)
-        })
+        if (++asked.tries >= IDENTITY_TRIES) return this.publish(null)
+        this.askLater(key, this.retry.identity)
       },
     )
+  }
+
+  private askLater(key: string, ms: number): void {
+    this.later(ms, () => {
+      const now = this.entries.find((e) => keyOf(e) === key)
+      if (now?.state === 'device') this.ask(now, true)
+    })
   }
 
   private publish(error: string | null): void {
@@ -1196,7 +1219,7 @@ const lastLine = (text: string) => text.split('\n').map((line) => line.trim()).f
 - [ ] **Step 4: Run the test to make sure it passes**
 
 Run: `npx vitest run src/main/devices/android/tracker.test.ts`
-Expected: PASS (4 tests).
+Expected: PASS (5 tests).
 
 - [ ] **Step 5: Commit**
 
