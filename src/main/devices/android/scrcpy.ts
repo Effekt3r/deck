@@ -1,0 +1,201 @@
+import { type ChildProcess, spawn } from 'node:child_process'
+import { randomInt } from 'node:crypto'
+import { connect, type Socket } from 'node:net'
+import { runAdb } from './adb'
+import { CODEC_H264, VideoReader } from './protocol'
+import type { ScrcpyServer } from './server'
+
+/** Where the server is copied on the device. It deletes itself once started (scrcpy's cleanup). */
+export const REMOTE_PATH = '/data/local/tmp/deck-scrcpy-server.jar'
+
+export interface ScrcpyEvents {
+  /** A capture session started: the frames that follow have this size. */
+  size(width: number, height: number): void
+  packet(packet: { config: boolean; key: boolean; data: Uint8Array }): void
+  /** The stream ended by itself: why. Not called after stop(). */
+  end(why: string): void
+}
+
+export interface ScrcpySession {
+  /** A control message (protocol.ts). */
+  send(message: Buffer): void
+  stop(): void
+}
+
+/** How a session reaches adb and the tunnel; tests replace it. */
+export interface ScrcpyIo {
+  run(args: string[], timeoutMs?: number): Promise<string>
+  spawn(args: string[]): ChildProcess
+  connect(port: number): Socket
+}
+
+export function adbIo(adb: string): ScrcpyIo {
+  return {
+    run: (args, timeoutMs) => runAdb(adb, args, timeoutMs),
+    spawn: (args) => spawn(adb, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }),
+    connect: (port) => connect({ host: '127.0.0.1', port }),
+  }
+}
+
+/** What `adb shell` runs: H.264 at most 1600 px on the long side and 60 frames a second, no audio,
+ *  control on; the screen kept on while the device is plugged in (scrcpy puts the setting back when
+ *  it stops); the device's own copies not sent back. */
+export function serverArgs(version: string, scid: string): string[] {
+  return [
+    `CLASSPATH=${REMOTE_PATH}`, 'app_process', '/', 'com.genymobile.scrcpy.Server', version,
+    `scid=${scid}`, 'log_level=info', 'tunnel_forward=true', 'audio=false', 'control=true',
+    'video_codec=h264', 'max_size=1600', 'max_fps=60', 'stay_awake=true', 'clipboard_autosync=false',
+  ]
+}
+
+/** The last error the server (or adb) printed, without the "[server] ERROR: " prefix; '' if none. */
+export function serverError(text: string): string {
+  const lines = text.split(/\r?\n/).map((line) => line.trim())
+    .filter((line) => /\b(ERROR|Exception)\b/.test(line) || /^(adb: )?error:/i.test(line))
+  return (lines.at(-1) ?? '').replace(/^\[server\]\s*/, '').replace(/^ERROR:\s*/, '')
+}
+
+const connected = (socket: Socket) =>
+  new Promise<void>((resolve, reject) => {
+    socket.once('connect', () => resolve())
+    socket.once('error', reject)
+  })
+
+/** Through a forward tunnel a connection succeeds even before the server listens (adb accepts it,
+ *  then drops it), so scrcpy's dummy byte says the server is really there. Up to 100 tries, 100 ms
+ *  apart, as scrcpy itself does. The socket comes back paused, with what it sent first. */
+async function firstAnswer(io: ScrcpyIo, port: number, gaveUp: () => boolean): Promise<{ socket: Socket; chunk: Buffer }> {
+  for (let attempt = 0; attempt < 100 && !gaveUp(); attempt++) {
+    const answer = await new Promise<{ socket: Socket; chunk: Buffer } | null>((resolve) => {
+      const socket = io.connect(port)
+      let done = false
+      const settle = (value: { socket: Socket; chunk: Buffer } | null) => {
+        if (done) return
+        done = true
+        clearTimeout(timer)
+        if (!value) socket.destroy()
+        resolve(value)
+      }
+      const timer = setTimeout(() => settle(null), 2000)
+      socket.on('error', () => {})
+      socket.once('close', () => settle(null))
+      socket.once('data', (chunk: Buffer) => {
+        socket.pause()
+        settle({ socket, chunk })
+      })
+    })
+    if (answer) return answer
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error("scrcpy's server didn't answer.")
+}
+
+/** Streams one device: copies the server, opens a tunnel, starts the server and connects to its
+ *  video and control sockets. Resolves once video flows; rejects, cleaning up, when a step fails or
+ *  `signal` stops it first. */
+export async function startScrcpy(serial: string, server: ScrcpyServer, events: ScrcpyEvents, io: ScrcpyIo, signal?: AbortSignal): Promise<ScrcpySession> {
+  const scid = randomInt(0, 0x7fffffff).toString(16).padStart(8, '0')
+  const adb = (args: string[], timeoutMs?: number) => io.run(['-s', serial, ...args], timeoutMs)
+  let port = 0
+  let shell: ChildProcess | null = null
+  let video: Socket | null = null
+  let control: Socket | null = null
+  let said = ''
+  let returned = false
+  let over = false
+  let why = ''
+
+  /** Safe to run again: a step that finishes after a stop may have opened something since. */
+  const cleanUp = () => {
+    video?.destroy()
+    control?.destroy()
+    shell?.kill()
+    if (port) {
+      const tunnel = port
+      port = 0
+      adb(['forward', '--remove', `tcp:${tunnel}`]).catch(() => {})
+    }
+  }
+  /** The stream is over: the caller hears it once it has the session; before that it's thrown. */
+  const finish = (reason: string) => {
+    if (over) return
+    over = true
+    why = reason
+    cleanUp()
+    if (returned) events.end(reason)
+  }
+  const reason = (fallback: string) => serverError(said) || fallback
+  /** Between steps: a stop or a failure meanwhile ends the start here. */
+  const still = () => {
+    if (over) throw new Error(why)
+  }
+  // Stopping a start under way: without it, a Deck that quit mid-start left the server running on
+  // the device (seen on 2026-11-03).
+  const stop = () => finish('Stopped.')
+  signal?.addEventListener('abort', stop, { once: true })
+
+  try {
+    if (signal?.aborted) stop()
+    still()
+    await adb(['push', server.path, REMOTE_PATH], 60_000)
+    still()
+    port = Number.parseInt((await adb(['forward', 'tcp:0', `localabstract:scrcpy_${scid}`])).trim(), 10)
+    still()
+    if (!Number.isInteger(port) || port <= 0) throw new Error("adb couldn't open a tunnel to the device.")
+    const child = io.spawn(['-s', serial, 'shell', ...serverArgs(server.version, scid)])
+    shell = child
+    const keep = (chunk: Buffer) => {
+      said = `${said}${chunk.toString()}`.slice(-4000)
+    }
+    child.stdout?.on('data', keep)
+    child.stderr?.on('data', keep)
+    child.on('error', (err) => finish(err.message))
+    child.on('close', (code) => finish(reason(`scrcpy's server stopped (exit code ${code}).`)))
+
+    const first = await firstAnswer(io, port, () => over)
+    video = first.socket
+    still()
+    control = io.connect(port)
+    await connected(control)
+    still()
+    control.on('error', () => {})
+    control.on('data', () => {}) // device messages: none were asked for
+    control.on('close', () => finish(reason('The device closed the control connection.')))
+
+    const reader = new VideoReader()
+    const onChunk = (chunk: Buffer) => {
+      for (const event of reader.feed(chunk)) {
+        if (over) return
+        if (event.type === 'error') return finish(event.message)
+        if (event.type === 'codec' && event.codec !== CODEC_H264) {
+          return finish(reason(event.codec <= 1 ? "The device couldn't start its video." : `scrcpy sent another codec (${event.codec.toString(16)}).`))
+        }
+        if (event.type === 'size') events.size(event.width, event.height)
+        else if (event.type === 'packet') events.packet({ config: event.config, key: event.key, data: event.data })
+      }
+    }
+    video.on('error', () => {})
+    video.on('close', () => finish(reason('The device stopped sending video.')))
+    video.on('data', onChunk)
+    onChunk(first.chunk)
+    video.resume()
+  } catch (err) {
+    finish(err instanceof Error ? err.message : String(err))
+    cleanUp()
+  } finally {
+    signal?.removeEventListener('abort', stop)
+  }
+  if (over) throw new Error(serverError(said) || why)
+  returned = true
+
+  return {
+    send(message) {
+      if (!over && control && !control.destroyed) control.write(message)
+    },
+    stop() {
+      if (over) return
+      over = true
+      cleanUp()
+    },
+  }
+}
