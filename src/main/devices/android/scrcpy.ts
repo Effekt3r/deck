@@ -48,18 +48,38 @@ export function serverArgs(version: string, scid: string): string[] {
   ]
 }
 
-/** The last error the server (or adb) printed, without its prefix; '' if none. A line counts when
- *  it has "ERROR", starts a Java exception/error's qualified name (`java.lang.FooException: …`),
- *  continues one (`Caused by: …`, returned without that prefix), or is adb's own "error:" line; a
- *  stack frame ("\tat …") never does. */
+/** The last error the server (or adb) printed, without its prefix or class name; '' if none. Scans
+ *  backwards: a `Caused by: X` line is read as X; an exception header (`Name` or `Name: message`)
+ *  with a message returns the nearest earlier ERROR line (cleaned) when that line already mentions
+ *  the message (it's the same complaint, just more specific), else the message alone; without a
+ *  message it's `<nearest earlier ERROR line> (<SimpleName>)`, or just `<SimpleName>` with no ERROR
+ *  line. Anything else falls back to the nearest ERROR line or adb's own "error:" line, cleaned. A
+ *  stack frame ("\tat …") matches none of these and is skipped. */
 export function serverError(text: string): string {
-  const isError = (line: string) =>
-    /\bERROR\b/.test(line) ||
-    /^[\w.$]+(Exception|Error)\b/.test(line) ||
-    line.startsWith('Caused by: ') ||
-    /^(adb: )?error:/i.test(line)
-  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(isError)
-  return (lines.at(-1) ?? '').replace(/^\[server\]\s*/, '').replace(/^ERROR:\s*/, '').replace(/^Caused by:\s*/, '')
+  const exceptionLine = /^([\w.$]+(?:Exception|Error))(?::\s*(.*))?$/
+  const isErrorLine = (line: string) => /\bERROR\b/.test(line) || /^(adb: )?error:/i.test(line)
+  const clean = (line: string) => line.replace(/^\[server\]\s*/, '').replace(/^ERROR:\s*/, '').replace(/^Caused by:\s*/, '')
+  const lines = text.split(/\r?\n/).map((line) => line.trim())
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]
+    const effective = line.startsWith('Caused by: ') ? line.slice('Caused by: '.length) : line
+    const exc = exceptionLine.exec(effective)
+    if (exc) {
+      const [, qualifiedName, message] = exc
+      let nearestError = ''
+      for (let j = i - 1; j >= 0; j--) {
+        if (isErrorLine(lines[j])) {
+          nearestError = clean(lines[j])
+          break
+        }
+      }
+      if (message) return nearestError && nearestError.includes(message) ? nearestError : message
+      const simpleName = qualifiedName.split('.').pop() ?? qualifiedName
+      return nearestError ? `${nearestError} (${simpleName})` : simpleName
+    }
+    if (isErrorLine(line)) return clean(line)
+  }
+  return ''
 }
 
 /** The video codec id's four ASCII letters, the way scrcpy names them (0x68323634 is "h264"); the
@@ -127,6 +147,7 @@ export async function startScrcpy(serial: string, server: ScrcpyServer, events: 
   let said = ''
   let sawPacket = false
   let endTimer: NodeJS.Timeout | null = null
+  let pendingFallback = '' // the reason a video/control close already armed, for the shell's own close
   let returned = false
   let over = false
   let why = ''
@@ -166,6 +187,7 @@ export async function startScrcpy(serial: string, server: ScrcpyServer, events: 
    *  finish() itself stays idempotent either way. */
   const finishSoon = (fallback: string) => {
     if (over || endTimer) return
+    pendingFallback = fallback
     endTimer = setTimeout(() => {
       endTimer = null
       finish(reason(fallback))
@@ -197,7 +219,10 @@ export async function startScrcpy(serial: string, server: ScrcpyServer, events: 
         clearTimeout(endTimer)
         endTimer = null
       }
-      finish(reason(sig ? `scrcpy's server was stopped (${sig}).` : `scrcpy's server stopped (exit code ${code}).`))
+      const fallback = sig ? `scrcpy's server was stopped (${sig}).` : `scrcpy's server stopped (exit code ${code}).`
+      // A socket that already closed explains the drop better than a bare exit code once the
+      // server itself said nothing.
+      finish(reason(pendingFallback || fallback))
     })
 
     const first = await firstAnswer(io, port, () => over, (socket) => { probe = socket })

@@ -149,8 +149,21 @@ describe('startScrcpy', () => {
     const ended: string[] = []
     await startScrcpy('8d2e61a', server, { ...quiet, end: (why) => ended.push(why) }, io)
     ;(await video).destroy()
+    // Give the video close a chance to be noticed (and arm its own reason) before the shell exits,
+    // so the outcome doesn't race between the two.
+    await new Promise((resolve) => setTimeout(resolve, 30))
     shell.emit('close', 0)
-    await vi.waitFor(() => expect(ended).toEqual(["scrcpy's server stopped (exit code 0)."]))
+    await vi.waitFor(() => expect(ended).toEqual(['The device stopped sending video.']))
+  })
+
+  it('a clean shell exit after the device stops sending video keeps that reason', async () => {
+    const { port, video } = await fakeDevice(videoBytes())
+    const { io, shell } = fakeIo(port)
+    const ended: string[] = []
+    await startScrcpy('8d2e61a', server, { ...quiet, end: (why) => ended.push(why) }, io)
+    ;(await video).destroy()
+    setTimeout(() => shell.emit('close', 1), 30)
+    await vi.waitFor(() => expect(ended).toEqual(['The device stopped sending video.']), { timeout: 3000 })
   })
 
   it("rejects with the server's own error when it stops before answering", async () => {
@@ -262,7 +275,21 @@ describe('startScrcpy', () => {
     const session = await startScrcpy('8d2e61a', server, { ...quiet, end: (why) => ended.push(why) }, io)
     session.stop()
     ;(await video).destroy()
-    await new Promise((resolve) => setTimeout(resolve, 50))
+    // Longer than finishSoon's 1 s cap: a wrongly armed timer would otherwise fire after this test
+    // already moved on.
+    await new Promise((resolve) => setTimeout(resolve, 1200))
+    expect(ended).toEqual([])
+  })
+
+  it('the device closing, then stop() within the 1 s window, calls end() for neither', async () => {
+    const { port, video } = await fakeDevice(videoBytes())
+    const { io } = fakeIo(port)
+    const ended: string[] = []
+    const session = await startScrcpy('8d2e61a', server, { ...quiet, end: (why) => ended.push(why) }, io)
+    ;(await video).destroy()
+    await new Promise((resolve) => setTimeout(resolve, 50)) // still well inside the 1 s grace window
+    session.stop()
+    await new Promise((resolve) => setTimeout(resolve, 1200))
     expect(ended).toEqual([])
   })
 })
@@ -270,15 +297,31 @@ describe('startScrcpy', () => {
 describe('serverError', () => {
   it("takes the server's last error, without its prefix", () => {
     expect(serverError('[server] INFO: Device: [CHAINWAY] C66\n[server] ERROR: Encoding error: x\n')).toBe('Encoding error: x')
+    // A bare exception (no ": message") wins over the ERROR line before it, which explains it.
+    expect(serverError(
+      '[server] ERROR: Video encoding error\njava.lang.IllegalStateException\n\tat android.media.MediaCodec.native_dequeueOutputBuffer(Native Method)',
+    )).toBe('Video encoding error (IllegalStateException)')
+    // An exception's own message, with no ERROR line at all, keeps the class prefix off.
+    expect(serverError('java.lang.IllegalArgumentException: The server version (5.0.0) does not match the client (5.0.1)'))
+      .toBe('The server version (5.0.0) does not match the client (5.0.1)')
+    // The ERROR line already says the same thing as the exception's message: it wins (it's more complete).
+    expect(serverError('[server] ERROR: Could not open video stream: Permission denied\njava.io.IOException: Permission denied'))
+      .toBe('Could not open video stream: Permission denied')
+    // The ERROR line here is unrelated ("Exception on thread …"), so the exception's own message wins instead.
     expect(serverError(
       '[server] ERROR: Exception on thread Thread[control-recv,5,main]\n' +
       'java.lang.SecurityException: Injecting input events requires the caller (or the source of the instrumentation, if any) to have the INJECT_EVENTS permission.\n' +
       '\tat android.os.Parcel.createExceptionOrNull(Parcel.java:3069)\n',
-    )).toBe('java.lang.SecurityException: Injecting input events requires the caller (or the source of the instrumentation, if any) to have the INJECT_EVENTS permission.')
-    expect(serverError('[server] ERROR: Could not create default video encoder for h264\n')).toBe('Could not create default video encoder for h264')
+    )).toBe('Injecting input events requires the caller (or the source of the instrumentation, if any) to have the INJECT_EVENTS permission.')
+    // "Caused by:" is read as its own exception header; the root cause (last in the chain) wins.
     expect(serverError(
-      '[server] ERROR: Exception on thread main\njava.lang.RuntimeException: Outer\nCaused by: java.lang.NullPointerException: inner detail\n',
-    )).toBe('java.lang.NullPointerException: inner detail')
+      '[server] ERROR: Could not open video stream\n' +
+      'java.io.IOException: Broken wrapper\n' +
+      '\tat com.genymobile.scrcpy.ScreenEncoder.streamScreen(ScreenEncoder.java:160)\n' +
+      'Caused by: java.io.IOException: Broken pipe\n' +
+      '\tat java.base/sun.nio.ch.FileDispatcherImpl.write0(Native Method)\n',
+    )).toBe('Broken pipe')
+    expect(serverError('[server] ERROR: Could not create default video encoder for h264\n')).toBe('Could not create default video encoder for h264')
     expect(serverError('adb: error: failed to get feature set: device offline\n')).toBe('adb: error: failed to get feature set: device offline')
     expect(serverError('[server] INFO: all good\n')).toBe('')
   })
