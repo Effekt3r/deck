@@ -8,7 +8,6 @@ Deck copies it to an Android device and runs it there to show the device's scree
 
 Licensed under the Apache License, Version 2.0, whose text follows.
 
-
                                  Apache License
                            Version 2.0, January 2004
                         http://www.apache.org/licenses/

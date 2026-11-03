@@ -29,6 +29,9 @@ extraResources:
   - from: resources/THIRD-PARTY-NOTICES.txt
     to: THIRD-PARTY-NOTICES.txt
 
+# Stops a build whose scrcpy server is missing (scripts/before-pack.cjs).
+beforePack: scripts/before-pack.cjs
+
 # ---------------------------------------------------------------- macOS
 mac:
   category: public.app-category.developer-tools

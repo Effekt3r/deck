@@ -22,7 +22,7 @@ function present() {
 
 async function fetchServer() {
   if (present()) return console.log(`scrcpy server ${info.version}: already here`)
-  const res = await fetch(info.url, { redirect: 'follow' })
+  const res = await fetch(info.url, { redirect: 'follow', signal: AbortSignal.timeout(120_000) })
   if (!res.ok) throw new Error(`${info.url}: HTTP ${res.status}`)
   const bytes = Buffer.from(await res.arrayBuffer())
   const got = sha256(bytes)
@@ -38,7 +38,8 @@ async function fetchServer() {
 }
 
 fetchServer().catch((err) => {
-  console.error(`Couldn't fetch scrcpy's server: ${err.message}`)
+  const cause = err.cause ? ` (${err.cause.message ?? err.cause})` : ''
+  console.error(`Couldn't fetch scrcpy's server: ${err.message}${cause}`)
   // Without it Deck can't show Android devices. CI and releases stop here; a local install carries
   // on, and the device panel says what's missing.
   if (process.env.CI) process.exit(1)
