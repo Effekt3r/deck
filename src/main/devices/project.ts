@@ -50,8 +50,7 @@ const isGradleBuild = async (dir: string): Promise<boolean> =>
 
 /** Outside git, only a folder that builds itself with Gradle — directly, or through a first-level
  *  `android` folder (any case) — is worth scanning: a project that was copied or unpacked rather
- *  than cloned (no `.git`) is still found, without statting into every plain
- *  folder on disk. */
+ *  than cloned (no `.git`) is still found, without statting into every plain folder on disk. */
 async function isGradleProject(root: string): Promise<boolean> {
   if (await isGradleBuild(root)) return true
   const android = (await subfolders(root)).filter((dir) => basename(dir).toLowerCase() === 'android')
@@ -61,8 +60,7 @@ async function isGradleProject(root: string): Promise<boolean> {
 /** An Android app has an AndroidManifest.xml in `src/main/` or `src/androidMain/` of a module one
  *  level down (`app/src/main/`, `composeApp/src/androidMain/`), or two levels down inside a
  *  first-level folder named `android` in any case (Flutter, React Native), or one that is a Gradle
- *  build of its own (`settings.gradle`/`.kts`: an SDK's `android-demo/`, another's
- *  `sdk/`). */
+ *  build of its own (`settings.gradle`/`.kts`: an SDK's `android-demo/` or `sdk/`). */
 export async function isAndroidApp(root: string): Promise<boolean> {
   const first = await subfolders(root)
   if ((await Promise.all(first.map(hasManifest))).some(Boolean)) return true
