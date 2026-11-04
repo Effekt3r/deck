@@ -2,7 +2,7 @@ import { Component, type ErrorInfo, type MouseEvent, type ReactNode, useCallback
 import type { DeviceInfo, DeviceList } from '@shared/types'
 import { errorText } from '../git/format'
 import { BackIcon, CameraIcon, Caret, HomeIcon, PowerIcon, RecentsIcon } from '../icons'
-import { DeviceMenu } from './DeviceMenu'
+import { DeviceMenu, type MenuClose } from './DeviceMenu'
 import { DeviceScreen, type ScreenHandle } from './DeviceScreen'
 import { KEYCODE } from './keys'
 import type { PanelView } from './pick'
@@ -54,21 +54,30 @@ function PanelBody({ view, devices, problem, looking, open, onToggle, visible, c
   const [error, setError] = useState<{ device: string; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const screen = useRef<ScreenHandle>(null)
-  const anchorRef = useRef<HTMLElement | null>(null)
+  const deviceButton = useRef<HTMLButtonElement>(null)
   /** Where the keyboard was when the menu opened: the terminal for a click, the button from the keyboard. */
   const returnTo = useRef<Element | null>(null)
-  useLayoutEffect(() => {
-    anchorRef.current = menuAnchor
-  }, [menuAnchor])
-  /** `refocus` (Esc, a choice, the button again): the keyboard goes back where it was, else to the button. */
-  const closeMenu = useCallback((refocus: boolean) => {
-    const anchor = anchorRef.current
-    const back = returnTo.current
+  /** The menu closed and the keyboard has to be put back, once it's gone (below). */
+  const putBack = useRef<MenuClose | null>(null)
+  const closeMenu = useCallback((how: MenuClose) => {
     setMenuAnchor(null)
-    if (!refocus) return
-    if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus()
-    else anchor?.focus()
+    // Tab moves on from the button, so the button takes the keyboard before the browser's Tab does.
+    if (how === 'tab') deviceButton.current?.focus()
+    else putBack.current = how
   }, [])
+  // Once the menu is gone, and a device it chose has taken the screen's place, the keyboard goes back
+  // where it was when the menu opened if that's still there (not a screen that went with its device),
+  // else to the button. After a click elsewhere, what was clicked keeps it if it took it.
+  useLayoutEffect(() => {
+    const how = putBack.current
+    if (menuAnchor || !how) return
+    putBack.current = null
+    const focused = document.activeElement
+    if (how === 'leave' && focused && focused !== document.body) return
+    const back = returnTo.current
+    if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus()
+    else deviceButton.current?.focus()
+  })
   useEffect(() => {
     if (!visible) setMenuAnchor(null) // it lives in <body>, outside the hidden tab
   }, [visible])
@@ -117,9 +126,9 @@ function PanelBody({ view, devices, problem, looking, open, onToggle, visible, c
           title={open ? 'Fold the device panel' : 'Unfold the device panel'} onClick={onToggle}>
           <Caret />
         </button>
-        <button className="dp-device" aria-haspopup="menu" aria-expanded={menuAnchor !== null} title="The device this tab shows"
+        <button ref={deviceButton} className="dp-device" aria-haspopup="menu" aria-expanded={menuAnchor !== null} title="The device this tab shows"
           onClick={(e) => {
-            if (menuAnchor) return closeMenu(true)
+            if (menuAnchor) return closeMenu('back')
             returnTo.current = document.activeElement
             setMenuAnchor(e.currentTarget)
           }}>

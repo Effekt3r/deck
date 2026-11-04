@@ -10,9 +10,12 @@ interface DeviceMenuProps {
   /** The button it hangs from. */
   anchor: HTMLElement
   onPick(id: string): void
-  /** `refocus`: give the keyboard back to the button (Esc, a choice), not after a click elsewhere. */
-  onClose(refocus: boolean): void
+  /** How it closed: `back` (Esc, a choice: the keyboard goes back where it was), `tab` (to the button,
+   *  and the browser's Tab moves on from there), `leave` (a click elsewhere, a blur, a resize). */
+  onClose(how: MenuClose): void
 }
+
+export type MenuClose = 'back' | 'tab' | 'leave'
 
 const STATE_WORDS: Record<DeviceInfo['state'], string> = { ready: '', connecting: 'connecting', unauthorized: 'not allowed yet', offline: 'offline' }
 
@@ -32,9 +35,9 @@ export function DeviceMenu({ devices, current, anchor, onPick, onClose }: Device
     const onPointerDown = (e: PointerEvent) => {
       const t = e.target as Node | null
       if (t && (menuRef.current?.contains(t) || anchor.contains(t))) return // the button toggles by itself
-      onClose(false)
+      onClose('leave')
     }
-    const close = () => onClose(false)
+    const close = () => onClose('leave')
     document.addEventListener('pointerdown', onPointerDown, true)
     window.addEventListener('blur', close)
     window.addEventListener('resize', close)
@@ -51,13 +54,13 @@ export function DeviceMenu({ devices, current, anchor, onPick, onClose }: Device
   // the project's device.
   const choose = (device: DeviceInfo | undefined) => {
     if (device) onPick(device.id)
-    onClose(true)
+    onClose('back')
   }
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     switch (e.key) {
       case 'Escape':
         e.stopPropagation()
-        onClose(true)
+        onClose('back')
         break
       case 'ArrowDown':
         move(at + 1)
@@ -75,8 +78,8 @@ export function DeviceMenu({ devices, current, anchor, onPick, onClose }: Device
         choose(devices[at])
         break
       case 'Tab':
-        // Back to the button, and the browser's own Tab moves on from there.
-        onClose(true)
+        // The button takes the keyboard now, and the browser's own Tab moves on from there.
+        onClose('tab')
         return
       default:
         return
