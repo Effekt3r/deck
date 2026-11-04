@@ -1,6 +1,7 @@
 import type { MenuItemConstructorOptions } from 'electron'
 import { describe, expect, it } from 'vitest'
 import type { MenuCommand } from '@shared/types'
+import { deviceKey } from '../renderer/src/device/keys'
 import { menuTemplate } from './menu'
 
 function items(template: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
@@ -33,6 +34,19 @@ describe('menuTemplate', () => {
       expect(byKey.has(k), k).toBe(true)
     }
     for (let i = 1; i <= 9; i++) expect(byKey.get(`Ctrl+Shift+${i}`)?.visible, `tab ${i}`).toBe(true)
+  })
+
+  it("no shortcut goes to a device's screen while it has the keyboard: the menu still gets it", () => {
+    for (const platform of ['darwin', 'win32'] as const) {
+      for (const accelerator of shortcuts(platform).byKey.keys()) {
+        const parts = accelerator.split('+')
+        const last = parts[parts.length - 1]
+        const shiftKey = parts.includes('Shift')
+        const key = last.length === 1 ? (shiftKey ? last.toUpperCase() : last.toLowerCase()) : last
+        const press = { key, shiftKey, ctrlKey: parts.includes('Ctrl'), metaKey: parts.includes('Cmd'), altKey: parts.includes('Alt') }
+        expect(deviceKey(press, platform), `${platform} ${accelerator}`).toBeNull()
+      }
+    }
   })
 
   it('Windows has no copy/paste roles (Ctrl+C must stay SIGINT)', () => {

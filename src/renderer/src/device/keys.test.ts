@@ -16,7 +16,7 @@ describe('deviceKey', () => {
     expect(deviceKey(k('Home'), 'darwin')).toEqual({ keycode: KEYCODE.MOVE_HOME, meta: 0 })
     expect(deviceKey(k('End'), 'win32')).toEqual({ keycode: KEYCODE.MOVE_END, meta: 0 })
     expect(deviceKey(k('Tab', { shiftKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.TAB, meta: 1 })
-    expect(deviceKey(k('ArrowUp', { altKey: true }), 'win32')).toEqual({ keycode: KEYCODE.DPAD_UP, meta: 2 })
+    expect(deviceKey(k('PageUp', { altKey: true }), 'darwin')).toEqual({ keycode: KEYCODE.PAGE_UP, meta: 2 })
   })
 
   it('typed characters are text, Option and AltGr ones included', () => {
@@ -69,6 +69,20 @@ describe('deviceKey', () => {
   it("off macOS, Alt alone is a menu or system key, not Deck's to send on", () => {
     expect(deviceKey(k('f', { altKey: true }), 'win32')).toBeNull()
     expect(deviceKey(k(' ', { altKey: true }), 'win32')).toBeNull()
+    // Android's Alt+Backspace deletes the whole line; Alt+arrows are Windows' back and forward.
+    expect(deviceKey(k('Backspace', { altKey: true }), 'win32')).toBeNull()
+    expect(deviceKey(k('ArrowUp', { altKey: true }), 'win32')).toBeNull()
+  })
+
+  it('off macOS, Ctrl+Backspace/Delete/←/→ edit by word and Ctrl+Home/End go to the text\'s ends, as on Android', () => {
+    expect(deviceKey(k('Backspace', { ctrlKey: true }), 'win32')).toEqual({ keycode: KEYCODE.DEL, meta: 0x1000 })
+    expect(deviceKey(k('Delete', { ctrlKey: true, shiftKey: true }), 'win32')).toEqual({ keycode: KEYCODE.FORWARD_DEL, meta: 0x1000 })
+    expect(deviceKey(k('ArrowLeft', { ctrlKey: true, shiftKey: true }), 'win32')).toEqual({ keycode: KEYCODE.DPAD_LEFT, meta: 0x1001 })
+    expect(deviceKey(k('End', { ctrlKey: true }), 'win32')).toEqual({ keycode: KEYCODE.MOVE_END, meta: 0x1000 })
+    // Every other Ctrl key stays Deck's, and on macOS Ctrl isn't the editing modifier.
+    expect(deviceKey(k('a', { ctrlKey: true }), 'win32')).toBeNull()
+    expect(deviceKey(k('Tab', { ctrlKey: true }), 'win32')).toBeNull()
+    expect(deviceKey(k('Backspace', { ctrlKey: true }), 'darwin')).toBeNull()
   })
 
   it('a browser-reported AltGr can only add to the Ctrl+Alt guess, never remove it', () => {

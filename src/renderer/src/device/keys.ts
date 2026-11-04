@@ -29,6 +29,13 @@ const WORD_DELETE: Record<string, number> = { Backspace: KEYCODE.DEL, Delete: KE
  *  selection, same as Android's own). */
 const WORD_MOVE: Record<string, number> = { ArrowLeft: KEYCODE.DPAD_LEFT, ArrowRight: KEYCODE.DPAD_RIGHT }
 
+/** Off macOS, the editing keys Windows does word-wise with Ctrl (Backspace, Delete, ←, →), and Ctrl+Home/End
+ *  for the text's start and end: Android reads Ctrl the same way, and none of them is a Deck shortcut. */
+const CTRL_EDIT: Record<string, number> = {
+  Backspace: KEYCODE.DEL, Delete: KEYCODE.FORWARD_DEL, ArrowLeft: KEYCODE.DPAD_LEFT, ArrowRight: KEYCODE.DPAD_RIGHT,
+  Home: KEYCODE.MOVE_HOME, End: KEYCODE.MOVE_END,
+}
+
 export interface KeyPress {
   key: string
   shiftKey: boolean
@@ -41,11 +48,12 @@ export interface KeyPress {
 }
 
 /** What a key pressed on the device's screen sends: an Android key code (Return, Backspace, the
- *  arrows …) with Shift and Alt, or a typed character as text. null leaves the key to Deck: Cmd
- *  shortcuts (Cmd+Left/Right/Up/Down excepted: macOS's line or text start/end), Ctrl ones (but
- *  Ctrl+Alt off macOS is AltGr, which types), dead keys while composing, and keys Android has no
- *  use for — off macOS, an Alt combo that isn't AltGr is a menu key (Alt+F), an Alt code
- *  (Alt+0233) or the window menu (Alt+Space), none of them text for the device. */
+ *  arrows …) with Shift (and on macOS Option's Alt or Ctrl), or a typed character as text. null
+ *  leaves the key to Deck: Cmd shortcuts (Cmd+Left/Right/Up/Down excepted: macOS's line or text
+ *  start/end), Ctrl ones (but off macOS Ctrl+Alt is AltGr, which types, and Ctrl's editing keys go
+ *  through), dead keys while composing, and keys Android has no use for. Off macOS, Alt that isn't
+ *  AltGr never goes to the device: it's a menu key (Alt+F), an Alt code (Alt+0233), the window menu
+ *  (Alt+Space) or a system key, and Android's Alt+Backspace would delete the whole line. */
 export function deviceKey(e: KeyPress, platform: Platform): { keycode: number; meta: number } | { text: string } | null {
   if (e.isComposing) return null
   const mac = platform === 'darwin'
@@ -67,7 +75,14 @@ export function deviceKey(e: KeyPress, platform: Platform): { keycode: number; m
   // Chromium may report AltGraph only for the right-hand key: a reported value can only add to
   // that guess, never take it away, or a real AltGr character would be dropped.
   const altGr = !mac && (e.altGraph === true || (e.ctrlKey && e.altKey))
-  if (e.ctrlKey && !altGr) return null
+  if (e.ctrlKey && !altGr) {
+    const edit = mac ? undefined : CTRL_EDIT[e.key]
+    if (edit === undefined) return null
+    // Never with Shift on the deletes: Android deletes nothing for Ctrl+Shift+Backspace.
+    const deletes = edit === KEYCODE.DEL || edit === KEYCODE.FORWARD_DEL
+    return { keycode: edit, meta: META_CTRL | (e.shiftKey && !deletes ? META_SHIFT : 0) }
+  }
+  if (!mac && e.altKey && !altGr) return null
   if (mac && e.altKey) {
     const del = WORD_DELETE[e.key]
     if (del !== undefined) return { keycode: del, meta: META_CTRL }
@@ -80,8 +95,7 @@ export function deviceKey(e: KeyPress, platform: Platform): { keycode: number; m
     }
   }
   const keycode = KEYS[e.key]
-  if (keycode !== undefined) return { keycode, meta: (e.shiftKey ? META_SHIFT : 0) | (e.altKey && !altGr ? META_ALT : 0) }
-  if (!mac && e.altKey && !altGr) return null
+  if (keycode !== undefined) return { keycode, meta: (e.shiftKey ? META_SHIFT : 0) | (mac && e.altKey ? META_ALT : 0) }
   // One character ("a", "ø", "@"); named keys ("F5", "Dead") are longer.
   return [...e.key].length === 1 ? { text: e.key } : null
 }

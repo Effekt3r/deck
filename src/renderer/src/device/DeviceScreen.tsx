@@ -354,8 +354,10 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
   return (
     <div className="dp-area" ref={areaRef}>
       {drawn && (
-        // Not interactive (gone, not allowed, not streaming), a click leaves the keyboard where it was.
-        <canvas ref={canvasRef} className={dim ? 'dp-screen dim' : 'dp-screen'} tabIndex={interactive ? 0 : undefined}
+        // Not interactive (gone, not allowed, not streaming), a click leaves the keyboard where it was,
+        // but a screen that has it keeps it (-1, not none) until it's back: a wiggling cable or a
+        // minimised window doesn't drop the keyboard to nowhere.
+        <canvas ref={canvasRef} className={dim ? 'dp-screen dim' : 'dp-screen'} tabIndex={interactive ? 0 : -1}
           aria-label={`${name}'s screen`} style={{ width: drawn.width, height: drawn.height }}
           onMouseDown={interactive ? undefined : (e) => e.preventDefault()}
           onPointerDown={onPointerDown} onPointerMove={onPointerMove} onPointerUp={onPointerEnd}
