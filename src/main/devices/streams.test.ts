@@ -63,6 +63,23 @@ describe('DeviceStreams', () => {
     expect(started[0].session.stop).toHaveBeenCalled()
   })
 
+  it('sends no packets while nobody views it (its grace); a viewer coming back gets a key frame first', async () => {
+    const { streams, started, sent } = setup()
+    const packets = () => sent.filter(([, e]) => e.type === 'packet').length
+    streams.view('android:1')
+    await flush()
+    started[0].events.packet(frame)
+    expect(packets()).toBe(1)
+    streams.unview('android:1')
+    started[0].events.packet(frame)
+    started[0].events.packet(frame)
+    expect(packets()).toBe(1)
+    streams.view('android:1')
+    expect(started[0].session.send).toHaveBeenCalledWith(Buffer.from([17]))
+    started[0].events.packet(frame)
+    expect(packets()).toBe(2)
+  })
+
   it('a stream that breaks starts again after 1, 2 and 5 s, then reports the error until retry()', async () => {
     let failing = false
     const { streams, started, sent } = setup(() => failing)

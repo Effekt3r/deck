@@ -180,7 +180,9 @@ export class DeviceStreams {
           s.liveAt = Date.now()
           this.deps.send(id, { type: 'state', state: 'live' })
         }
-        this.deps.send(id, { type: 'packet', ...packet })
+        // Nobody views it during its grace: a packet would only cross to a renderer that drops it.
+        // A viewer coming back asks for a key frame (view()).
+        if (s.viewers > 0) this.deps.send(id, { type: 'packet', ...packet })
       },
       end: (why) => {
         if (!current()) return
