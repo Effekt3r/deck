@@ -3735,6 +3735,23 @@ git add src/main/devices/android/tracker.ts src/main/devices/android/tracker.tes
 git -c user.email=franco@effektstudios.com commit -m "Devices: the first list waits for its devices; list() is null until then" -m "Claude-Session: https://claude.ai/code/session_012TidnAXmFkf7jwBCQQo4jJ"
 ```
 
+**After review, the code above changed:**
+- The 3 s cap counts from this run's first list, not from the spawn. With no adb server running,
+  `track-devices` starts one first, which used up the 3 s. So the timer moved from `spawn()` into the
+  stdout handler (`listed`), and `settleMs` is gone.
+- The hold lasts while any ready device is still being asked: answering, or failing with tries left
+  (`unanswered()`, the same test `publish()` uses to leave a device out). A first ask that fails once
+  and then answers no longer leaves that device out of the first list. The failure handler's publish
+  while settling is gone.
+- More tests:
+  - the cap counts from the first list;
+  - a stale settle timer from an earlier run;
+  - a device adb lists during the wait;
+  - main's `devices:list` is null, and nothing is pushed, while a slow fake adb starts.
+- Known limits:
+  - An emulator still `offline` in the first list isn't waited for, and joins when it answers.
+  - If adb's server never lists anything, the panel keeps saying "Looking for devices…".
+
 ---
 
 ### Task 12: The screen
@@ -5429,7 +5446,7 @@ Things that changed from the plan, to record in CLAUDE.md's device panel section
   - The codec string masks the constraint byte's two reserved bits (Chromium refuses the string otherwise).
   - Known limit to check in task 15: dead keys and IME on the device screen (macOS should compose "é"; Windows unverified).
   - Spec drift: the renderer's file names (pick.ts, fit.ts, keys.ts, codec.ts).
-- Task 11b (main): the first list after adb's tracking (re)starts waits for every ready device's first answer (3 s at most), so a project with two devices doesn't show whichever answered first; `devices:list` answers null until that list and again once nothing watches (no push at stop); the panel says "Looking for devices…" meanwhile.
+- Task 11b (main): the first list after adb's tracking (re)starts waits for every ready device to answer or run out of tries (3 s at most, counted from adb's first list, since starting adb's server takes time of its own); known limits: an emulator still offline in the first list isn't waited for, and a hung adb leaves "Looking for devices…" up, so a project with two devices doesn't show whichever answered first; `devices:list` answers null until that list and again once nothing watches (no push at stop); the panel says "Looking for devices…" meanwhile.
 - Tasks 12–14: the canvas follows `devicePixelRatio` changes (another display, zoom); a touch in progress when the frame changes size (rotation) is lifted at its last point for both sizes, since scrcpy drops a touch made for another size and may switch before or after it says so; the canvas's edge is a box-shadow ring, since a border squeezed the picture inside the canvas's size and shifted touches.
 - Task 11 re-review (approved), for task 16:
   - Task 16 must also EDIT THE SPEC (its plan text doesn't list spec edits): "Which device" gets the keep-the-shown-device rule and "a new pick or another project ends a hold"; "Using the device" gets Option word-wise (Ctrl on Android, Shift dropped on deletes), Option+↑/↓ plain arrows, Cmd+←/→ line start/end, Cmd+↑/↓ text start/end (Ctrl+Home/End), Home/End/PageUp/PageDown; Known limits gets: no input methods (Chinese, Japanese, Korean), dead keys unverified on Windows; the Code section's renderer file names (codec.ts, fit.ts, keys.ts, pick.ts; not decoder.ts/input.ts).
