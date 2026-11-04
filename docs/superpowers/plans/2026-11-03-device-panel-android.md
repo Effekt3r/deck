@@ -5480,7 +5480,8 @@ The reviews of tasks 1–15 changed or added the following, and the steps below 
 them. Each item goes into CLAUDE.md's device panel section where it explains code. Where it changes
 behaviour, it goes into the spec too (`docs/superpowers/specs/2026-11-03-device-panel-design.md`:
 "Which device", "Using the device", Known limits, Code), and where it asks for a check, into
-TESTING.md. The spec records the design decisions made along the way, for Franco's review.
+TESTING.md. The spec records the design decisions made along the way, for Franco's review. The plan's
+"After review" notes under each task say the same from the code's side.
 
 Things that changed from the plan, to record in CLAUDE.md's device panel section (and the spec where noted):
 
@@ -5524,6 +5525,22 @@ Things that changed from the plan, to record in CLAUDE.md's device panel section
   - Task 16 must also EDIT THE SPEC (its plan text doesn't list spec edits): "Which device" gets the keep-the-shown-device rule and "a new pick or another project ends a hold"; "Using the device" gets Option word-wise (Ctrl on Android, Shift dropped on deletes), Option+↑/↓ plain arrows, Cmd+←/→ line start/end, Cmd+↑/↓ text start/end (Ctrl+Home/End), Home/End/PageUp/PageDown; Known limits gets: no input methods (Chinese, Japanese, Korean), dead keys unverified on Windows; the Code section's renderer file names (codec.ts, fit.ts, keys.ts, pick.ts; not decoder.ts/input.ts).
   - TESTING.md (Windows): German layout: AltGr+Q and Ctrl+Alt+Q type "@" on the device; Alt+F does nothing on the device.
   - Task 15 check: Shift+arrows select text in a classic (View-based) EditText? Android's TextView takes selection from a separate Shift key event (MetaKeyKeyListener state), not from the arrow's Shift flag; scrcpy sends Shift as its own key. If it doesn't select, main's input.ts should wrap a Shift-flagged key in Shift down/up.
+- Tasks 12–13 reviews (for the spec and CLAUDE.md):
+  - Pastes: Chromium fires the Edit menu's paste (and the browser's own Ctrl+V) at the element holding the page's text selection when there is one, else at the focused element; the screen listens on the document and takes a paste while it has the keyboard; pressing on it clears the page's selection. Known limits: Cmd+A on the screen selects Deck's own text (the Edit menu's Select All), not the device's; a paste leaves the text on the phone's clipboard (scrcpy does the same), password-manager copies included.
+  - Decoding: a failed decoder is replaced in software; after 3 failures in a row with no picture between, "Couldn't show …" with Try again. Key-frame requests from falling behind: one a second at most. A rotation needs no reconfigure (measured: same codec string decodes both sizes); the spec's "a size change reconfigures the decoder at the next key frame" is wrong.
+  - Touch: one pointer at a time; a finger down when the screen goes is lifted. Tab and Esc go to the device (by design: no keyboard way out except clicking elsewhere); spec line.
+  - Main: no packets while nobody views (the grace).
+  - Off macOS, Ctrl+V and Ctrl+Shift+V paste (not only Ctrl+Shift+V as the spec says).
+  - Panel: outside an Android app, a project's pick doesn't open the panel by itself (spec: "elsewhere only when asked for"); it's used once the panel is shown by hand. A thrown render shows "The device panel couldn't show this" with Try again (spec line 177 says it disappears like the cards: fix).
+  - Task 15 checks: select text in Claude's reply, Cmd+C, click the screen, Cmd+V; Cmd+A then Cmd+V; rotate while holding a touch; wheel speed on macOS (100 px per notch assumed; Chromium on macOS may give 40).
+- Task 15 (on the devices, 2026-11-04, C66 + S25 FE over USB; the emulator wasn't running, it streamed earlier in the session):
+  - Guard with no pick asked between the two; the pick went to devices.json and survived a restart (the next run opened on it).
+  - One `adb … shell CLASSPATH=…deck-scrcpy-server.jar` per stream on the Mac; the jar is gone from the device once started; no adb forward left once connected; stay_on_while_plugged_in becomes 7 while shown and goes back (C66: 2) when the stream stops.
+  - Switching devices: the old stream stops after its 10 s grace. Folding the panel and hiding the window stop it the same way; showing the window again brought the stream back in 0.7 s.
+  - Quitting within a second of a pick (mid-start): nothing left on the Mac (no adb shell, no forward) or the devices (no server, no jar, settings back).
+  - CPU (dev build, phones on their lock screens, so almost no frames): main, GPU and renderer about 0.5% each; a moving screen still to measure (Franco).
+  - Driving the dev build: `osascript … System Events … set visible` hangs waiting for macOS's Automation permission when run from Claude Code; start the dev build with `--inspect 9229` and hide/show/quit from main (`process.mainModule.require('electron').BrowserWindow.getAllWindows()[0].hide()`, `.showInactive()`, `app.quit()`) instead. Add to CLAUDE.md's "Checking the running app".
+  - Found: after a mouse pick from the ▾ menu the keyboard landed on the device button (fixed: it goes back where it was).
 
 - [ ] **Step 1: CLAUDE.md**
 
