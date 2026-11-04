@@ -4076,6 +4076,28 @@ git add src/renderer/src/device/DeviceScreen.tsx
 git -c user.email=franco@effektstudios.com commit -m "Device panel: the screen, decoded with WebCodecs, with touch and keys" -m "Claude-Session: https://claude.ai/code/session_012TidnAXmFkf7jwBCQQo4jJ"
 ```
 
+**After review, the code above changed (see the commit that follows task 12's):**
+- **Pastes:** the Edit menu's paste (Cmd+V) and the browser's own Ctrl+V fire at the element holding
+  the page's text selection when there is one (Claude's reply, or after Cmd+A), else at the focused
+  one. So a document listener takes a paste while the screen has the keyboard. Pressing on the screen
+  clears the page's selection, and the Windows-only Ctrl+V branch is gone.
+- **Decoder failures:** a decoder that fails is replaced in software. After 3 failures in a row with
+  no picture in between, the screen says "Couldn't show …" with Try again, rather than restart the
+  device's encoder over and over. Key frames asked for because decoding fell behind are one a second
+  at most.
+- **Touches:**
+  - One pointer at a time.
+  - A finger still down when the screen goes (a tab switch, the panel folded) or can't be mapped
+    (hidden) is lifted at its last point.
+  - A pinch (a wheel with Ctrl) isn't a scroll.
+- **The picture:**
+  - A picture of the old orientation isn't stretched into a turned canvas.
+  - The pixel ratio is read again when its effect starts.
+  - A screen that isn't interactive doesn't take the keyboard when clicked.
+  - A screenshot needs a live picture.
+- **Main (`streams.ts`):** no packets are sent while nobody views a stream (its 10 s grace); a viewer
+  coming back gets a key frame first.
+
 ---
 
 ### Task 13: The panel
@@ -4674,6 +4696,29 @@ git add src/renderer/src/device/ src/renderer/src/hooks.ts src/renderer/src/icon
 git -c user.email=franco@effektstudios.com commit -m "Device panel: header, device menu, chooser and states" -m "Claude-Session: https://claude.ai/code/session_012TidnAXmFkf7jwBCQQo4jJ"
 ```
 
+**After review, the code above changed:**
+- **The menu:**
+  - It closes when the tab goes to the back.
+  - Its cursor follows a device, not a place in the list.
+  - Choosing the device shown picks it too.
+  - Tab gives the keyboard back to its button.
+- **Keyboard:** clicks in the header and the chooser keep the keyboard where it was. A device chosen
+  from the keyboard hands it to the terminal (`onFocusLost`). The camera button stays enabled while
+  busy.
+- **Screenshot errors** belong to their device and show only while Claude runs.
+- **A thrown render** says so, with Try again, instead of leaving an empty block.
+- **"Looking for devices…"** has a spinner, and DevicePanel imports `panel.css` itself.
+- **Hooks:**
+  - The 10 s timer is set again if it fires early.
+  - A failed `list()` is logged.
+  - A failed re-read keeps the same folder's project.
+- **CSS:**
+  - The detail gives way before the name.
+  - A short panel scrolls its chooser.
+  - A folded panel keeps its line.
+- **Outside an Android app** (task 14), a project's pick no longer opens the panel in new tabs. The
+  spec's "elsewhere only when asked for" holds, and the pick is used once the panel is shown by hand.
+
 ---
 
 ### Task 14: The right pane
@@ -5041,7 +5086,9 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   // without a project too.
   const [project, pickForProject] = useDeviceProject(folder, active)
   const byHand = tab.deviceHidden === false
-  const deviceNeeded = tab.deviceHidden !== true && (byHand || project?.android === true || Boolean(tab.device) || Boolean(project?.pick))
+  // Outside an Android app the panel shows only when asked for: the project's pick is remembered for
+  // then, but doesn't open the panel in every new tab there.
+  const deviceNeeded = tab.deviceHidden !== true && (byHand || project?.android === true || Boolean(tab.device))
   const deviceList = useDeviceList(deviceNeeded)
   const devices = deviceList?.devices ?? NO_DEVICES
   const choice = deviceList && (project || byHand)
@@ -5180,7 +5227,7 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
             <div className="device-slot" ref={deviceRef} style={deviceStyle}>
               <DevicePanel view={deviceView} devices={devices} problem={deviceList?.problem ?? null} looking={deviceList === null}
                 open={deviceOpen} onToggle={onDeviceToggle} visible={active && pageVisible} claudeRuns={claudeRuns}
-                onPick={pickDevice} onInsert={insert} />
+                onPick={pickDevice} onInsert={insert} onFocusLost={focusTerminal} />
             </div>
           )}
           {showDevice && showClaude && deviceOpen && (
