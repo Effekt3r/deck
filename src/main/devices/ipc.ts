@@ -180,6 +180,11 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       win = w
       w.webContents.on('did-start-loading', forget)
       w.webContents.on('render-process-gone', forget)
+      // adb installed while Deck runs (Android Studio, the platform tools): look again when Deck comes
+      // to the front, rather than only when a tab starts needing devices.
+      w.on('focus', () => {
+        if (watchers > 0 && !tracker) void startWatching()
+      })
       // A locked screen or a sleeping Mac: nobody's watching, and the device may sleep. Waking with
       // a password fires resume, then unlock-screen: stream again only once unlocked.
       let locked = false

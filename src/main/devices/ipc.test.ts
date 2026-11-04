@@ -222,6 +222,26 @@ describe('registerDeviceIpc', () => {
     }
   }, 10_000)
 
+  it.skipIf(process.platform === 'win32')('looks for adb again when Deck comes to the front, while it had found none', async () => {
+    const lateAdbDir = join(root, 'late-adb')
+    mkdirSync(lateAdbDir, { recursive: true })
+    writeFileSync(join(lateAdbDir, 'adb'), ['#!/bin/sh', 'if [ "$1" = "track-devices" ]; then', "  printf '0013FAKE03\\tunauthorized'", '  exec sleep 60', 'fi', 'exit 0', ''].join('\n'))
+    chmodSync(join(lateAdbDir, 'adb'), 0o755)
+    try {
+      emit(IPC.devicesWatch)
+      await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
+      env.PATH = lateAdbDir // the platform tools are installed now
+      win.emit('focus')
+      await vi.waitFor(
+        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE03', state: 'unauthorized' })], problem: null }]]),
+        { timeout: 3000 },
+      )
+    } finally {
+      emit(IPC.devicesUnwatch)
+      env.PATH = ''
+    }
+  })
+
   it.skipIf(process.platform === 'win32')("answers null while adb's server is still starting, and pushes nothing before the first list", async () => {
     const slowAdbDir = join(root, 'slow-adb')
     mkdirSync(slowAdbDir, { recursive: true })
