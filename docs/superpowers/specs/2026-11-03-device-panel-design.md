@@ -202,9 +202,11 @@ Android phones, emulators and simulators. iPhones are view only.
     - Option+↑/↓ are plain arrows: Android's Alt+↑/↓ would jump to the text's start or end;
     - Cmd+←/→ go to the line's start or end, Cmd+↑/↓ to the text's (Ctrl+Home/End on Android);
     - every other ⌘ key stays Deck's;
-  - off macOS, Alt alone never types (Alt+F is a menu key, Alt+0233 an Alt code, Alt+Space the
-    window menu), but AltGr does, also as Ctrl+Alt; other Ctrl keys stay Deck's, so Ctrl+←/→ and
-    Ctrl+Backspace don't reach the device;
+  - off macOS the editing keys do what they do on Windows: Ctrl+Backspace/Delete delete a word and
+    Ctrl+←/→ move by word (with Android's Ctrl; Shift dropped on the deletes), Ctrl+Home/End go to
+    the text's start or end, and every other Ctrl key stays Deck's. Alt that isn't AltGr never reaches
+    the device (Alt+F is a menu key, Alt+0233 an Alt code, Alt+Space the window menu, and Android's
+    Alt+Backspace would delete the whole line), but AltGr types, also as Ctrl+Alt;
   - ⌘V (Ctrl+V or Ctrl+Shift+V off macOS) types the computer's clipboard text on the device: on
     Android through the device's clipboard, where it stays, as with scrcpy. The screen takes the paste
     whenever it has the keyboard, even with text selected elsewhere in Deck, and pressing on the
@@ -253,7 +255,8 @@ and likewise for iOS.
 - **adb:** first `ANDROID_HOME` or `ANDROID_SDK_ROOT` in Deck's environment, then the SDK's usual place
   (`~/Library/Android/sdk/platform-tools/adb`; `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`),
   then `PATH` and Homebrew's folders. Only absolute folders count: a relative `PATH` entry means "the
-  current folder".
+  current folder". With none found, Deck looks again whenever it comes to the front, so platform
+  tools installed meanwhile are picked up without a restart.
   - The SDK's adb comes first because Android Studio runs it, and two adb versions restart each
     other's server.
   - An `ANDROID_HOME` set only in shell profiles isn't seen when Deck starts from Finder, as with
@@ -500,7 +503,7 @@ Each step gets its own plan and pull request and works without the next.
   and Deck sends it nowhere.
 - **Not yet tried on Windows:** adb's lists there (they may end lines with "\r\n"), cables listed
   without a `usb:` field, image paths with doubled backslashes, AltGr and dead keys
-  (`docs/TESTING.md` 18p–18x).
+  (`docs/TESTING.md` 18p–18y).
 
 ## Not in this design
 

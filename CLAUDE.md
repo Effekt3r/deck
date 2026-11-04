@@ -230,9 +230,9 @@ Things that aren't obvious from the code:
     it can read. Before checking that the path is absolute, Claude Code (2.1.283) strips the
     outer quotes and drops each backslash that escapes a character, even inside single quotes
     (Windows paths under WSL aside). So on Windows an image's path is pasted with its backslashes
-    doubled (`quoteImagePath` in `src/shared/quote.ts`, used by the card's image paste and the
-    device panel's screenshot). Found by reading Claude Code's paste code; unverified on Windows
-    (`docs/TESTING.md` 18b, 18s).
+    doubled (`quoteImagePath` in `src/shared/quote.ts`, used by the card's image paste, a single
+    copied image file pasted in a Claude tab, and the device panel's screenshot). Found by reading
+    Claude Code's paste code; unverified on Windows (`docs/TESTING.md` 18b, 18s).
 - Usage card (`src/main/usage/`):
   - **Source:** Claude Code's status line input: `rate_limits.five_hour` / `seven_day`, each
     `used_percentage` (0–100) and `resets_at` (Unix seconds). It comes only on Pro/Max/Ultra and
@@ -291,7 +291,8 @@ Things that aren't obvious from the code:
     entries may be quoted. On Windows `env` must be the live `process.env`: names are case-insensitive
     there, and a copy holds `Path`, not `PATH`. `runAdb`'s error is adb's own `adb:`/`error:` line
     (stderr before stdout, `* daemon …` chatter skipped), at most 500 characters; its signal ends a
-    call at once, so a stop ends a push under way.
+    call at once, so a stop ends a push under way. With none found, adb is looked for again whenever
+    Deck comes to the front, so the platform tools installed while Deck runs are picked up.
   - **Devices** (`android/tracker.ts`, `android/devices.ts`): one `adb track-devices -l` while any tab
     needs devices (`devices:watch` counts).
     - **Its output:** each list is four hex digits of length, then the lines. Windows writes it in
@@ -418,11 +419,13 @@ Things that aren't obvious from the code:
       (Android deletes nothing for Ctrl+Shift+Backspace) and kept on the arrows. Option+↑/↓ are plain
       arrows (Android's Alt+↑/↓ jump to the text's ends). Cmd+←/→ go to the line's start/end
       (`MOVE_HOME`/`MOVE_END`), Cmd+↑/↓ to the text's (the same with Ctrl); every other Cmd key stays
-      Deck's. Off macOS, Ctrl keys stay Deck's (so Windows' Ctrl+←/→ and Ctrl+Backspace don't reach
-      the device), Alt alone never types (Alt+F is a menu key, Alt+0233 an Alt code, Alt+Space the
-      window menu), and AltGr does: `getModifierState('AltGraph')`, or Ctrl+Alt, since Chromium may
-      report AltGraph only for the right-hand key. Tab and Esc go to the device by design: the way out
-      is a click elsewhere, or Deck's shortcuts.
+      Deck's. Off macOS, Ctrl+Backspace/Delete/←/→ go to Android with Ctrl too (word-wise, the same
+      Shift rule) and Ctrl+Home/End to the text's ends; every other Ctrl key stays Deck's. Alt that
+      isn't AltGr never goes to the device there: Alt+F is a menu key, Alt+0233 an Alt code, Alt+Space
+      the window menu, and Android's Alt+Backspace would delete the whole line. AltGr types:
+      `getModifierState('AltGraph')`, or Ctrl+Alt, since Chromium may report AltGraph only for the
+      right-hand key. `menu.test.ts` checks that no menu shortcut is ever sent to the device. Tab and
+      Esc go to the device by design: the way out is a click elsewhere, or Deck's shortcuts.
     - **Pastes:** Chromium fires the Edit menu's paste (and its own Ctrl+V) at the element holding the
       page's text selection when there is one, else at the focused element. So the screen listens on
       the document and takes a paste while it has the keyboard, and pressing on it clears the page's
@@ -438,10 +441,12 @@ Things that aren't obvious from the code:
       160 px and both cards, so the cards overflow and the clipboard card's Add button can end up
       below the window, which breaks clipboard.css's "the card is never cut". Folding the device panel
       removes its floor.
-    - **Keyboard:** clicks in the header and the chooser leave it where it was. A pick from the ▾ menu
-      gives it back where it was when the menu opened: the terminal, for a click (it landed on the
-      device's button until 2026-11-04). Folding the panel, or another device taking the screen's
-      place, gives it to the terminal.
+    - **Keyboard:** clicks in the header and the chooser leave it where it was. The ▾ menu gives it
+      back where it was when the menu opened (the terminal, for a click) once it's gone: Esc, a pick,
+      the button again, or a click elsewhere that didn't take it. A screen that went with its device
+      falls back to the button, and Tab hands it to the button and moves on. Folding the panel, or
+      another device taking the screen's place, gives it to the terminal; a screen that pauses (a
+      wiggling cable, a minimised window) keeps it (`tabIndex` -1, not none) until it's back.
   - **Screenshot:** the camera (while Claude runs) draws the last live frame into a PNG; main takes
     only a PNG of at most 32 MiB, saves it with the clipboard's `saveImage` (same folder, cleared at
     start and quit) and returns `quoteImagePath`'s text (see the clipboard's image paths above).
@@ -473,7 +478,7 @@ Things that aren't obvious from the code:
       Shift-flagged key in Shift down/up;
     - dead keys: macOS should compose them (Option+E, E types "é"); unverified on Windows. Input
       methods (Chinese, Japanese, Korean) don't reach the device;
-    - Windows, all of it: `docs/TESTING.md` 18p–18x.
+    - Windows, all of it: `docs/TESTING.md` 18p–18y.
   - **Known limits, devices:** two devices sharing an id look like one (cheap boards' `0123456789ABCDEF`
     serial; two copies of one AVD with `-read-only`); Linux's `no permissions` shows as offline, or
     not at all when adb gives no reason; recovery and sideload devices are told to unplug; devices
@@ -633,7 +638,7 @@ excludes every `build` folder.
    `openssl pkcs12 -legacy`.
 5. Device panel: step 1 (Android) built 2026-11-03/04 and checked with two phones on macOS. Next:
    Franco's hands-on checks (Device panel → "Not yet checked" above) and Windows
-   (`docs/TESTING.md` 18p–18x); then step 2, simulators (idb-companion), and step 3, iPhones (a
+   (`docs/TESTING.md` 18p–18y); then step 2, simulators (idb-companion), and step 3, iPhones (a
    Swift helper on CoreMediaIO, once an iPhone has been seen streaming). Each step gets its own plan
    and pull request.
 
@@ -684,6 +689,19 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
     `symbolic-ref` runs twice per snapshot.
   - **Windows:** a repo path with non-ASCII characters may hit the PowerShell
     code-page issue above as "Not a git repository".
+- **Device panel follow-ups** (from the step 1 review):
+  - A `devices.json` that can't be parsed is replaced at the next pick, like `projects.json` above.
+  - CI downloads scrcpy's server on every run; cache it keyed on `resources/scrcpy-server.json`.
+    Node's `fetch` ignores `HTTPS_PROXY`, so behind a proxy the install-time download fails.
+  - A dev build without the server retries for about 8 s before it says so; a missing server could
+    go straight to the error.
+  - A paste of more than 256 KiB is dropped without a word.
+  - `DevicePanel`'s `State`, `Boundary` and `Chevron` copy `ClaudePanel`'s; the PNG signature check
+    is in both `devices/ipc.ts` and `clipboard/read.ts`.
+  - Tests: no test drives a real stream through `registerDeviceIpc` (a fake adb and a TCP server
+    standing in for scrcpy's would pin "nothing left on the phone" after a reload or quit), and
+    `App.tsx`'s panel rules (`movedOn`, `deviceNeeded`, `choice`, `showDevice`) could move into a
+    pure function with tests before step 2 adds simulators.
 - **Accepted risk (device panel):** on Windows `devices:project` accepts a UNC path from the tab's
   folder, which other programs' output can set (OSC 7), so Deck may run git and stat files on a
   network share: the same exposure as the git panel's.

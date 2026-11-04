@@ -125,12 +125,14 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
 18r. Click the screen, then type into a text field on the phone; Shift+arrows select text, and Home
      and End go to the line's ends. With a German keyboard layout (add one in Settings, switch with
      Win+Space): AltGr+Q and Ctrl+Alt+Q both type `@` on the phone, ´ (left of Backspace) then E
-     types `é`, and Alt+F does nothing there. Tab and Esc go to the phone too; clicking the terminal
-     gives it the keyboard back.
+     types `é`, and Alt+F does nothing there. Ctrl+Backspace deletes a word on the phone and Ctrl+←
+     moves back a word; Alt+Backspace does nothing there. Tab and Esc go to the phone too; clicking
+     the terminal gives it the keyboard back.
 18s. Ctrl+V and Ctrl+Shift+V paste copied text into a field on the phone. Select a word in Claude's
      reply, Ctrl+C, click the screen, Ctrl+V: the word goes to the phone, not the terminal. Ctrl+A
      with the screen selected, then Ctrl+V: the paste still goes to the phone. With Claude running in
-     the tab, the camera in the panel's header adds `[Image #N]` to Claude's prompt.
+     the tab, the camera in the panel's header adds `[Image #N]` to Claude's prompt, and so does one
+     `.png` copied in Explorer and pasted with Ctrl+V in that tab.
 18t. Ctrl+Shift+D hides the panel and shows it again. With an emulator running too, the ▾ next to the
      name switches between the two, and a new tab in the same folder shows the one picked last.
 18u. Pull the phone's cable: "disconnected" over the dimmed picture, and the panel goes 10 s later.
@@ -146,6 +148,10 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
      `adb track-devices -l > track.txt`, wait 5 s, then Ctrl+C. Attach `track.txt` to your report:
      Deck reads adb's lists expecting Windows may turn their line ends into "\r\n", which hasn't been
      seen yet.
+18y. Quit Deck, rename Android's `platform-tools` folder, and open Deck in the Android app's folder:
+     the panel isn't there (nothing to show without adb; View → Device Panel says Deck can't find adb).
+     Rename the folder back, click another window, then Deck: the phone's screen appears without a
+     restart.
 
 **Restart**
 
