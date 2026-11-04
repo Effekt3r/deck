@@ -16,7 +16,7 @@ export interface KeyInput {
 
 /** Off macOS, menu accelerators only fire for keys the page leaves alone, so
  *  Deck's own Ctrl+Shift shortcuts must not reach xterm (see menu.ts). */
-const MENU_LETTERS = new Set(['t', 'w', 'o', 'g', 'a'])
+const MENU_LETTERS = new Set(['t', 'w', 'o', 'g', 'a', 'd'])
 
 /** Keys Deck handles before xterm sees them. Everything else goes to the shell. */
 export function keyAction(e: KeyInput, platform: Platform, hasSelection: boolean): KeyAction {

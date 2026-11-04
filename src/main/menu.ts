@@ -47,6 +47,7 @@ export function menuTemplate(
     submenu: [
       item('Git Panel', key('Cmd+Shift+G', 'Ctrl+Shift+G'), { type: 'toggle-git' }),
       item('Claude Panel', key('Cmd+Shift+A', 'Ctrl+Shift+A'), { type: 'toggle-claude' }),
+      item('Device Panel', key('Cmd+Shift+D', 'Ctrl+Shift+D'), { type: 'toggle-device' }),
       { type: 'separator' },
       ...(opts.packaged ? [] : ([{ role: 'reload' }, { role: 'toggleDevTools' }, { type: 'separator' }] satisfies MenuItemConstructorOptions[])),
       ...(mac ? ([{ role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { type: 'separator' }] satisfies MenuItemConstructorOptions[]) : []),

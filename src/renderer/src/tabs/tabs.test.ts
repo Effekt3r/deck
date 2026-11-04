@@ -57,6 +57,14 @@ describe('tabsReducer', () => {
     expect(tabsReducer(fresh, { type: 'update', id: 'a', patch: { claudeSession: undefined } })).toBe(fresh)
   })
 
+  it("keeps a tab's device and its device panel choice until they're cleared", () => {
+    let s = tabsReducer(open(initialTabs, 'a'), { type: 'update', id: 'a', patch: { device: 'android:8d2e61a', deviceHidden: false } })
+    expect(s.tabs[1]).toMatchObject({ device: 'android:8d2e61a', deviceHidden: false })
+    expect(tabsReducer(s, { type: 'update', id: 'a', patch: { device: 'android:8d2e61a' } })).toBe(s)
+    s = tabsReducer(s, { type: 'update', id: 'a', patch: { device: undefined, deviceHidden: undefined } })
+    expect(s.tabs[1]).toMatchObject({ device: undefined, deviceHidden: undefined })
+  })
+
   it('activates known tabs only', () => {
     const s = open(open(initialTabs, 'a'), 'b')
     expect(tabsReducer(s, { type: 'activate', id: 'a' }).active).toBe('a')

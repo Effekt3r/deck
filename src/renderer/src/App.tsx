@@ -1,13 +1,16 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import type { AppInfo, ClipboardPreview, MenuCommand, ProjectAction, UsageState } from '@shared/types'
+import { type CSSProperties, memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
+import type { AppInfo, ClipboardPreview, DeviceInfo, MenuCommand, ProjectAction, UsageState } from '@shared/types'
 import { ClaudePanel } from './claude/ClaudePanel'
 import { shownSession, toResume } from './claude/resume'
 import { useClaudeSession } from './claude/useClaude'
 import { ClipboardCard } from './clipboard/ClipboardCard'
 import { useClipboardItem } from './clipboard/useClipboardItem'
+import { DevicePanel } from './device/DevicePanel'
+import { choosePanel } from './device/pick'
+import { useDeviceList, useDeviceProject, useHeldView } from './device/useDevices'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
-import { useStoredFlag } from './hooks'
+import { usePageVisible, useStoredFlag } from './hooks'
 import { ProjectsView } from './projects/ProjectsView'
 import { TabBar } from './tabs/TabBar'
 import { initialTabs, isTerminal, PROJECTS_ID, tabsReducer, type TerminalPatch, type TerminalTab } from './tabs/tabs'
@@ -24,7 +27,8 @@ const GIT_WIDTH_KEY = 'deck.gitWidth'
 const GIT_WIDTH = 360
 const GIT_MIN = 240
 const GIT_MAX_SHARE = 0.55
-/** The Claude panel's width, shared by every tab: 260 px … 45 % of the window. */
+/** The right pane's width (device and Claude panels), shared by every tab: 260 px … 45 % of the
+ *  window. Its key is from before the device panel. */
 const CLAUDE_WIDTH_KEY = 'deck.claudeWidth'
 const CLAUDE_WIDTH = 380
 const CLAUDE_MIN = 260
@@ -33,12 +37,23 @@ const CLAUDE_MAX_SHARE = 0.45
 const TERMINAL_MIN = 280
 /** The usage card's fold, shared by every tab. */
 const USAGE_OPEN_KEY = 'deck.usageOpen'
+/** The device panel's fold, shared by every tab. */
+const DEVICE_OPEN_KEY = 'deck.deviceOpen'
+/** The device panel's share of the right pane's height above the Claude panel, shared by every tab,
+ *  stored in thousandths: 15 … 85 %. */
+const DEVICE_SHARE_KEY = 'deck.deviceShare'
+const DEVICE_SHARE = 0.6
+/** The device panel keeps its header and 120 px of screen; the Claude panel under it 160 px. */
+const DEVICE_MIN = 152
+const CLAUDE_MIN_BELOW = 160
+const NO_DEVICES: DeviceInfo[] = []
 
 /** `px` within min … share of the window, and within `room` (what the other panel and the terminal leave). */
 const clampWidth = (px: number, min: number, share: number, room = Infinity) =>
   Math.round(Math.min(Math.max(px, min), Math.max(min, Math.min(window.innerWidth * share, room))))
 const clampGitWidth = (px: number, room?: number) => clampWidth(px, GIT_MIN, GIT_MAX_SHARE, room)
 const clampClaudeWidth = (px: number, room?: number) => clampWidth(px, CLAUDE_MIN, CLAUDE_MAX_SHARE, room)
+const clampShare = (share: number) => Math.min(Math.max(share, 0.15), 0.85)
 
 export function App() {
   const platform = window.deck.platform
@@ -49,11 +64,17 @@ export function App() {
   const [claudeWidth, setClaudeWidth] = useState(() => loadSize(CLAUDE_WIDTH_KEY, CLAUDE_WIDTH))
   /** View → Claude Panel, per tab: the tab knows whether its panel shows. */
   const [claudeToggles, setClaudeToggles] = useState<Record<string, number>>({})
+  /** View → Device Panel, per tab, likewise. */
+  const [deviceToggles, setDeviceToggles] = useState<Record<string, number>>({})
   /** What was just copied, offered under the Claude panel of tabs where Claude runs. */
   const clipItem = useClipboardItem()
   /** Claude's plan usage, shown at the bottom of every Claude pane, which all fold together. */
   const usage = useUsage()
   const [usageOpen, toggleUsage] = useStoredFlag(USAGE_OPEN_KEY, true)
+  const [deviceOpen, toggleDevice] = useStoredFlag(DEVICE_OPEN_KEY, true)
+  const [deviceShare, setDeviceShare] = useState(() => clampShare(loadSize(DEVICE_SHARE_KEY, DEVICE_SHARE * 1000) / 1000))
+  /** Device screens stream only while the window can be seen. */
+  const pageVisible = usePageVisible()
 
   // Menu commands and IPC events read the latest state through refs.
   const stateRef = useRef(state)
@@ -104,6 +125,11 @@ export function App() {
     setClaudeWidth(width)
     saveSize(CLAUDE_WIDTH_KEY, width)
   }, [])
+  const storeDeviceShare = useCallback((share: number) => {
+    const next = clampShare(share)
+    setDeviceShare(next)
+    saveSize(DEVICE_SHARE_KEY, Math.round(next * 1000))
+  }, [])
 
   useEffect(() => {
     const onMenu = (cmd: MenuCommand) => {
@@ -132,6 +158,11 @@ export function App() {
         case 'toggle-claude': {
           const tab = stateRef.current.tabs.find((t) => t.id === active)
           if (tab && isTerminal(tab)) setClaudeToggles((t) => ({ ...t, [active]: (t[active] ?? 0) + 1 }))
+          return
+        }
+        case 'toggle-device': {
+          const tab = stateRef.current.tabs.find((t) => t.id === active)
+          if (tab && isTerminal(tab)) setDeviceToggles((t) => ({ ...t, [active]: (t[active] ?? 0) + 1 }))
           return
         }
       }
@@ -168,6 +199,8 @@ export function App() {
             gitWidth={gitWidth} claudeWidth={claudeWidth} windowsBuild={info?.windowsBuild}
             findRequest={findRequests[tab.id] ?? 0} claudeToggle={claudeToggles[tab.id] ?? 0} clipItem={clipItem} usage={usage}
             usageOpen={usageOpen} onUsageToggle={toggleUsage}
+            deviceToggle={deviceToggles[tab.id] ?? 0} deviceOpen={deviceOpen} onDeviceToggle={toggleDevice}
+            deviceShare={deviceShare} onDeviceShare={storeDeviceShare} pageVisible={pageVisible}
             onGitWidth={storeGitWidth} onClaudeWidth={storeClaudeWidth} onUpdate={update} onClose={close} />
         ))}
       </main>
@@ -181,7 +214,7 @@ interface WorkspaceProps {
   home: string
   /** The stored width; CSS keeps it within 240 px … 55 % when the window shrinks. */
   gitWidth: number
-  /** Likewise, 260 px … 45 %. */
+  /** The right pane's; likewise, 260 px … 45 %. */
   claudeWidth: number
   findRequest: number
   /** Incremented by View → Claude Panel. */
@@ -194,6 +227,17 @@ interface WorkspaceProps {
   /** The usage card is unfolded (one flag for the window). */
   usageOpen: boolean
   onUsageToggle(): void
+  /** Incremented by View → Device Panel. */
+  deviceToggle: number
+  /** The device panel is unfolded (one flag for the window). */
+  deviceOpen: boolean
+  onDeviceToggle(): void
+  /** The device panel's share of the right pane's height above the Claude panel. */
+  deviceShare: number
+  /** A drag ended (or a reset): clamp, store and share it. */
+  onDeviceShare(share: number): void
+  /** The window can be seen: a device screen may stream. */
+  pageVisible: boolean
   /** A drag ended (or a reset): clamp, store and share the width. */
   onGitWidth(px: number): void
   onClaudeWidth(px: number): void
@@ -201,13 +245,14 @@ interface WorkspaceProps {
   onClose(id: string): void
 }
 
-/** A terminal tab: the git panel while the shell is in a repo (unless hidden with
- *  View → Git Panel), the terminal, and the Claude panel while Claude runs in the tab
- *  or the folder has a session (unless hidden with View → Claude Panel), each panel
- *  with its splitter. Inactive tabs stay mounted. */
+/** A terminal tab: the git panel while the shell is in a repo (unless hidden with View → Git
+ *  Panel), the terminal, and the right pane: the device panel while a device fits the project
+ *  (unless hidden with View → Device Panel) above the Claude panel while Claude runs in the tab or
+ *  the folder has a session (unless hidden with View → Claude Panel). Inactive tabs stay mounted. */
 const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const { tab, active, home, gitWidth, claudeWidth, findRequest, claudeToggle, windowsBuild, clipItem } = props
   const { usage, usageOpen, onUsageToggle, onGitWidth, onClaudeWidth, onUpdate, onClose } = props
+  const { deviceToggle, deviceOpen, onDeviceToggle, deviceShare, onDeviceShare, pageVisible } = props
   const repo = tab.vars.GIT_REPO ?? ''
   const showGit = repo !== '' && !tab.gitHidden
   // Claude logs under the folder it was started in: the tab's cwd, which stays put while
@@ -252,6 +297,30 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
   }, [])
 
+  // The device panel: the tab's project (read when the tab comes to the front), the devices adb sees
+  // while this tab may show one (null until known), and which one it shows. Shown by hand, it works
+  // without a project too.
+  const [project, pickForProject] = useDeviceProject(folder, active)
+  const byHand = tab.deviceHidden === false
+  // Outside an Android app the panel shows only when asked for: the project's pick is remembered for
+  // then, but doesn't open the panel in every new tab there.
+  const deviceNeeded = tab.deviceHidden !== true && (byHand || project?.android === true || Boolean(tab.device))
+  const deviceList = useDeviceList(deviceNeeded)
+  const devices = deviceList?.devices ?? NO_DEVICES
+  const choice = deviceList && (project || byHand)
+    ? choosePanel({ tab: tab.device, project: project?.pick ?? null, android: project?.android ?? false, byHand, devices })
+    : null
+  const deviceView = useHeldView(choice, devices, project?.root ?? null, tab.device ?? project?.pick ?? null)
+  const showDevice = tab.deviceHidden !== true && (deviceView.kind !== 'none' || byHand)
+  const showRight = showClaude || showDevice
+  const [deviceDrag, setDeviceDrag] = useState<number | null>(null)
+  const deviceRef = useRef<HTMLDivElement>(null)
+  const pickDevice = useCallback((id: string) => {
+    onUpdate(tab.id, { device: id })
+    pickForProject(id)
+  }, [tab.id, onUpdate, pickForProject])
+  const insert = useCallback((text: string) => pasteRef.current?.(text), [])
+
   // Hidden for the repo it was hidden in: like the prototype's q, entering another repo shows it again.
   const hiddenIn = useRef<string | null>(null)
   useEffect(() => {
@@ -267,6 +336,23 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     toggleSeen.current = claudeToggle
     onUpdate(tab.id, { claudeHidden: showClaude })
   }, [claudeToggle]) // showClaude, tab.id and onUpdate as of this render
+
+  // View → Device Panel, likewise; shown with nothing to show, it offers every device.
+  const deviceToggleSeen = useRef(deviceToggle)
+  useEffect(() => {
+    if (deviceToggle === deviceToggleSeen.current) return
+    deviceToggleSeen.current = deviceToggle
+    onUpdate(tab.id, { deviceHidden: showDevice })
+  }, [deviceToggle]) // showDevice, tab.id and onUpdate as of this render
+
+  // A tab's device and its View → Device Panel choice hold in the project they were made in.
+  const deviceRoot = project?.root ?? null
+  const deviceRootSeen = useRef<string | null>(null)
+  useEffect(() => {
+    if (!deviceRoot) return
+    if (deviceRootSeen.current !== null && deviceRootSeen.current !== deviceRoot) onUpdate(tab.id, { device: undefined, deviceHidden: undefined })
+    deviceRootSeen.current = deviceRoot
+  }, [deviceRoot, tab.id, onUpdate])
 
   // The session the panel shows is the tab's: main's follow state is per folder, so subscribing
   // again (a tab switch) hands it back, rather than taking what another tab there followed. (The
@@ -303,11 +389,24 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     if (!active) return
     const focused = document.activeElement
     if (!focused || focused === document.body) rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
-  }, [showGit, showClaude, active])
+  }, [showGit, showClaude, showDevice, active])
 
   /** What a panel can have: the workspace less the other panel, the splitters and the terminal's minimum. */
   const roomBeside = (other: HTMLDivElement | null) =>
     (rootRef.current?.clientWidth ?? window.innerWidth) - (other?.offsetWidth ?? 0) - 2 - TERMINAL_MIN
+
+  /** The device panel's height, leaving the Claude panel under it its minimum. */
+  const clampDevice = (px: number) => {
+    const pane = claudeRef.current?.clientHeight ?? window.innerHeight
+    return Math.round(Math.min(Math.max(px, DEVICE_MIN), Math.max(DEVICE_MIN, pane - CLAUDE_MIN_BELOW)))
+  }
+  // Alone, the device panel takes the pane; folded, its header; else its share, which CSS keeps
+  // within its minimum and the Claude panel's when the window shrinks.
+  const deviceStyle: CSSProperties = !showClaude
+    ? { flex: '1 1 0' }
+    : !deviceOpen
+      ? { flex: 'none' }
+      : { flex: 'none', height: deviceDrag ?? `${deviceShare * 100}%`, minHeight: DEVICE_MIN, maxHeight: `calc(100% - ${CLAUDE_MIN_BELOW}px)` }
 
   return (
     <div className={active ? 'workspace' : 'workspace is-hidden'} ref={rootRef}>
@@ -328,8 +427,8 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
       )}
       <TerminalView tab={tab} active={active} windowsBuild={windowsBuild} findRequest={findRequest}
         pasteRef={pasteRef} onUpdate={onUpdate} onClose={onClose} />
-      {showClaude && (
-        <Splitter orientation="vertical" label="Resize the Claude panel" direction={-1}
+      {showRight && (
+        <Splitter orientation="vertical" label="Resize the right pane" direction={-1}
           getSize={() => claudeRef.current?.offsetWidth ?? claudeWidth}
           onResize={(px) => setClaudeDrag(clampClaudeWidth(px, roomBeside(paneRef.current)))}
           onResizeEnd={(px) => {
@@ -338,14 +437,34 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
           }}
           onReset={() => onClaudeWidth(CLAUDE_WIDTH)} />
       )}
-      {showClaude && (
+      {showRight && (
         <div className="claude-pane" ref={claudeRef} style={{ width: claudeDrag ?? claudeWidth }}>
-          <ClaudePanel folder={folder} snapshot={claude.snapshot} phase={claude.phase} error={claude.error}
-            claudeRuns={claudeRuns} active={active} home={home} onRetry={claude.retry} />
-          {usage && (
+          {showDevice && (
+            <div className="device-slot" ref={deviceRef} style={deviceStyle}>
+              <DevicePanel view={deviceView} devices={devices} problem={deviceList?.problem ?? null} looking={deviceList === null}
+                open={deviceOpen} onToggle={onDeviceToggle} visible={active && pageVisible} claudeRuns={claudeRuns}
+                onPick={pickDevice} onInsert={insert} onFocusLost={focusTerminal} />
+            </div>
+          )}
+          {showDevice && showClaude && deviceOpen && (
+            <Splitter orientation="horizontal" label="Resize the device panel"
+              getSize={() => deviceRef.current?.offsetHeight ?? DEVICE_MIN}
+              onResize={(px) => setDeviceDrag(clampDevice(px))}
+              onResizeEnd={(px) => {
+                setDeviceDrag(null)
+                const pane = claudeRef.current?.clientHeight ?? 0
+                if (pane > 0) onDeviceShare(clampDevice(px) / pane)
+              }}
+              onReset={() => onDeviceShare(DEVICE_SHARE)} />
+          )}
+          {showClaude && (
+            <ClaudePanel folder={folder} snapshot={claude.snapshot} phase={claude.phase} error={claude.error}
+              claudeRuns={claudeRuns} active={active} home={home} onRetry={claude.retry} />
+          )}
+          {showClaude && usage && (
             <UsageCard state={usage} home={home} open={usageOpen} onToggle={onUsageToggle} onFocusLost={focusTerminal} />
           )}
-          {claudeRuns && clipItem && (
+          {showClaude && claudeRuns && clipItem && (
             <ClipboardCard item={clipItem} home={home} busy={clipState?.busy ?? false} error={clipState?.error ?? null}
               onAdd={addClip} onDismiss={dismissClip} />
           )}

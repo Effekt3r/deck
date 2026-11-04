@@ -28,6 +28,11 @@ export interface TerminalTab {
    *  switch) resumes it, as main's follow state is per folder. Unset: none yet, or Claude was started
    *  in the tab since (it follows the newest session, Claude's own). */
   claudeSession?: { id: string; pinned: boolean }
+  /** The device panel was hidden in this tab (true) or shown by hand (false) with View → Device
+   *  Panel; unset: it shows when a device fits. Holds in the project it was set in. */
+  deviceHidden?: boolean
+  /** The device picked in this tab; unset: the project's. Holds in the project it was picked in. */
+  device?: string
 }
 
 export type Tab = ProjectsTab | TerminalTab
