@@ -12,9 +12,6 @@ export interface TrackerDeps {
   publish(devices: DeviceInfo[], error: string | null): void
   /** ms; tests shorten them. */
   retryMs?: { identity: number; booting: number; restartMin: number; restartMax: number }
-  /** ms the first list after a (re)start waits at most for every ready device's first answer;
-   *  tests shorten it. */
-  settleMs?: number
 }
 
 /** A connection that doesn't answer is asked this many times, then listed as adb names it. */
@@ -55,10 +52,11 @@ export class AndroidTracker {
   private readonly retry: NonNullable<TrackerDeps['retryMs']>
   private restartMs: number
   private lastPublished = ''
-  /** Since track-devices (re)started, until every ready device has answered once (or SETTLE_MS has
-   *  passed): the list isn't published yet, so it holds every device that answers in time rather
-   *  than growing one at a time. A project with two devices would otherwise show whichever answered
-   *  first. */
+  /** Since adb's first list after a (re)start, until every ready device has answered or run out of
+   *  tries (at most SETTLE_MS, counted from that first list rather than the start, since starting
+   *  adb's own server takes time of its own): the list isn't published yet, so it holds every device
+   *  that answers in time rather than growing one at a time. A project with two devices would
+   *  otherwise show whichever answered first. */
   private settling = false
 
   constructor(private readonly deps: TrackerDeps) {
@@ -85,6 +83,7 @@ export class AndroidTracker {
     this.serials.clear()
     this.lastIds.clear()
     this.lastPublished = ''
+    this.settling = false
   }
 
   /** The adb name to reach device `id` by (a ready connection first, USB before Wi-Fi); undefined
@@ -111,12 +110,8 @@ export class AndroidTracker {
     }
     this.child = child
     this.settling = true
-    this.later(this.deps.settleMs ?? SETTLE_MS, () => {
-      if (this.child !== child || !this.settling) return
-      this.settling = false
-      this.publish(null)
-    })
     let pending: Buffer = Buffer.alloc(0)
+    let listed = false
     let said = ''
     let done = false
     const end = (why: string) => {
@@ -142,6 +137,15 @@ export class AndroidTracker {
       // error: a list means it's up.
       said = ''
       this.entries = latest
+      // The wait starts at adb's first list: starting adb's own server takes time of its own.
+      if (!listed) {
+        listed = true
+        this.later(SETTLE_MS, () => {
+          if (this.child !== child || !this.settling) return
+          this.settling = false
+          this.publish(null)
+        })
+      }
       this.update()
     })
     child.stderr?.setEncoding('utf8')
@@ -206,8 +210,6 @@ export class AndroidTracker {
         if (this.asked.get(key) !== asked) return
         asked.asking = false
         if (++asked.tries >= IDENTITY_TRIES) return this.publish(null)
-        // A first list held for this answer goes out without the device.
-        if (this.settling) this.publish(null)
         this.askLater(key, asked, this.retry.identity)
       },
     )
@@ -224,7 +226,7 @@ export class AndroidTracker {
 
   private publish(error: string | null): void {
     if (this.settling) {
-      if (error === null && this.firstAsks()) return
+      if (error === null && this.entries.some((e) => this.unanswered(e))) return
       this.settling = false
     }
     // A ready device is listed once it has said what it is (or Deck stopped asking), so its id (an
@@ -234,7 +236,7 @@ export class AndroidTracker {
     const seen: Seen[] = []
     for (const entry of this.entries) {
       const asked = this.asked.get(keyOf(entry))
-      if (entry.state === 'device' && !asked?.identity && (asked?.asking || (asked?.tries ?? 0) < IDENTITY_TRIES)) {
+      if (this.unanswered(entry)) {
         const connecting: Seen = { entry: { ...entry, state: 'connecting' }, identity: null }
         if (this.lastIds.has(deviceId(connecting))) seen.push(connecting)
         continue
@@ -254,12 +256,11 @@ export class AndroidTracker {
     }
   }
 
-  /** A ready device hasn't answered its first ask yet. */
-  private firstAsks(): boolean {
-    return this.entries.some((entry) => {
-      const asked = this.asked.get(keyOf(entry))
-      return entry.state === 'device' && !asked?.identity && (asked?.tries ?? 0) === 0
-    })
+  /** A ready device that hasn't said what it is yet and is still being asked: it isn't listed under
+   *  its own id yet, and a first list waits for it. */
+  private unanswered(entry: AdbEntry): boolean {
+    const asked = this.asked.get(keyOf(entry))
+    return entry.state === 'device' && !asked?.identity && (asked?.asking || (asked?.tries ?? 0) < IDENTITY_TRIES)
   }
 }
 

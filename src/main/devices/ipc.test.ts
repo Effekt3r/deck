@@ -221,4 +221,29 @@ describe('registerDeviceIpc', () => {
       env.PATH = ''
     }
   }, 10_000)
+
+  it.skipIf(process.platform === 'win32')("answers null while adb's server is still starting, and pushes nothing before the first list", async () => {
+    const slowAdbDir = join(root, 'slow-adb')
+    mkdirSync(slowAdbDir, { recursive: true })
+    // A track-devices that lists after half a second, like adb starting its server.
+    writeFileSync(join(slowAdbDir, 'adb'), ['#!/bin/sh', 'if [ "$1" = "track-devices" ]; then', '  sleep 0.5', "  printf '0013FAKE02\\tunauthorized'", '  exec sleep 60', 'fi', 'exit 0', ''].join('\n'))
+    chmodSync(join(slowAdbDir, 'adb'), 0o755)
+    env.PATH = slowAdbDir
+    try {
+      const pushes = () => sent.filter(([channel]) => channel === IPC.devicesChanged).length
+      const before = pushes()
+      emit(IPC.devicesWatch)
+      await new Promise((resolve) => setTimeout(resolve, 200))
+      expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
+      expect(pushes()).toBe(before)
+      await vi.waitFor(
+        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE02', state: 'unauthorized' })], problem: null }]]),
+        { timeout: 3000 },
+      )
+      expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [expect.objectContaining({ id: 'android:FAKE02' })], problem: null })
+    } finally {
+      emit(IPC.devicesUnwatch)
+      env.PATH = ''
+    }
+  })
 })

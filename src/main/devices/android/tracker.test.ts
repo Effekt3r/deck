@@ -337,17 +337,83 @@ describe('AndroidTracker', () => {
     tracker.stop()
   })
 
-  it('publishes the first list once a first ask fails, without that device', async () => {
+  it("counts the 3 s from adb's first list, not from the start: starting adb's server takes time of its own", async () => {
     vi.useFakeTimers()
+    let answerEmulator: (identity: Identity) => void = () => {}
+    const identify = vi.fn((serial: string) =>
+      serial === '8d2e61a' ? Promise.resolve(c66) : new Promise<Identity>((resolve) => { answerEmulator = resolve }))
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    await vi.advanceTimersByTimeAsync(3500) // "* daemon not running; starting now at tcp:5037"
+    expect(published).toEqual([]) // still looking: no empty list
+    children[0].stdout.emit('data', frame(C66 + EMULATOR))
+    await vi.advanceTimersByTimeAsync(500)
+    expect(published).toEqual([])
+    answerEmulator(emu)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published.map((p) => p.devices.map((d) => d.id))).toEqual([['android:8d2e61a', 'emulator:Pixel_9']])
+    tracker.stop()
+  })
+
+  it("a settle timer left from an earlier run doesn't cut a later run's wait short", async () => {
+    vi.useFakeTimers()
+    let answerEmulator: (identity: Identity) => void = () => {}
+    const identify = vi.fn((serial: string) =>
+      serial === '8d2e61a' ? Promise.resolve(c66) : new Promise<Identity>((resolve) => { answerEmulator = resolve }))
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame('')) // nothing to wait for: the first run's list goes out
+    await vi.advanceTimersByTimeAsync(2000)
+    children[0].emit('close', 1) // the first run's 3 s timer is still pending
+    await vi.advanceTimersByTimeAsync(20) // restartMin: the second run starts at 2020 ms
+    children[1].stdout.emit('data', frame(C66 + EMULATOR))
+    const before = published.length
+    await vi.advanceTimersByTimeAsync(1500) // past 3000 ms, where the first run's timer fires
+    expect(published).toHaveLength(before)
+    answerEmulator(emu)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published.at(-1)?.devices.map((d) => d.id)).toEqual(['android:8d2e61a', 'emulator:Pixel_9'])
+    tracker.stop()
+  })
+
+  it('waits as well for a device that adb lists while the first list is held', async () => {
+    vi.useFakeTimers()
+    let answerC66: (identity: Identity) => void = () => {}
+    let answerEmulator: (identity: Identity) => void = () => {}
+    const identify = vi.fn((serial: string) =>
+      new Promise<Identity>((resolve) => {
+        if (serial === '8d2e61a') answerC66 = resolve
+        else answerEmulator = resolve
+      }))
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(C66))
+    children[0].stdout.emit('data', frame(C66 + EMULATOR))
+    answerC66(c66)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published).toEqual([])
+    answerEmulator(emu)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(published.map((p) => p.devices.map((d) => d.id))).toEqual([['android:8d2e61a', 'emulator:Pixel_9']])
+    tracker.stop()
+  })
+
+  it('holds the first list through a failed ask while the device has tries left', async () => {
+    vi.useFakeTimers()
+    let calls = 0
     const identify = vi.fn(async (): Promise<Identity> => {
-      throw new Error('closed')
+      if (++calls === 1) throw new Error('closed')
+      return c66
     })
     const { tracker, children, published } = setup(identify)
     tracker.start()
     children[0].stdout.emit('data', frame(C66))
-    expect(published).toEqual([])
     await vi.advanceTimersByTimeAsync(0)
-    expect(published).toEqual([{ devices: [], error: null }])
+    expect(identify).toHaveBeenCalledTimes(1)
+    expect(published).toEqual([]) // the first ask failed, and the device has tries left
+    await vi.advanceTimersByTimeAsync(10) // the retry
+    expect(identify).toHaveBeenCalledTimes(2)
+    expect(published.map((p) => p.devices.map((d) => d.name))).toEqual([['C66']])
     tracker.stop()
   })
 
@@ -421,6 +487,7 @@ describe('AndroidTracker', () => {
     })
     const { tracker, children, published } = setup(identify)
     tracker.start()
+    children[0].stdout.emit('data', frame('')) // the first list: nothing to wait for
     children[0].stdout.emit('data', frame(C66))
     await vi.advanceTimersByTimeAsync(0)
     expect(identify).toHaveBeenCalledTimes(1)

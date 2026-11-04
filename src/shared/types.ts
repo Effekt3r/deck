@@ -425,8 +425,9 @@ export interface DeckApi {
     /** Look for Android devices (adb) from now; the function stops this look. adb runs while any
      *  look is on, so only while some tab needs devices. */
     watch(): () => void
-    /** The devices now; null while Deck is still looking (adb starting, or devices still saying what
-     *  they are): the list is pushed when it's there. */
+    /** The devices now, while something watches (call watch() first); null until Deck has its first
+     *  list (adb starting, or devices still saying what they are) and whenever nothing watches. The
+     *  list is pushed when it's there. */
     list(): Promise<DeviceList | null>
     onList(cb: (list: DeviceList) => void): () => void
     /** `folder`'s project: its root, whether it's an Android app, and its device. */

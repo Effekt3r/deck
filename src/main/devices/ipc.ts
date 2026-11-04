@@ -89,6 +89,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     generation++
     tracker?.stop()
     tracker = null
+    // No push: every tab that watched has already stopped listening (it calls off() before unwatch).
     list = null
   }
 
