@@ -1,4 +1,4 @@
-import { Component, type ErrorInfo, type MouseEvent, type ReactNode, useCallback, useLayoutEffect, useRef, useState } from 'react'
+import { Component, type ErrorInfo, type MouseEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { DeviceInfo, DeviceList } from '@shared/types'
 import { errorText } from '../git/format'
 import { BackIcon, CameraIcon, Caret, HomeIcon, PowerIcon, RecentsIcon } from '../icons'
@@ -6,6 +6,7 @@ import { DeviceMenu } from './DeviceMenu'
 import { DeviceScreen, type ScreenHandle } from './DeviceScreen'
 import { KEYCODE } from './keys'
 import type { PanelView } from './pick'
+import '../claude/panel.css'
 import './device.css'
 
 interface DevicePanelProps {
@@ -26,12 +27,14 @@ interface DevicePanelProps {
   onPick(id: string): void
   /** Types text into the tab's terminal: the screenshot's path. */
   onInsert(text: string): void
+  /** A device was chosen from the keyboard and its button went with the chooser: the tab gives the
+   *  keyboard to its terminal. */
+  onFocusLost(): void
 }
 
-/** Clicking the header's text leaves the keyboard where it was. */
-const keepFocus = (e: MouseEvent) => {
-  if (!(e.target as Element).closest('button')) e.preventDefault()
-}
+/** Clicks in the header and the chooser leave the keyboard where it was. (The device menu takes it
+ *  itself, and gives it back to its button.) */
+const keepFocus = (e: MouseEvent) => e.preventDefault()
 
 /** A device's screen at the top of the right pane: a header (fold, the device menu, Android's
  *  buttons, the screenshot), then the screen, a choice of devices, or why there's none. A thrown
@@ -45,9 +48,10 @@ export function DevicePanel(props: DevicePanelProps) {
   )
 }
 
-function PanelBody({ view, devices, problem, looking, open, onToggle, visible, claudeRuns, onPick, onInsert }: DevicePanelProps) {
+function PanelBody({ view, devices, problem, looking, open, onToggle, visible, claudeRuns, onPick, onInsert, onFocusLost }: DevicePanelProps) {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  /** A screenshot that failed, and the device it was of. */
+  const [error, setError] = useState<{ device: string; text: string } | null>(null)
   const [busy, setBusy] = useState(false)
   const screen = useRef<ScreenHandle>(null)
   const anchorRef = useRef<HTMLElement | null>(null)
@@ -59,6 +63,9 @@ function PanelBody({ view, devices, problem, looking, open, onToggle, visible, c
     setMenuAnchor(null)
     if (refocus) anchor?.focus()
   }, [])
+  useEffect(() => {
+    if (!visible) setMenuAnchor(null) // it lives in <body>, outside the hidden tab
+  }, [visible])
 
   const device = view.kind === 'device' ? view.device : null
   const gone = view.kind === 'device' && view.gone
@@ -73,20 +80,24 @@ function PanelBody({ view, devices, problem, looking, open, onToggle, visible, c
     if (device) window.deck.devices.input(device.id, { type: 'key', keycode, meta: 0 })
   }
   const screenshot = async () => {
+    if (!device || busy) return
+    const of = device.id
     setBusy(true)
     setError(null)
     try {
       const png = await screen.current?.screenshot()
-      if (!png) throw new Error('There is no picture yet.')
+      if (!png) throw new Error("There's no live picture to add yet.")
       const result = await window.deck.devices.screenshot(png)
       if ('text' in result) onInsert(result.text)
-      else setError(result.error)
+      else setError({ device: of, text: result.error })
     } catch (err) {
-      setError(errorText(err))
+      setError({ device: of, text: errorText(err) })
     } finally {
       setBusy(false)
     }
   }
+  // An error belongs to its device's screenshot button: it goes when the device or Claude does.
+  const shownError = error && error.device === device?.id && claudeRuns ? error.text : null
 
   const title = device ? device.name : view.kind === 'choose' ? 'Choose a device' : 'Devices'
   return (
@@ -113,22 +124,27 @@ function PanelBody({ view, devices, problem, looking, open, onToggle, visible, c
             <IconButton label="Recent apps" onClick={() => press(KEYCODE.APP_SWITCH)}><RecentsIcon /></IconButton>
             <IconButton label="Power" onClick={() => press(KEYCODE.POWER)}><PowerIcon /></IconButton>
             {claudeRuns && (
-              <IconButton label="Add screenshot to Claude" disabled={busy} onClick={() => void screenshot()}><CameraIcon /></IconButton>
+              <IconButton label="Add screenshot to Claude" busy={busy} onClick={() => void screenshot()}><CameraIcon /></IconButton>
             )}
           </span>
         )}
       </header>
-      {open && error && <div className="dp-error" role="alert">{error}</div>}
+      {open && shownError && <div className="dp-error" role="alert">{shownError}</div>}
       {open && (
         <div className="dp-body">
           {device && (
             <DeviceScreen key={device.id} deviceId={device.id} name={device.name} live={visible && ready} message={message} handle={screen} />
           )}
           {view.kind === 'choose' && (
-            <div className="dp-choose">
+            <div className="dp-choose" onMouseDown={keepFocus}>
               <span className="dp-choose-title">Which device should this project show?</span>
               {view.devices.map((d) => (
-                <button key={d.id} className="dp-choice" onClick={() => onPick(d.id)}>
+                <button key={d.id} className="dp-choice" onClick={(e) => {
+                  // From the keyboard, the button had it, and it goes with the chooser.
+                  const fromKeyboard = e.currentTarget === document.activeElement
+                  onPick(d.id)
+                  if (fromKeyboard) onFocusLost()
+                }}>
                   <span>{d.name}</span>
                   <span className="dp-choice-detail">{d.detail}</span>
                 </button>
@@ -147,7 +163,7 @@ function PanelBody({ view, devices, problem, looking, open, onToggle, visible, c
 
 /** The panel was asked for and there's nothing to show. */
 function Nothing({ problem, looking }: { problem: DeviceList['problem']; looking: boolean }) {
-  if (looking) return <State title="Looking for devices…" />
+  if (looking) return <State busy title="Looking for devices…" />
   if (problem === 'no-adb') {
     return <State title="Deck can't find adb, so it can't see Android devices." detail="Install Android Studio or Android's platform tools." />
   }
@@ -155,20 +171,22 @@ function Nothing({ problem, looking }: { problem: DeviceList['problem']; looking
   return <State title="No devices connected" detail="Plug in an Android phone with USB debugging on, or start an emulator." />
 }
 
-function State({ title, detail, error }: { title: string; detail?: string; error?: boolean }) {
+function State({ title, detail, busy, error, children }: { title: string; detail?: string; busy?: boolean; error?: boolean; children?: ReactNode }) {
   return (
     <div className={error ? 'cp-state error' : 'cp-state'} role="status">
+      {busy && <span className="cp-spinner" aria-hidden="true" />}
       <strong>{title}</strong>
       {detail && <span className="cp-state-detail">{detail}</span>}
+      {children}
     </div>
   )
 }
 
-/** Pressing one leaves the keyboard where it was: on the device's screen or in the terminal. */
-function IconButton({ label, disabled, onClick, children }: { label: string; disabled?: boolean; onClick(): void; children: ReactNode }) {
+/** Busy, it stays enabled (a disabled button would drop the keyboard) and ignores presses. */
+function IconButton({ label, busy, onClick, children }: { label: string; busy?: boolean; onClick(): void; children: ReactNode }) {
   return (
-    <button className="cp-icon-button dp-icon" aria-label={label} title={label} disabled={disabled}
-      onMouseDown={(e) => e.preventDefault()} onClick={onClick}>
+    <button className="cp-icon-button dp-icon" aria-label={label} title={label} aria-disabled={busy || undefined}
+      onClick={() => !busy && onClick()}>
       {children}
     </button>
   )
@@ -181,8 +199,8 @@ const Chevron = () => (
   </svg>
 )
 
-/** A thrown render (a state main got wrong) costs the panel, never the pane: it disappears, and
- *  another device or view gets another try. */
+/** A thrown render (a state main got wrong) costs the panel, never the pane: it says so, with Try
+ *  again, and another device or view gets another try by itself. */
 class Boundary extends Component<{ resetKey: string; children: ReactNode }, { error: Error | null }> {
   state: { error: Error | null } = { error: null }
 
@@ -199,6 +217,15 @@ class Boundary extends Component<{ resetKey: string; children: ReactNode }, { er
   }
 
   render() {
-    return this.state.error ? null : this.props.children
+    if (!this.state.error) return this.props.children
+    return (
+      <div className="device-panel">
+        <div className="dp-body">
+          <State error title="The device panel couldn't show this" detail={this.state.error.message}>
+            <button className="button" onClick={() => this.setState({ error: null })}>Try again</button>
+          </State>
+        </div>
+      </div>
+    )
   }
 }

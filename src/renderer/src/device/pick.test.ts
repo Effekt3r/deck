@@ -76,6 +76,19 @@ describe('panelView', () => {
     expect(back.view).toEqual({ kind: 'device', device: backC66, gone: false })
   })
 
+  it('answers the same when fed its own hold back, as useHeldView does while rendering', () => {
+    const cases: [Parameters<typeof panelView>[0], DeviceInfo[], Parameters<typeof panelView>[2], string | null][] = [
+      [{ kind: 'device', device: c66 }, [c66], null, null],
+      [{ kind: 'choose', devices: [c66, s25] }, [c66, s25], { device: c66, goneSince: null, pick: null }, null],
+      [{ kind: 'device', device: s25 }, [s25], { device: c66, goneSince: 100, pick: s25.id }, s25.id],
+      [{ kind: 'none' }, [], { device: c66, goneSince: null, pick: null }, null],
+    ]
+    for (const [choice, devices, held, pick] of cases) {
+      const out = panelView(choice, devices, held, 1_000, pick)
+      expect(panelView(choice, devices, out.held, 1_000, pick)).toEqual(out)
+    }
+  })
+
   it("the pick is the stored id, not choosePanel's resolved device: the tab's own pick unplugging doesn't hand the hold to the project's", () => {
     const pick = s25.id // the tab's own pick; the project's is C66, also connected throughout
     const shown = panelView({ kind: 'device', device: s25 }, [c66, s25], null, 0, pick)

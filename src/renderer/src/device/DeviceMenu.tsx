@@ -18,7 +18,8 @@ const STATE_WORDS: Record<DeviceInfo['state'], string> = { ready: '', connecting
 
 /** Which device the tab shows, from every device adb sees. Rendered into <body> like the session menu. */
 export function DeviceMenu({ devices, current, anchor, onPick, onClose }: DeviceMenuProps) {
-  const [cursor, setCursor] = useState(() => Math.max(0, devices.findIndex((d) => d.id === current)))
+  // The cursor is a device, not a place in the list, which can change under it (one unplugged).
+  const [cursorId, setCursorId] = useState<string | null>(() => current ?? devices[0]?.id ?? null)
   // Placed once: the menu closes when the window resizes.
   const [place] = useState(() => placeBelow(anchor))
   const menuRef = useRef<HTMLDivElement>(null)
@@ -44,9 +45,12 @@ export function DeviceMenu({ devices, current, anchor, onPick, onClose }: Device
     }
   }, [anchor, onClose])
 
-  const at = Math.min(cursor, devices.length - 1)
+  const at = Math.max(0, devices.findIndex((d) => d.id === cursorId))
+  const move = (i: number) => setCursorId(devices[Math.min(Math.max(i, 0), devices.length - 1)]?.id ?? null)
+  // Choosing the device shown picks it too: shown as the only one that fits, it becomes the tab's and
+  // the project's device.
   const choose = (device: DeviceInfo | undefined) => {
-    if (device && device.id !== current) onPick(device.id)
+    if (device) onPick(device.id)
     onClose(true)
   }
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -56,22 +60,23 @@ export function DeviceMenu({ devices, current, anchor, onPick, onClose }: Device
         onClose(true)
         break
       case 'ArrowDown':
-        setCursor(Math.min(devices.length - 1, at + 1))
+        move(at + 1)
         break
       case 'ArrowUp':
-        setCursor(Math.max(0, at - 1))
+        move(at - 1)
         break
       case 'Home':
-        setCursor(0)
+        move(0)
         break
       case 'End':
-        setCursor(devices.length - 1)
+        move(devices.length - 1)
         break
       case 'Enter':
         choose(devices[at])
         break
       case 'Tab':
-        onClose(false)
+        // Back to the button, and the browser's own Tab moves on from there.
+        onClose(true)
         return
       default:
         return
@@ -89,7 +94,7 @@ export function DeviceMenu({ devices, current, anchor, onPick, onClose }: Device
           return (
             <div key={device.id} role="menuitemradio" aria-checked={checked} className={`cpm-item${i === at ? ' cursor' : ''}`}
               title={`${device.name}\n${device.detail}${word ? ` · ${word}` : ''}`}
-              onMouseMove={() => i !== at && setCursor(i)} onClick={() => choose(device)}>
+              onMouseMove={() => device.id !== cursorId && setCursorId(device.id)} onClick={() => choose(device)}>
               <span className="cpm-check" aria-hidden="true">{checked ? '✓' : ''}</span>
               <span className="cpm-label">{device.name}</span>
               <span className="cpm-hint">{word || device.detail}</span>

@@ -18,9 +18,12 @@ export function useDeviceList(needed: boolean): DeviceList | null {
       pushed = true
       setList(next)
     })
-    window.deck.devices.list().then((now) => {
-      if (live && !pushed && now) setList(now)
-    }, () => {})
+    window.deck.devices.list().then(
+      (now) => {
+        if (live && !pushed && now) setList(now)
+      },
+      (err: unknown) => console.error('device panel: listing the devices failed', err),
+    )
     return () => {
       live = false
       off()
@@ -32,9 +35,11 @@ export function useDeviceList(needed: boolean): DeviceList | null {
 }
 
 /** The tab's project for the device panel (null until known), read again whenever the tab comes to
- *  the front, as another tab may have picked the project's device meanwhile; and how to pick one. */
+ *  the front, as another tab may have picked the project's device meanwhile; and how to pick one.
+ *  A read that fails keeps what was known of the same folder. */
 export function useDeviceProject(folder: string, active: boolean): [DeviceProject | null, (id: string) => void] {
-  const [project, setProject] = useState<DeviceProject | null>(null)
+  const [known, setKnown] = useState<{ folder: string; project: DeviceProject } | null>(null)
+  const project = known?.project ?? null
   const current = useRef(project)
   useLayoutEffect(() => {
     current.current = project
@@ -44,12 +49,12 @@ export function useDeviceProject(folder: string, active: boolean): [DeviceProjec
     let live = true
     window.deck.devices.project(folder).then(
       (next) => {
-        if (live) setProject(next)
+        if (live) setKnown({ folder, project: next })
       },
       (err: unknown) => {
         if (!live) return
         console.error('device panel: reading the project failed', err)
-        setProject(null)
+        setKnown((k) => (k?.folder === folder ? k : null))
       },
     )
     return () => {
@@ -59,7 +64,7 @@ export function useDeviceProject(folder: string, active: boolean): [DeviceProjec
   const pick = useCallback((id: string) => {
     const p = current.current
     if (!p) return
-    setProject({ ...p, pick: id })
+    setKnown((k) => (k ? { ...k, project: { ...k.project, pick: id } } : k))
     window.deck.devices.pick(p.root, id).catch((err: unknown) => console.error('device panel: saving the pick failed', err))
   }, [])
   return [project, pick]
@@ -67,20 +72,23 @@ export function useDeviceProject(folder: string, active: boolean): [DeviceProjec
 
 /** The panel's view (panelView): a shown device that went away stays, as gone, for 10 s, unless the
  *  tab picks another device (`pick`: the tab's, else the project's) or moves to another project
- *  (`root`). Nothing while `choice` is null: the project or the devices aren't known yet. */
+ *  (`root`). Nothing while `choice` is null (the project or the devices aren't known: the panel
+ *  isn't needed, or its project couldn't be read), and the hold is let go then. */
 export function useHeldView(choice: PanelChoice | null, devices: DeviceInfo[], root: string | null, pick: string | null): PanelView {
   const held = useRef<{ root: string | null; held: Held | null }>({ root: null, held: null })
-  const [, rerender] = useState(0)
+  const [tick, rerender] = useState(0)
   const kept = held.current.root === root ? held.current.held : null
   const result = choice ? panelView(choice, devices, kept, Date.now(), pick) : { view: NONE, held: null }
   // Written while rendering: for the same inputs panelView answers the same, so a render React runs
   // twice (StrictMode) or throws away holds the same device since the same moment.
   held.current = { root, held: result.held }
   const goneSince = result.held?.goneSince ?? null
+  // Timers and Date.now() keep different clocks, so a timer can fire a little early: it's set again
+  // (tick) until the hold has run out.
   useEffect(() => {
     if (goneSince === null) return
-    const timer = setTimeout(() => rerender((n) => n + 1), Math.max(0, goneSince + GONE_MS - Date.now()))
+    const timer = setTimeout(() => rerender((n) => n + 1), Math.max(1, goneSince + GONE_MS - Date.now()))
     return () => clearTimeout(timer)
-  }, [goneSince])
+  }, [goneSince, tick])
   return result.view
 }
