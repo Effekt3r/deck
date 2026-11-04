@@ -4,6 +4,35 @@ Each version's section becomes the notes of its GitHub release
 (`.github/workflows/release.yml`), so write it for the people installing Deck.
 Headings are `## <version> — <date>`, with the version as in `package.json`.
 
+## 0.4.0 — 2026-11-04
+
+See and use the phone your app runs on, right next to Claude.
+
+- **Device panel:** in an Android app's tabs, the phone or emulator it runs on shows
+  live at the top of the right pane, above the Claude panel. Click to tap, drag to
+  swipe, scroll with the wheel, and type or paste (⌘V) with the screen selected.
+  Back, Home, Recent apps and Power sit in the panel's header, and with Claude
+  running, a camera button adds a screenshot to Claude's prompt as `[Image #1]`.
+- **Which device:** with several connected, the panel asks which one the project
+  shows and remembers it; the ▾ next to the device's name picks another, per tab. A
+  device that goes away shows as disconnected for 10 seconds before the panel goes.
+  **View → Device Panel** (⌘⇧D, Ctrl+Shift+D on Windows) hides the panel, or shows
+  it in any folder.
+- **What you need:** Android Studio or Android's platform tools (Deck uses their
+  `adb`), and USB debugging on the phone. While its screen is shown, Deck runs
+  scrcpy's server on the device: it keeps the screen on while plugged in, puts that
+  setting back when it stops, and deletes itself. A screen streams only while its
+  tab is in front and Deck's window can be seen.
+- **Editing keys** do on the phone what they do on your computer: Option+Backspace
+  deletes a word, and ⌘← and ⌘→ go to the line's start and end (Ctrl+Backspace and
+  Ctrl+arrows on Windows).
+- **Windows:** a pasted image should now reach Claude as `[Image #1]`; Claude Code
+  dropped the backslashes in its path before. The device panel is untested there.
+
+**Updating from 0.3.2:** quit Deck (your tabs close), open the new `.dmg` and drag
+Deck to Applications, replacing the old one. Windows: the installer is still
+unsigned; choose **More info → Run anyway**.
+
 ## 0.3.2 — 2026-11-02
 
 See your Claude plan usage without typing `/usage`.
