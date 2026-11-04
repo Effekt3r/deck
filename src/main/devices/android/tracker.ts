@@ -19,7 +19,8 @@ const IDENTITY_TRIES = 3
 /** A phone still starting up is asked again, this many times at most (about two minutes). */
 const BOOT_TRIES = 40
 
-/** After track-devices (re)starts, the first list waits this long at most for its devices' answers. */
+/** The first list after track-devices (re)starts waits this long at most, counted from adb's first
+ *  list, for its devices to answer or run out of tries. */
 const SETTLE_MS = 3000
 
 interface Asked {
@@ -35,9 +36,9 @@ interface Asked {
 
 /** Follows the Android devices adb sees with one long-running `adb track-devices -l`, and asks each
  *  connected device once what it is (again while it's still starting up); after each start, the
- *  first list waits for every ready device's first answer (3 s at most). Runs while a tab needs
- *  Android devices. adb's server going away ends track-devices; it's started again after 1 s, then
- *  up to 30 s apart while it keeps failing. */
+ *  first list waits for every ready device to answer or run out of tries (3 s at most from adb's
+ *  first list). Runs while a tab needs Android devices. adb's server going away ends track-devices;
+ *  it's started again after 1 s, then up to 30 s apart while it keeps failing. */
 export class AndroidTracker {
   private running = false
   private child: ChildProcess | null = null
