@@ -5,7 +5,8 @@
 in /Volumes/Wyobi/AccessControl_Android then show either the emulator or the S25 in the right pane
 depending on the task we're busy with, should be selectable.. if we're in /Volumes/Wyobi/AccessControl_iOS
 then show the view from the simulator or my connected iphone". He chose how Deck gets the screens (below).
-The rest was decided without a round of questions: review it here.
+The rest was decided without a round of questions: review it here. Updated 2026-11-04 with the
+decisions made while building and reviewing step 1 (Android).
 
 ## Goal
 
@@ -64,32 +65,62 @@ Rejected:
 ### Which tabs show a device
 
 - **The project** is the tab's repository, taken at its main work tree, so a worktree
-  (`.worktrees/fix`) belongs to its project; outside git, the tab's folder.
-- **An Android app** has an `AndroidManifest.xml` in `src/main/` of a folder one or two levels down:
-  `app/src/main/` (Guard, AccessControl_Android), `android/app/src/main/` (Flutter, React Native).
+  (`.worktrees/fix`) belongs to its project; outside git, the tab's folder. Each worktree of a bare
+  repository is a project of its own.
+- **Where Deck looks for an app:**
+  - in a git repository, the whole repository;
+  - outside git, only in a Gradle build (`settings.gradle` or `settings.gradle.kts` at its root or in
+    `android/`), so a plain folder, or a volume holding many projects, isn't searched;
+  - never in the home folder: looking through `~` would read inside Desktop, Documents and Downloads,
+    which can make macOS ask whether Deck may, and a "Don't Allow" there also keeps Deck's terminals
+    out of those folders;
+  - at most 200 folders per level, and 200 in all at the second level. The answer is kept for 30 s
+    per folder (it's asked whenever a tab comes to the front).
+- **An Android app** has an `AndroidManifest.xml` in `src/main/` (or Kotlin Multiplatform's
+  `src/androidMain/`) of a module one level down (`app/src/main/`: Guard, AccessControl_Android), or
+  two levels down inside a first-level `android/` folder in any case (`android/app/src/main/`:
+  Flutter, React Native) or inside a first-level folder that's a Gradle build of its own.
 - **An iOS app** has an Xcode project or workspace at the project's root or one folder down
   (`ios/Runner.xcworkspace`).
 - **Both** (Flutter, React Native, Kotlin Multiplatform) take both kinds of device.
 - **The panel shows when a device that fits is connected**: Android phones and emulators for an
   Android app; simulators and iPhones (macOS only) for an iOS app. Elsewhere it shows only when asked
-  for, and then offers every device.
+  for, and then offers every device. A project's pick doesn't open it there by itself: the pick is
+  used once the panel is shown by hand.
 - **View → Device Panel** (⌘⇧D; Ctrl+Shift+D off macOS) hides or shows it per tab, like the git and
   Claude panels. The choice holds in the project it was made in.
 
 ### Which device
 
 - **A tab keeps its own pick** while it stays in that project, so two tabs on two tasks in
-  AccessControl_Android can show the emulator and the S25 FE.
+  AccessControl_Android can show the emulator and the S25 FE. In another project the pick no longer
+  counts, from the moment the tab gets there, so a `cd` never starts a stream for the old project's
+  device.
 - **A project remembers the last device picked in it** (`devices.json` in Deck's data folder). A tab
   that hasn't picked shows that one, so every Guard tab shows the C66 once it has been picked there.
+  A tab coming to the front reads it again before it streams, since another tab may have picked
+  meanwhile.
 - **Nothing picked, or the pick isn't connected:**
   - one device fits: it's shown, without becoming the pick, so the picked one takes over when it's back;
-  - several fit: the panel asks which, listing them;
+  - several fit: the panel asks which, listing them, unless one is already shown (below);
   - none fits: no panel.
+- **The device shown stays put** while the pick doesn't change:
+  - one that goes away stays, as "disconnected" over its last picture, for 10 s, so a cable that
+    wiggles doesn't make the pane jump;
+  - one still connected stays when a second device that fits arrives: the panel doesn't drop to
+    asking, and the menu switches;
+  - a new pick (the tab's, or the project's from another tab) or a move to another project ends
+    either at once, so a pick made right after a disconnect doesn't wait out the 10 s.
+- **The first list waits:** when Deck starts following the devices, or adb's server has restarted,
+  it waits until every connected device has said what it is, 3 s at most from adb's first list, so
+  a project with two devices asks rather than showing whichever answered first. Meanwhile the panel
+  says "Looking for devices…".
 - **Picking:** the device's name in the panel's header opens a menu, the devices that fit first, then
   any others, each with its kind and connection: `Android 13 · USB`, `Android 17 · USB + Wi-Fi`,
-  `Emulator · Android 15`, `Simulator · iOS 27.0`, `iPhone · cable · view only`. A pick sets the
-  tab's device and the project's.
+  `Emulator · Android 15`, `Simulator · iOS 27.0`, `iPhone · cable · view only`. One that isn't ready
+  says so instead: `not allowed yet`, `offline`, `connecting`. A pick sets the tab's device and the
+  project's; choosing the device already shown picks it too. In step 1 every device is an Android
+  one, so the menu lists phones, then emulators, each by name.
 - **Names:**
   - an Android phone's own name (`settings get global device_name`: "Franco's S25 FE", "C66"), else
     its maker and model;
@@ -98,7 +129,10 @@ Rejected:
 - **One device, two connections:** the S25 FE over USB and over Wi-Fi is one device, used over USB
   while that's connected and over Wi-Fi when it isn't.
 - **Telling devices apart:** phones by serial number (`ro.serialno`), emulators by AVD name (their
-  `emulator-5554` changes with the port), simulators and iPhones by UDID.
+  `emulator-5554` changes with the port), simulators and iPhones by UDID. A device is listed only once
+  it has said what it is (or didn't answer three times), and an emulator still starting not at all,
+  so a device's id never changes under the panel. A phone still starting up is asked again every 3 s,
+  for two minutes at most, so one rebooted while plugged in gets its own name back.
 
 ### The panel
 
@@ -123,11 +157,16 @@ Rejected:
   The usage and clipboard cards stay with the Claude panel. Without a Claude panel (no session, or
   hidden), the device takes the whole pane; without a device, the pane is as now.
 - **Height:** 60% of the pane at first: at 60% of a 1,000 px pane the S25 FE's screen is about 260 px
-  wide. Dragging the splitter sets the share for every tab, remembered like the panels' widths;
-  double-click resets it. The screen keeps at least 120 px and the Claude panel 160 px. The pane's
-  width is the Claude panel's, as now.
-- **The screen:** as large as fits, its shape kept, centred, with rounded corners and a thin border.
-  It turns with the device.
+  wide. Dragging the splitter sets the share for every tab, between 15% and 85%, remembered like the
+  panels' widths; double-click resets it. The device panel keeps at least 152 px (its header and
+  120 px of screen) and the Claude panel under it 160 px, and the cards keep their heights: a window
+  too short for all of it takes the room from the device panel first. The pane's width is the Claude
+  panel's, as now.
+- **Folded with no Claude panel**, the pane keeps its width and shows the header: the fold is the
+  window's, and the header has to stay reachable. View → Device Panel hides it.
+- **The screen:** as large as fits, its shape kept, centred, with rounded corners and a thin ring
+  around it, drawn outside the picture: a border squeezed the picture inside its size and shifted
+  touches. It turns with the device.
 - **Header:**
   - a caret folds the panel to its header in every tab at once, like the usage card, and stops the
     stream;
@@ -136,34 +175,61 @@ Rejected:
   - Android: Back ◁, Home ○, Recent apps □ and Power ⏻; simulators: Home ○; iPhones: none;
   - **Add screenshot to Claude** (◉, a camera), while Claude runs in the tab: saves the screen as a PNG
     and types its path into Claude's prompt, as the clipboard card's Add to Claude does. Claude Code
-    turns it into `[Image #N]`.
+    turns it into `[Image #N]`. It needs a live picture; its error stays with its device and shows
+    only while Claude runs.
 - **The keyboard:** clicking the screen gives it the keyboard, which a teal ring shows. Clicking the
-  terminal gives it back.
+  terminal gives it back, and so do folding the panel and another device taking the screen's place.
+  Tab and Esc go to the device, so the way out is a click elsewhere or one of Deck's shortcuts.
+  Clicks in the header and the chooser leave the keyboard where it was, and a pick from the ▾ menu
+  gives it back to where it was when the menu opened (the terminal, after a click).
 
 ### Using the device from Deck
 
 Android phones, emulators and simulators. iPhones are view only.
 
-- A click taps, a drag swipes and a held click is a long press, with one finger.
-- On Android the scroll wheel or trackpad scrolls where the pointer is; on a simulator, drag instead.
+- A click taps, a drag swipes and a held click is a long press, with one finger: one pointer at a
+  time. A finger still down when the screen goes (a tab switch, a fold) is lifted, and so is one held
+  through a rotation.
+- On Android the scroll wheel or trackpad scrolls where the pointer is, about one step per wheel
+  notch; a pinch isn't a scroll. On a simulator, drag instead.
 - With the keyboard on the screen:
-  - typing types on the device: text as text; Return, Backspace, Delete, Tab, Escape and the arrows
-    as keys;
-  - ⌘V (Ctrl+Shift+V off macOS) types the Mac's clipboard text on the device: on Android through the
-    device's clipboard;
+  - typing types on the device: text as text; Return, Backspace, Delete, Tab, Escape, the arrows,
+    Home, End, Page Up and Page Down as keys, with Shift;
+  - on macOS the editing keys do what they do on a Mac:
+    - Option+Backspace/Delete delete a word and Option+←/→ move by word. They go with Android's Ctrl,
+      since Android's Alt+Backspace deletes the whole line; Shift is dropped on the deletes, as
+      Android deletes nothing for Ctrl+Shift+Backspace;
+    - Option+↑/↓ are plain arrows: Android's Alt+↑/↓ would jump to the text's start or end;
+    - Cmd+←/→ go to the line's start or end, Cmd+↑/↓ to the text's (Ctrl+Home/End on Android);
+    - every other ⌘ key stays Deck's;
+  - off macOS, Alt alone never types (Alt+F is a menu key, Alt+0233 an Alt code, Alt+Space the
+    window menu), but AltGr does, also as Ctrl+Alt; other Ctrl keys stay Deck's, so Ctrl+←/→ and
+    Ctrl+Backspace don't reach the device;
+  - ⌘V (Ctrl+V or Ctrl+Shift+V off macOS) types the computer's clipboard text on the device: on
+    Android through the device's clipboard, where it stays, as with scrcpy. The screen takes the paste
+    whenever it has the keyboard, even with text selected elsewhere in Deck, and pressing on the
+    screen clears that selection;
   - Deck's own shortcuts (⌘T, ⌘W, ⌘1…, ⌘⇧G/A/D, and their Ctrl+Shift forms) still work.
 
 ### States
 
-- **Connecting:** "Connecting to C66…" until the first frame, about a second.
+- **Looking for devices…**, with a spinner, until the first list is in (above).
+- **Connecting:** "Connecting to C66…" until the first frame, about a second. A start that takes more
+  than 20 s has failed.
+- **Still being set up:** "C66 is connecting…" while adb sets a device up, or while one just allowed
+  says what it is.
 - **Reconnecting:** a stream that breaks is started again after 1, 2 and 5 s, with "Reconnecting…"
-  over the dimmed last frame. After that, the error and **Try again**.
+  over the dimmed last frame. It counts as working again only after 5 s live, so one that breaks right
+  after its first frame still runs out of tries. After that, the error and **Try again**.
 - **Disconnected:** "C66 disconnected" over the dimmed last frame for 10 s, then the next device that
   fits, or no panel. A cable that wiggles doesn't make the pane jump.
 - **Unauthorized:** "Allow USB debugging on C66: check its screen."
-- **Offline:** "C66 isn't answering. Unplug it and plug it back in."
-- **Couldn't show it:** the reason (the last error line of scrcpy's server, `sim-video` or the
-  helper) and **Try again**.
+- **Offline:** "C66 isn't answering. Unplug it and plug it back in." A device in recovery or sideload
+  gets this too.
+- **Couldn't show it:** the reason (the last error of scrcpy's server, a Java exception's message or
+  its root cause; `sim-video`'s or the helper's last error line) and **Try again**. A screen that
+  fails to decode three times in a row, with no picture in between, says so the same way.
+- **adb fails**, when the panel was asked for: "adb couldn't list the devices", with adb's own error.
 - **No adb**, only when the panel was asked for: "Deck can't find adb, so it can't see Android
   devices. Install Android Studio or Android's platform tools."
 - **No idb-companion**, with a simulator booted: "Deck shows simulators with idb-companion:"
@@ -173,8 +239,9 @@ Android phones, emulators and simulators. iPhones are view only.
   screen." **Open System Settings** (Privacy & Security → Camera).
 - **Nothing connected**, when asked for: "No devices connected. Plug in an Android phone with USB
   debugging on or start an emulator; boot a simulator or plug in an iPhone." Windows leaves out the
-  iOS half.
-- **A panel that fails to draw** disappears without taking the pane with it, like the cards.
+  iOS half, and so does step 1.
+- **A panel that fails to draw** says "The device panel couldn't show this", with the error and **Try
+  again**, without taking the pane with it. Another device or view gets another try by itself.
 
 ## How
 
@@ -185,16 +252,23 @@ and likewise for iOS.
 
 - **adb:** first `ANDROID_HOME` or `ANDROID_SDK_ROOT` in Deck's environment, then the SDK's usual place
   (`~/Library/Android/sdk/platform-tools/adb`; `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`),
-  then `PATH` and Homebrew's folders.
+  then `PATH` and Homebrew's folders. Only absolute folders count: a relative `PATH` entry means "the
+  current folder".
   - The SDK's adb comes first because Android Studio runs it, and two adb versions restart each
     other's server.
   - An `ANDROID_HOME` set only in shell profiles isn't seen when Deck starts from Finder, as with
     `CLAUDE_CONFIG_DIR`.
+  - adb's failures are shown in adb's own words (its `adb:` or `error:` line, at most 500
+    characters).
 - **Android devices:**
-  - one `adb track-devices -l`, which reports each change as it happens, restarted after a growing
-    wait if adb's server goes away;
+  - one `adb track-devices -l`, which reports each change as it happens. If adb's server goes away,
+    it's started again after 1 s, then after twice the wait each time, up to 30 s. The wait goes back
+    to 1 s only after a run of 30 s, so two adb versions fighting over the server don't restart every
+    second;
+  - a connection counts as USB unless its adb name is an emulator's or a network one, since with
+    Windows' own USB driver adb lists no `usb:` field;
   - a device new in state `device` is asked once, in one `adb shell` call, for its serial number,
-    maker, model, Android version, AVD name and name.
+    maker, model, Android version, AVD name and name: up to three tries, 1.5 s apart.
 - **Simulators:** `idb_companion --notify stdout` reports every simulator's state as it changes, so
   nothing polls. Without idb-companion, Deck runs one `xcrun simctl list devices booted -j` (0.14 s)
   when an iOS project's tab comes to the front, only to say what's missing.
@@ -206,24 +280,38 @@ and likewise for iOS.
 2. **Tunnel:** `adb -s <serial> forward tcp:0 localabstract:scrcpy_<id>`, with a random 31-bit `<id>`;
    adb picks a free port on 127.0.0.1. Removed again once both sockets are connected, as scrcpy does.
 3. **Start:** `adb -s <serial> shell CLASSPATH=/data/local/tmp/deck-scrcpy-server.jar app_process /
-   com.genymobile.scrcpy.Server 5.0.1 scid=<id> tunnel_forward=true audio=false video_codec=h264
-   max_size=1600 max_fps=60 stay_awake=true clipboard_autosync=false`, at scrcpy's default bit rate
-   (8 Mbit/s).
-4. **Connect** twice, video then control. The video socket starts with a dummy byte (Deck retries
-   until it comes), the device's name and the codec, then a size packet per capture session (a
-   rotation starts one) and frames, each behind scrcpy's 12-byte header.
+   com.genymobile.scrcpy.Server 5.0.1 scid=<id> log_level=info tunnel_forward=true audio=false
+   control=true video_codec=h264 max_size=1600 max_fps=60 stay_awake=true clipboard_autosync=false`,
+   at scrcpy's default bit rate (8 Mbit/s).
+4. **Connect** twice, video then control. The video socket starts with a dummy byte, the device's name
+   and the codec, then a size packet per capture session (a rotation starts one) and frames, each
+   behind scrcpy's 12-byte header. Through the tunnel adb accepts a connection even before the server
+   listens, then drops it, so Deck tries until the dummy byte comes: 100 times, 100 ms apart.
 5. **Stop:** close the sockets and end the `adb shell` (and remove the forward if it's still there).
+   Ending the local `adb shell` ends the server on the device: adbd hangs up the device's shell, which
+   hangs up the server. A stop during a start cancels the step under way (the push too) and closes
+   what was opened: before it did, quitting Deck mid-start left the server running.
 
 - **What it changes on the device**, only while shown:
   - the screen is turned on and stays on while the device is plugged in (`stay_awake`);
   - scrcpy puts the setting back when it stops, even when Deck quits or the cable is pulled: its
-    cleanup runs as a separate process on the device.
-- **Input:** scrcpy's control messages: touch (down, move, up), scroll, key codes (Back, Home, Recent
-  apps, Power, typing keys), text, set clipboard with paste, and reset video for a new key frame.
+    cleanup runs as a separate process on the device;
+  - the device's own copies aren't sent back (`clipboard_autosync=false`), but a paste from Deck stays
+    on the device's clipboard.
+- **Input:** scrcpy's control messages: touch (down, move, up, as a finger: pointer id -2), scroll,
+  key codes (Back, Home, Recent apps, Power, typing keys), text, set clipboard with paste, and reset
+  video for a new key frame. Positions are whole pixels of the frame, sent with its size: scrcpy
+  ignores a touch made for another size. Text goes in pieces of at most 300 bytes and a paste is at
+  most 256 KiB, as scrcpy's own client sends them. Main checks everything the renderer sends.
+- **The video stream:** packets up to 16 MiB. Anything that makes no sense (an empty or larger
+  packet, a frame before the screen's size, a screen of 0 or more than 65,535 px) ends the stream
+  with an error.
 - **The server file:**
   - downloaded from scrcpy's GitHub release at install and checked against its SHA-256 (v5.0.1:
-    733,930 bytes, `764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`);
-  - never committed; shipped in the app's resources with scrcpy's license;
+    733,930 bytes, `764eb6f79811d5211fe9df341120882ba9994c7a61b897d7bf3fb662e53bc536`); the download
+    gives up after 120 s;
+  - never committed; shipped in the app's resources with scrcpy's license. A build without the right
+    file stops, since electron-builder would only warn about a missing resource;
   - the server must match the version Deck passes it, so the version is set in one place.
 
 ### Simulators
@@ -257,83 +345,111 @@ and likewise for iOS.
 ### The view
 
 - **Decoding:** WebCodecs `VideoDecoder`, in hardware on Apple silicon and on most Windows PCs.
-  - The codec string comes from the stream's SPS.
-  - `sim-video`'s Annex B stream is cut into frames; scrcpy's and the helper's arrive framed.
-  - A size change reconfigures the decoder at the next key frame.
+  - The codec string comes from the stream's SPS, with the two reserved bits of its constraint byte
+    cleared: some encoders set them, and Chromium refuses the string then.
+  - The H.264 is taken as Annex B (no `description`): a config packet's SPS and PPS go in front of the
+    next key frame. `sim-video`'s Annex B stream is cut into frames; scrcpy's and the helper's arrive
+    framed.
+  - A rotation needs nothing new: the same codec string decodes both sizes (measured), so the decoder
+    is configured again only when the string changes.
+  - A decoder that fails is replaced by one decoding in software. After 3 failures in a row with no
+    picture in between, the screen says so with **Try again**, rather than restart the device's
+    encoder over and over. Each new view tries the hardware first again.
 - **Drawing:** each new frame onto a `<canvas>` the size of the fitted screen at the window's pixel
-  ratio.
+  ratio, which it follows (another display, zoom). Only the latest frame is kept.
 - **Keeping up:** if the decoder falls more than 10 frames behind, the view skips to the next key
-  frame and asks for one. That's scrcpy's reset video and the helper's request; `sim-video` sends one
-  every 2 s.
+  frame and asks for one, at most once a second (each one restarts the device's encoder). That's
+  scrcpy's reset video and the helper's request; `sim-video` sends one every 2 s.
 - **Input:** a point on the canvas maps through the letterbox to the frame, then to the device:
-  scrcpy takes frame pixels with the frame's size, idb takes points. Keys become Android key codes
-  for scrcpy and USB HID usages for idb.
+  scrcpy takes frame pixels with the frame's size, idb takes points. A touch held while the frame
+  changes size is let go at its last point, once for each size: scrcpy drops a touch made for another
+  size, and may switch before or after it says so. Keys become Android key codes for scrcpy and USB
+  HID usages for idb.
 
 ### Streaming and its cost
 
 - **Only a panel on screen streams:** the active tab's, unfolded, with Deck's window visible (not
-  minimized, hidden or fully covered, by the page's visibility), and the Mac neither locked nor
-  asleep.
+  minimized, hidden or fully covered, by the page's visibility), the tab's project read since it came
+  to the front, and the Mac neither locked nor asleep.
   - Deck in the background but visible, beside Xcode or Android Studio, keeps streaming: that's the
     point.
 - **10 seconds' grace:** a stream no panel shows stops after 10 s, so leaving a tab and coming back
-  doesn't restart it (a restart takes about a second). Tabs showing the same device share its stream.
+  doesn't restart it (a restart takes about a second). Meanwhile nothing is sent to the window; a
+  panel coming back gets a key frame. Tabs showing the same device share its stream.
 - **Size and rate:** the long side within 1600 px (the C66 as it is, the S25 FE at about 740×1600), up to
   60 frames a second, no audio. A still screen costs little: scrcpy repeats a frame every 100 ms,
   and `sim-video` sends none.
-- **Measured in step 1:** Deck's CPU with a stream showing, written into CLAUDE.md.
+- **Measured in step 1** (2026-11-04, a dev build, two phones on their lock screens, so almost no
+  frames): Deck's main, GPU and renderer processes used about 0.5% of a core each. A moving screen's
+  cost isn't measured yet.
 
 ### Screenshot to Claude
 
 - The view keeps the last decoded frame. The camera button draws it at full size into a PNG and sends
-  it to main.
-- Main saves it as the clipboard card saves a pasted image: in its image folder
-  (`<temp>/Deck clipboard/<instance>/`, cleared at start and quit), named by its content, and returns
-  the quoted path. The renderer types it into the tab's terminal through `pasteSafe()`, as Add to
-  Claude does.
+  it to main; without a live picture (connecting, reconnecting, failed) it adds nothing, since a stale
+  picture would mislead Claude.
+- Main takes only a PNG, of at most 32 MiB, and saves it as the clipboard card saves a pasted image:
+  in its image folder (`<temp>/Deck clipboard/<instance>/`, cleared at start and quit), named by its
+  content, and returns the quoted path. The renderer types it into the tab's terminal through
+  `pasteSafe()`, as Add to Claude does.
+- On Windows the path's backslashes are doubled. Claude Code strips a pasted path's quotes and drops
+  each backslash that escapes a character before it checks that the path is absolute (read in Claude
+  Code 2.1.283's paste code; not yet tried on Windows). The clipboard card's image paste does the same.
 
 ### Code
 
-- `src/shared/`: `DeviceKind`, `DeviceInfo` (id, kind, name, detail, state, what's missing), a
-  project's kinds and pick, a stream's events (size, frame, state) and input (touch, scroll, key,
-  text, button, paste); `DeckApi.devices` and the `devices:*` channels.
+- `src/shared/`: `DeviceInfo` (id, kind, name, detail, state), `DeviceList` (the devices, or why there
+  are none), `DeviceProject` (root, Android app or not, pick), a stream's events (size, packet,
+  state) and input (touch, scroll, key, text, paste); `DeckApi.devices` and the `devices:*` channels;
+  `quoteImagePath` in `quote.ts`.
 - `src/main/devices/`:
-  - `project.ts`: the kinds of device a project takes (tested on temp folders);
+  - `project.ts`: a folder's project and whether it's an Android app (tested on temp folders);
   - `picks.ts`: `devices.json`, written beside and renamed (`fs/atomic.ts`);
-  - `registry.ts`: one list from every source; starts and stops sources as tabs need them;
-  - `stream.ts`: a stream's viewers, its 10 s grace and its retries, for every kind;
+  - `streams.ts`: a stream's viewers, its 10 s grace, its retries and its start deadline, for every
+    kind;
+  - `ipc.ts`: wiring, the 30 s project cache, lock and sleep. Every listener checks its arguments.
+    With Android the only source, it also keeps the list; step 2 moves that into `registry.ts` (one
+    list from every source, starting and stopping sources as tabs need them);
   - `android/adb.ts`: finding adb and running it, like `git/runner.ts`;
-  - `android/devices.ts`: `track-devices -l` and identity parsing, USB and Wi-Fi merged (pure);
+  - `android/devices.ts`: `track-devices -l` frames and identity parsing, USB and Wi-Fi merged (pure);
+  - `android/tracker.ts`: the long-running `track-devices`, identity asks, restarts and the first
+    list's wait;
+  - `android/protocol.ts`: the video stream's reader and the control messages (pure);
+  - `android/input.ts`: the renderer's input, checked and turned into control messages (pure);
+  - `android/server.ts`: the server file and its version;
   - `android/scrcpy.ts`: push, tunnel, start, sockets and stop;
-  - `android/protocol.ts`: the video stream's parser and the control messages (pure);
-  - `ios/simulators.ts`, `ios/simvideo.ts`, `ios/idb.ts` (gRPC) and `ios/iphone.ts` (the helper);
-  - `ipc.ts`: wiring, the window's visibility, lock and sleep. Every listener checks its arguments.
+  - steps 2 and 3: `ios/simulators.ts`, `ios/simvideo.ts`, `ios/idb.ts` (gRPC) and `ios/iphone.ts`
+    (the helper).
 - `src/renderer/src/device/`:
-  - `pick.ts`: which device a tab shows (pure);
-  - `DevicePanel.tsx`: header, menu, chooser and states, inside an error boundary;
-  - `DeviceScreen.tsx`: canvas, decoder and input;
-  - `decoder.ts`: cutting Annex B and the codec string (pure);
-  - `input.ts`: pointer to device coordinates, keys to Android key codes and HID usages (pure);
+  - `pick.ts`: which device a tab shows, and the holds (pure);
+  - `fit.ts`: letterboxing, and a point on the screen as a pixel of the frame (pure);
+  - `keys.ts`: keys to Android key codes or text (pure; HID usages come with step 2);
+  - `codec.ts`: NAL units and the avc1 codec string (pure);
+  - `DevicePanel.tsx`: header, chooser and states, inside an error boundary; `DeviceMenu.tsx`: the
+    menu;
+  - `DeviceScreen.tsx`: canvas, decoder, input and the screenshot;
   - `useDevices.ts` and `device.css`.
 - `App.tsx`:
   - the right pane holds the device panel, a horizontal splitter and the Claude panel;
   - `TerminalTab.device` (the tab's pick) and `deviceHidden`;
   - the fold and the height share, one each for the window.
 - `menu.ts` and `terminal/keys.ts`: View → Device Panel.
-- `native/iphone-screen/` with `scripts/build-iphone-helper.mjs`; `scripts/fetch-scrcpy-server.mjs`,
-  run by `postinstall`.
+- `scripts/fetch-scrcpy-server.mjs`, run by `postinstall` (or `npm run fetch:scrcpy`), and
+  `scripts/before-pack.cjs`, electron-builder's `beforePack`, which stops a build without the right
+  server. Step 3: `native/iphone-screen/` with `scripts/build-iphone-helper.mjs`.
 - **Packaging:**
-  - `electron-builder.yml`: `extraResources` for the server and, on macOS, the helper;
-    `NSCameraUsageDescription`;
-  - the camera entitlement in `build/entitlements.mac.plist`;
-  - scrcpy's license (Apache 2.0) and idb's (MIT) in a third-party notices file shipped with the
-    app.
+  - `electron-builder.yml`: `extraResources` for the server and, on macOS, the helper (step 3);
+    `NSCameraUsageDescription` (step 3);
+  - the camera entitlement in `build/entitlements.mac.plist` (step 3);
+  - scrcpy's license (Apache 2.0) in `resources/THIRD-PARTY-NOTICES.txt`, shipped with the app;
+    idb's (MIT) joins it in step 2.
 - **Docs:** CLAUDE.md (paths and the facts above), README, DECK.md (M5), TESTING.md and CHANGELOG.
 
 ## Build order
 
 1. **The panel and Android**, macOS and Windows: finding devices, the project rules and picks, the
    panel, scrcpy video and input, and the screenshot. This covers Guard and AccessControl_Android.
+   Built 2026-11-03/04.
 2. **Simulators**, macOS: idb-companion's video and input.
 3. **iPhones**, macOS: the helper, once it has been seen working with Franco's iPhone.
 
@@ -343,13 +459,37 @@ Each step gets its own plan and pull request and works without the next.
 
 - **Black screens:** Android hides secure windows (`FLAG_SECURE`: some banking, payment and DRM
   screens) from screen capture, so they show black.
-- **Typing:** on Android, characters the device's key map can't make are skipped; simulators get what
-  a US keyboard types.
+- **Typing:**
+  - on Android, characters the device's key map can't make are skipped; simulators get what a US
+    keyboard types;
+  - no input methods (Chinese, Japanese, Korean): composed text doesn't reach the device;
+  - dead keys: macOS should compose them (Option+E, then E, types "é"); not yet checked on a device,
+    and unverified on Windows.
+- **Shortcuts:** ⌘A on the screen selects Deck's own text (the Edit menu's Select All), not the
+  device's; a paste still goes to the device. Off macOS, Ctrl+←/→ and Ctrl+Backspace stay Deck's.
+- **Pastes stay on the device:** a paste leaves its text on the device's clipboard, as scrcpy's does,
+  a password manager's copy included.
 - **One finger:** no pinch or two-finger gestures, and no scroll wheel on simulators.
-- **One adb:** if a different adb version runs the server, Deck's starts it again, as any adb does.
-  Wi-Fi debugging works once the device has been paired elsewhere (Android Studio, `adb pair`); Deck
-  doesn't pair.
-- **Emulators** may encode in software, so their stream may be slower: measured in step 1.
+- **One adb:** an adb of another version, run by Claude or by hand, kills Deck's adb server; if
+  Deck's had run 30 s or more, Deck starts it again within 1 s and kills theirs, which cuts off, say,
+  a long `adb logcat`. Deck prefers the SDK's adb, as Android Studio does. Wi-Fi debugging works once
+  the device has been paired elsewhere (Android Studio, `adb pair`); Deck doesn't pair.
+- **Telling devices apart:** two devices with the same id look like one (cheap boards that all report
+  `0123456789ABCDEF` as their serial; two copies of one AVD started with `-read-only`), and devices
+  with the same name look alike in the menu.
+- **adb's other states:** a device in recovery or sideload is told to unplug; on Linux,
+  `no permissions` shows as offline, or not at all when adb gives no reason.
+- **The first list:** an emulator still offline then isn't waited for (it joins when it answers), and
+  an adb that never lists anything leaves "Looking for devices…" up.
+- **Which projects:** a folder outside git that holds several Gradle builds isn't found (show the
+  panel by hand); a git failure is taken as "outside git" for 30 s; a single-module app at the
+  repository's root isn't found; a repository with only an Android library counts as an app.
+- **A crash while starting:** if Deck crashes in the second a stream takes to start, the adb client
+  and the server on the device are left waiting, with the screen kept on, as scrcpy itself would.
+- **A very short window:** below about 620 px of window height the right pane can't fit the device
+  panel's 152 px, the Claude panel's 160 px and both cards, so the cards overflow and the clipboard
+  card's Add button can end up below the window. Folding the device panel removes its floor.
+- **Emulators** may encode in software, so their stream may be slower: not measured yet.
 - **A lit screen:** a device shown for hours stays on while plugged in, and a still image can mark an
   OLED screen. Fold the panel, or press Power, when not watching.
 - **iPhones** need a cable, an unlocked phone and trust in this Mac, and are view only.
@@ -358,6 +498,9 @@ Each step gets its own plan and pull request and works without the next.
 - **Client data:** device screens can show residents' and visitors' details. Frames are kept in memory
   only; a screenshot is saved only when asked, in Deck's temp image folder (cleared at start and quit),
   and Deck sends it nowhere.
+- **Not yet tried on Windows:** adb's lists there (they may end lines with "\r\n"), cables listed
+  without a `usb:` field, image paths with doubled backslashes, AltGr and dead keys
+  (`docs/TESTING.md` 18p–18x).
 
 ## Not in this design
 
@@ -382,7 +525,7 @@ Each step gets its own plan and pull request and works without the next.
     and media packets), and control messages byte for byte against scrcpy's own
     `test_control_msg_serialize.c`;
   - a stream's life: viewers, the 10 s grace, retries at 1, 2 and 5 s, lock and sleep;
-  - cutting Annex B and the codec string; pointer mapping through the letterbox and after a rotation;
+  - NAL units and the codec string; pointer mapping through the letterbox and after a rotation;
     keys;
   - `idb_companion --notify` output and the helper's frames;
   - main's wiring, including arguments checked.
