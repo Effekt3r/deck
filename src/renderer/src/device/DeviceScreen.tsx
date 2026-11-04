@@ -66,6 +66,8 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
   const codec = useRef('')
   const config = useRef<Uint8Array | null>(null)
   const waitKey = useRef(true)
+  /** Waiting for a key frame because decoding fell behind: one is asked for once a second until it comes. */
+  const behind = useRef(false)
   /** Decoder failures since the last picture; after the first, decoders decode in software. */
   const failures = useRef(0)
   const software = useRef(false)
@@ -79,7 +81,9 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
   const lastTouch = useRef<{ x: number; y: number } | null>(null)
   /** The picture is live: a screenshot of a stale one (reconnecting, failed) would mislead Claude. */
   const streaming = useRef(false)
-  streaming.current = live && stream.state === 'live' && broken === null
+  useLayoutEffect(() => {
+    streaming.current = live && stream.state === 'live' && broken === null
+  })
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current
@@ -96,6 +100,7 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
     decoder.current = null
     codec.current = ''
     waitKey.current = true
+    behind.current = false
     if (d && d.state !== 'closed') d.close()
   }, [])
 
@@ -139,8 +144,9 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
   // Viewing: main streams the device while any tab views it, and sends its news.
   useEffect(() => {
     if (!live) return
-    // Each view starts afresh: a decoder that gave up gets another try.
+    // Each view starts afresh: a decoder that gave up gets another try, the GPU's first.
     failures.current = 0
+    software.current = false
     setBroken(null)
     const keyframe = () => {
       lastKeyframe.current = performance.now()
@@ -199,10 +205,17 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
         return
       }
       const d = decoder.current
-      if (!d || d.state !== 'configured' || (waitKey.current && !event.key)) return
+      if (!d || d.state !== 'configured') return
+      if (waitKey.current && !event.key) {
+        // A key frame not asked for yet (one was, just before) is asked for once the gap has passed:
+        // frames keep coming (scrcpy repeats the last one every 100 ms) to check on.
+        if (behind.current && performance.now() - lastKeyframe.current >= KEYFRAME_GAP_MS) keyframe()
+        return
+      }
       if (d.decodeQueueSize > MAX_QUEUE) {
-        // Behind: skip to a key frame, asking for one unless one was asked for just now.
+        // Behind: skip to a key frame, asking for one now unless one was asked for just now.
         waitKey.current = true
+        behind.current = true
         if (performance.now() - lastKeyframe.current >= KEYFRAME_GAP_MS) keyframe()
         return
       }
@@ -212,7 +225,10 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
           timestamp: (timestamp.current += FRAME_US),
           data: event.key && config.current ? joined(config.current, event.data) : event.data,
         }))
-        if (event.key) waitKey.current = false
+        if (event.key) {
+          waitKey.current = false
+          behind.current = false
+        }
       } catch (err) {
         failed(err)
       }
@@ -316,15 +332,21 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
     e.preventDefault()
     send('keycode' in key ? { type: 'key', ...key } : { type: 'text', text: key.text })
   }
-  const tryAgain = () => {
+  const tryDecodingAgain = () => {
     failures.current = 0
     setBroken(null)
+  }
+  const tryAgain = () => {
+    tryDecodingAgain()
     window.deck.devices.keyframe(deviceId)
   }
 
   // Main's stream failed (it retries, then gives up), or decoding did: each has its own Try again.
   const failure = stream.state === 'error'
-    ? { detail: stream.message, retry: () => window.deck.devices.retry(deviceId) }
+    ? { detail: stream.message, retry: () => {
+        tryDecodingAgain()
+        window.deck.devices.retry(deviceId)
+      } }
     : broken !== null
       ? { detail: broken, retry: tryAgain }
       : null

@@ -55,13 +55,19 @@ function PanelBody({ view, devices, problem, looking, open, onToggle, visible, c
   const [busy, setBusy] = useState(false)
   const screen = useRef<ScreenHandle>(null)
   const anchorRef = useRef<HTMLElement | null>(null)
+  /** Where the keyboard was when the menu opened: the terminal for a click, the button from the keyboard. */
+  const returnTo = useRef<Element | null>(null)
   useLayoutEffect(() => {
     anchorRef.current = menuAnchor
   }, [menuAnchor])
+  /** `refocus` (Esc, a choice, the button again): the keyboard goes back where it was, else to the button. */
   const closeMenu = useCallback((refocus: boolean) => {
     const anchor = anchorRef.current
+    const back = returnTo.current
     setMenuAnchor(null)
-    if (refocus) anchor?.focus()
+    if (!refocus) return
+    if (back instanceof HTMLElement && back.isConnected && back !== document.body) back.focus()
+    else anchor?.focus()
   }, [])
   useEffect(() => {
     if (!visible) setMenuAnchor(null) // it lives in <body>, outside the hidden tab
@@ -70,6 +76,10 @@ function PanelBody({ view, devices, problem, looking, open, onToggle, visible, c
   const device = view.kind === 'device' ? view.device : null
   const gone = view.kind === 'device' && view.gone
   const ready = device !== null && device.state === 'ready' && !gone
+  // A failed screenshot's error goes with its device, and with Claude.
+  useEffect(() => {
+    setError(null)
+  }, [device?.id, claudeRuns])
   let message: string | null = null
   if (device && gone) message = `${device.name} disconnected`
   else if (device?.state === 'unauthorized') message = `Allow USB debugging on ${device.name}: check its screen.`
@@ -109,8 +119,9 @@ function PanelBody({ view, devices, problem, looking, open, onToggle, visible, c
         </button>
         <button className="dp-device" aria-haspopup="menu" aria-expanded={menuAnchor !== null} title="The device this tab shows"
           onClick={(e) => {
-            const button = e.currentTarget
-            setMenuAnchor((a) => (a ? null : button))
+            if (menuAnchor) return closeMenu(true)
+            returnTo.current = document.activeElement
+            setMenuAnchor(e.currentTarget)
           }}>
           <span className="dp-name">{title}</span>
           <Chevron />
