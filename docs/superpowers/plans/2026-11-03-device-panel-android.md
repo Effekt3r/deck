@@ -5271,6 +5271,31 @@ git add src/renderer/src/App.tsx src/renderer/src/tabs/ src/main/menu.ts src/mai
 git -c user.email=franco@effektstudios.com commit -m "Device panel: at the top of the right pane, with View → Device Panel" -m "Claude-Session: https://claude.ai/code/session_012TidnAXmFkf7jwBCQQo4jJ"
 ```
 
+**After review, the code above changed:**
+- **Layout:** the open device panel's slot shrinks (`flex: 0 1 auto`), and under it the Claude panel
+  keeps 160 px (`.claude-pane.with-device` in device.css). Before, the usage and clipboard cards could
+  push the Claude panel to 0 and the card's Add button below the window. A window too short for all of
+  it takes the room from the device panel first.
+- **The splitter:** a drag is clamped to the stored share's bounds (15–85 %) and to the room the two
+  panels have now, so the panel doesn't jump on release. A drag cut short leaves no height behind.
+- **A move to another project:** a tab's `device`/`deviceHidden` stop counting from the first render
+  in another project (`movedOn`), and `choice` is null unless the devices are needed. Before, a cd
+  could start a stream for a device that was never to show there.
+- **The keyboard:** it goes to the terminal when the device panel folds, or when another device takes
+  the screen's place.
+- **Switching back to a tab:** `useDeviceProject` says whether the project has been read since the tab
+  came to the front. Until then the panel doesn't stream, since another tab may have changed the
+  project's pick.
+- **Follow-ups to tasks 12 and 13**, from their re-reviews:
+  - A key frame not asked for because one was asked for just before is asked for once the gap has
+    passed, instead of waiting up to 10 s for scrcpy's own.
+  - Each view tries the GPU decoder first again, and main's Try again also clears a decoding failure.
+  - The device menu gives the keyboard back to where it was when the menu opened (the terminal, for a
+    click), and its button closes it the same way.
+  - A screenshot's error clears when the device or Claude changes.
+- **Not changed:** folded with no Claude panel, the right pane keeps its width and shows only the
+  header. The fold is the window's, and the header has to stay reachable; View → Device Panel hides it.
+
 ---
 ### Task 15: On the devices
 
