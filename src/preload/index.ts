@@ -1,11 +1,21 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/channels'
-import type { ClaudeSnapshot, ClipboardPreview, DeckApi, GitSnapshot, MenuCommand, Platform, UsageState } from '@shared/types'
+import type { ClaudeSnapshot, ClipboardPreview, DeckApi, DeviceList, DeviceStreamEvent, GitSnapshot, MenuCommand, Platform, UsageState } from '@shared/types'
 
 function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
   const listener = (_e: IpcRendererEvent, ...args: unknown[]) => cb(...(args as A))
   ipcRenderer.on(channel, listener)
   return () => ipcRenderer.removeListener(channel, listener)
+}
+
+/** A stop function that does its work once, however often it's called. */
+function once(fn: () => void): () => void {
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    fn()
+  }
 }
 
 const api: DeckApi = {
@@ -56,6 +66,25 @@ const api: DeckApi = {
     onChange: (cb) => on<[UsageState]>(IPC.usageChanged, cb),
     connect: (replace) => ipcRenderer.invoke(IPC.usageConnect, replace),
     disconnect: () => ipcRenderer.invoke(IPC.usageDisconnect),
+  },
+  devices: {
+    watch: () => {
+      ipcRenderer.send(IPC.devicesWatch)
+      return once(() => ipcRenderer.send(IPC.devicesUnwatch))
+    },
+    list: () => ipcRenderer.invoke(IPC.devicesList),
+    onList: (cb) => on<[DeviceList]>(IPC.devicesChanged, cb),
+    project: (folder) => ipcRenderer.invoke(IPC.devicesProject, folder),
+    pick: (root, id) => ipcRenderer.invoke(IPC.devicesPick, root, id),
+    view: (id) => {
+      ipcRenderer.send(IPC.devicesView, id)
+      return once(() => ipcRenderer.send(IPC.devicesUnview, id))
+    },
+    onStream: (cb) => on<[string, DeviceStreamEvent]>(IPC.devicesStream, cb),
+    keyframe: (id) => ipcRenderer.send(IPC.devicesKeyframe, id),
+    retry: (id) => ipcRenderer.send(IPC.devicesRetry, id),
+    input: (id, input) => ipcRenderer.send(IPC.devicesInput, id, input),
+    screenshot: (png) => ipcRenderer.invoke(IPC.devicesScreenshot, png),
   },
   app: {
     info: () => ipcRenderer.invoke(IPC.appInfo),

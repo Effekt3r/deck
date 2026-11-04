@@ -28,3 +28,14 @@ export function useTick(ms: number): void {
     return () => clearInterval(timer)
   }, [ms])
 }
+
+/** The window can be seen: not minimized, hidden or fully covered (the page's visibility). */
+export function usePageVisible(): boolean {
+  const [visible, setVisible] = useState(() => document.visibilityState === 'visible')
+  useEffect(() => {
+    const update = () => setVisible(document.visibilityState === 'visible')
+    document.addEventListener('visibilitychange', update)
+    return () => document.removeEventListener('visibilitychange', update)
+  }, [])
+  return visible
+}

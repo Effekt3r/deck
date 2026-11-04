@@ -39,7 +39,8 @@ Windows installer; publish it once it looks right.
   prompt hook automatically (no dotfile edits), so tabs show `repo ⎇ branch`, or
   `repo · <Claude's status title>` while Claude runs.
 - **Keys** (Windows: Ctrl+Shift instead of Cmd): Cmd+T new tab, Cmd+W close,
-  Cmd+1…9 select, Cmd+Shift+O projects, Cmd+F find, Shift+Enter newline in Claude.
+  Cmd+1…9 select, Cmd+Shift+O projects, Cmd+F find, Cmd+Shift+D device panel, Shift+Enter newline
+  in Claude.
   Next/previous tab: Cmd+Shift+] / [ (Windows: Ctrl+Tab / Ctrl+Shift+Tab).
   Windows copies/pastes with Ctrl+Shift+C/V (Ctrl+C copies only with a selection).
   Nothing uses Ctrl+Alt, which is AltGr on many keyboard layouts.
@@ -73,6 +74,15 @@ Windows installer; publish it once it looks right.
     numbers: it adds a `statusLine` to `~/.claude/settings.json`, and Claude Code then
     hides its footer hints. **Disconnect** puts back what was there and forgets the
     numbers.
+- **Device panel** (top of the right pane in an Android app's tabs; Cmd/Ctrl+Shift+D hides it, or
+  shows it in any other tab): the phone or emulator the app runs on, live. Click to tap, drag to
+  swipe, scroll with the wheel, and type and paste with the screen selected (Option and Cmd editing
+  keys work as on a Mac); Back, Home, Recent apps and Power in its header and, while Claude runs, a
+  camera that adds a screenshot to Claude's prompt. Each project remembers its device (the ▾ menu
+  picks another, per tab). It streams only while you can see it. Needs adb (Android Studio or
+  Android's platform tools). Deck runs scrcpy's server on the device over adb; the server deletes
+  itself, and the screen setting it changes while shown is put back. A paste goes through the
+  device's clipboard and stays there.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 

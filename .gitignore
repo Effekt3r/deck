@@ -8,3 +8,7 @@ __pycache__/
 node_modules/
 out/
 dist/
+
+# scrcpy's server, downloaded at install (scripts/fetch-scrcpy-server.mjs)
+/resources/scrcpy-server
+/resources/scrcpy-server.*.tmp

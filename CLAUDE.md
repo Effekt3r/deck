@@ -46,9 +46,14 @@ of copied image files (`…/2026-11-02-clipboard-image-previews-design.md`). Als
 (`…/2026-11-02-usage-card-design.md`, built 2026-11-02): Claude's plan limits above the clipboard
 card. Windows to test.
 
+The device panel, step 1 (Android: spec `…/2026-11-03-device-panel-design.md`, plan
+`docs/superpowers/plans/2026-11-03-device-panel-android.md`, built 2026-11-03/04): the phone or
+emulator a tab's project runs on, live at the top of the right pane. Checked with two phones on macOS
+(2026-11-04); the hands-on checks and Windows are still to do. Simulators and iPhones are steps 2 and 3.
+
 | Path | Role |
 |---|---|
-| `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, and `quote.ts` (shell quoting, used by main and the renderer); the only thing main and renderer share |
+| `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, and `quote.ts` (shell quoting, and `quoteImagePath` for Claude Code's image paths; used by main and the renderer); the only thing main and renderer share |
 | `src/preload/index.ts` | exposes `window.deck`; sandboxed, requires only `electron` |
 | `src/main/index.ts` | lifecycle, single instance + `--open <folder>`, IPC wiring; `window.ts`, `menu.ts` (platform shortcuts → `MenuCommand`) |
 | `src/main/shell/` | `shellLaunch()` (which shell/args/env, pure), zsh `ZDOTDIR` wrappers + `deck.zsh`, PowerShell `deck.ps1`, installed to userData |
@@ -58,7 +63,10 @@ card. Windows to test.
 | `src/main/claude/` | session-log locator, incremental tail, the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions |
 | `src/main/clipboard/` | reads the clipboard (files, text, images; concealed copies skipped), decides what the card offers, saves pasted images for Claude |
 | `src/main/usage/` | Claude's plan usage: the status line command and script, Claude Code's settings (connect/disconnect), reading and merging reports, `usage.json` |
-| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker), `clipboard/` (card, hook), `usage/` (card, donut, view) |
+| `src/main/devices/` | the device panel's main side: `android/` (finding and running adb, `track-devices` and identities, scrcpy's protocol, input checks and sessions), `streams.ts` (viewers, grace, retries), `project.ts` (a folder's project, Android app or not), `picks.ts` (`devices.json`), `ipc.ts` (wiring, lock and sleep) |
+| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker), `clipboard/` (card, hook), `usage/` (card, donut, view), `device/` (below) |
+| `src/renderer/src/device/` | the device panel: which device a tab shows (`pick.ts`), the screen (WebCodecs, canvas, input: `codec.ts`, `fit.ts`, `keys.ts`), the menu, `useDevices.ts` |
+| `resources/` | `scrcpy-server.json` (the server's version, URL, size, SHA-256) and `THIRD-PARTY-NOTICES.txt`; the server itself is downloaded at install (`scripts/fetch-scrcpy-server.mjs`), never committed |
 
 Things that aren't obvious from the code:
 - The app scrubs a parent Claude Code session's variables (`CLAUDECODE`, session
@@ -219,7 +227,12 @@ Things that aren't obvious from the code:
     DA/CPR replies queue behind a pending paste too.
   - **Claude Code attaches an image only when a paste is one image path,** optionally
     quoted and with a trailing space. Several files pasted at once reach Claude as paths
-    it can read.
+    it can read. Before checking that the path is absolute, Claude Code (2.1.283) strips the
+    outer quotes and drops each backslash that escapes a character, even inside single quotes
+    (Windows paths under WSL aside). So on Windows an image's path is pasted with its backslashes
+    doubled (`quoteImagePath` in `src/shared/quote.ts`, used by the card's image paste, a single
+    copied image file pasted in a Claude tab, and the device panel's screenshot). Found by reading
+    Claude Code's paste code; unverified on Windows (`docs/TESTING.md` 18b, 18s).
 - Usage card (`src/main/usage/`):
   - **Source:** Claude Code's status line input: `rate_limits.five_hour` / `seven_day`, each
     `used_percentage` (0–100) and `resets_at` (Unix seconds). It comes only on Pro/Max/Ultra and
@@ -264,6 +277,212 @@ Things that aren't obvious from the code:
     throwaway `claude --settings <file with Deck's statusLine>` run. Checked that way on
     2026-11-02: a real reply moved the card to "week 90%" within a second, and Disconnect left
     the settings as they were.
+- Device panel (`src/main/devices/`, `src/renderer/src/device/`):
+  - **scrcpy's server** (v5.0.1, Apache 2.0) is downloaded at install by `scripts/fetch-scrcpy-server.mjs`
+    and kept only if its SHA-256 matches `resources/scrcpy-server.json`. The download gives up after
+    120 s and prints `err.cause`, where Node's fetch puts the real network error. CI stops without the
+    server, and so does a build: electron-builder only warns about a missing `extraResources` file, so
+    `scripts/before-pack.cjs` (`beforePack`) checks the hash. Dev builds read the repo's `resources/`,
+    packaged ones `process.resourcesPath`. The server refuses any version but its own, so a bump
+    changes the JSON, `android/protocol.ts` if the protocol moved, and the notices.
+  - **adb:** `ANDROID_HOME`/`ANDROID_SDK_ROOT` from Deck's own environment, the SDK's usual place, then
+    PATH and Homebrew. The SDK's adb first: Android Studio runs it, and two adb versions restart each
+    other's server. Only absolute PATH entries (a relative one means "the current folder"); Windows
+    entries may be quoted. On Windows `env` must be the live `process.env`: names are case-insensitive
+    there, and a copy holds `Path`, not `PATH`. `runAdb`'s error is adb's own `adb:`/`error:` line
+    (stderr before stdout, `* daemon …` chatter skipped), at most 500 characters; its signal ends a
+    call at once, so a stop ends a push under way. With none found, adb is looked for again whenever
+    Deck comes to the front, so the platform tools installed while Deck runs are picked up.
+  - **Devices** (`android/tracker.ts`, `android/devices.ts`): one `adb track-devices -l` while any tab
+    needs devices (`devices:watch` counts).
+    - **Its output:** each list is four hex digits of length, then the lines. Windows writes it in
+      text mode, so each "\n" may arrive as "\r\n", which the lengths don't count: `readTrackFrames`
+      drops every "\r" first (from adb's source; not yet seen on Windows). A line is read up to the
+      first adb state word, since mDNS renames a clashing Wi-Fi name with spaces
+      (`adb-<serial>-<x> (2)._adb-tls-connect._tcp`). Windows' own USB driver gives adb no device
+      path, so cables list no `usb:` field there: a connection counts as a cable unless its name is an
+      emulator's or a network one (`ip:port`, mDNS). Unverified on Windows.
+    - **Identities:** each connection is asked once what it is (one `adb shell`; the first value of
+      each key wins, so a name can't spoof the serial) and listed only once it answered or three asks
+      (1.5 s apart) failed. So an emulator's id (its AVD name; its adb name changes with the port)
+      never changes under the panel, and an emulator still starting isn't listed at all. A phone still
+      booting (`sys.boot_completed` not 1) is asked again every 3 s, up to 40 times, so one rebooted
+      while plugged in gets its own name back. A device already listed (e.g. unauthorized) stays
+      listed as "connecting" while it's asked: no "disconnected" flash after tapping Allow. A device
+      waiting out its retry gap isn't asked again by the next list, and re-ask timers belong to their
+      connection's record. The asks take no signal: one can run up to 10 s after a stop (quick in
+      practice).
+    - **One device per phone:** `android:<ro.serialno>`, so a phone over USB and Wi-Fi
+      (`adb-<serial>-<x>._adb-tls-connect._tcp`) is one device, reached over USB first.
+    - **The first list** after tracking (re)starts waits for every ready device to answer or run out
+      of tries, 3 s at most counted from adb's first list (starting adb's server takes time of its
+      own); else a project with two devices would show whichever answered first. Until then
+      `devices:list` answers null (as it does again once nothing watches; no push at stop), and the
+      panel says "Looking for devices…". An emulator still offline in that list isn't waited for, and
+      a hung adb leaves "Looking for devices…" up.
+    - **Restarts:** adb's server going away ends track-devices. It starts again after 1 s, doubling to
+      30 s, and the wait resets only after a run of 30 s, so two adb versions killing each other's
+      server don't restart every second. What adb prints while starting its server is never the
+      error, and a publish that throws doesn't stop tracking.
+    - **Known limit:** an adb of another version (run by Claude or the user) kills Deck's server; if
+      Deck's had run 30 s or more, it restarts within 1 s and kills theirs, cutting off e.g. a long
+      `adb logcat`. Hence the SDK's adb first, as Android Studio does.
+  - **Streams** (`android/scrcpy.ts`, `android/protocol.ts`):
+    - **Connecting:** a forward tunnel to `localabstract:scrcpy_<scid>` (the server reads `scid` as
+      hex, eight digits). adb accepts a connection before the server listens and drops it, so Deck
+      waits for the server's dummy byte (100 tries, 100 ms apart). The forward is removed once both
+      sockets are connected, as scrcpy does: a crash after that leaves none. A socket destroyed while
+      still connecting only emits `close`, so `connected()` rejects on close too.
+    - **Input:** fingers are pointer id -2 (a mouse id would make mouse events). A touch must carry
+      the current video size or the server ignores it, in whole pixels 0…size−1. Text goes in pieces
+      of at most 300 bytes and a paste at most 256 KiB: scrcpy's own client's limits, not the
+      server's. Scroll: a positive dx scrolls right (the wheel's deltaX sign), a positive dy up
+      (against deltaY). Reset video (type 17) restarts the capture (a new size, config and key
+      frame): sent when a viewer joins a running stream, or a decoder falls behind or fails.
+    - **Stopping:** a stop also stops a start under way (an `AbortSignal` into `startScrcpy`) and
+      closes what it had opened: quitting mid-start once left the server running on the S25 FE
+      (2026-11-03). Killing the local `adb shell` ends the server on the device: adbd SIGHUPs `sh -c`,
+      and mksh hangs up its foreground job (traced in AOSP's source).
+    - **Errors:** after the start, a socket close waits up to 1 s for the shell's own close, so the
+      server's last words, which reach Deck a moment later, explain the drop. `serverError` takes a
+      Java exception's message, a `Caused by:` root, or "<ERROR line> (<Exception>)" for a bare
+      exception.
+    - **The video reader** caps packets at 16 MiB and turns a broken stream (an empty or oversized
+      packet, a frame before the screen's size, a 0 or >65535 screen) into an error. Each packet is
+      filled as its bytes arrive (shifting a long chunk list was quadratic), so memory stays about
+      one packet.
+    - **Lifecycle** (`streams.ts`): one stream per device, shared by its viewers. It lingers 10 s
+      after its last viewer and sends no packets meanwhile; a viewer coming back gets a key frame. A
+      break is retried after 1, 2 and 5 s, then it's an error until Try again. A stream counts as
+      recovered only after 5 s live, so one that dies right after its first frame still reaches the
+      error. Each start has its own 20 s deadline, an ended session is never heard from again, and
+      `view()` always answers with a state.
+  - **On the device:** `stay_awake` keeps the screen on while it's shown and plugged in:
+    `stay_on_while_plugged_in` is 7 while shown and goes back when the stream stops (2 on the C66,
+    2026-11-04). scrcpy's cleanup is a separate process: it deletes the jar at start and puts the
+    setting back when the server dies, a pulled cable or a killed Deck included.
+    `clipboard_autosync=false`, or the device's copies would come back to the Mac. A paste goes
+    through the device's clipboard and stays there, as with scrcpy, a password manager's copy
+    included.
+    - **Checking a device after a quit:** `adb -s <serial> shell pgrep -f com.genymobile.scrcpy.Server`
+      prints nothing, and `settings get global stay_on_while_plugged_in` is back. The jar's path is in
+      the server's environment, not its command line, so `pgrep -f deck-scrcpy` only matches the
+      Mac's `adb shell`.
+    - **Known limit:** a Deck crash in the ~1 s a start takes leaves the adb client and the server
+      waiting, with the screen kept on, as scrcpy itself would.
+  - **Which projects** (`project.ts`): a tab's project is its repository's main work tree (worktrees
+    share it), else its folder. Inside git the whole repository is scanned; outside git only a Gradle
+    build (`settings.gradle[.kts]` at the root or in `android/`); the home folder never: scanning `~`
+    stats inside Desktop, Documents and Downloads, which can raise macOS privacy prompts for Deck,
+    and a "Don't Allow" also blocks the terminals there. An app has `AndroidManifest.xml` in
+    `src/main/` or `src/androidMain/` of a first-level folder, or of a second-level one inside
+    `android/` (any case) or a first-level Gradle build of its own; at most 200 folders per level, and
+    200 in all at the second. Main caches {root, android} per folder for 30 s and reads the pick fresh.
+    `gitDirs` resolves git's relative common dir against the path it's given, so pass it a real
+    path (`project.ts` realpaths first): through a symlink or junction it lands beside the repository.
+    - **Known limits:** a folder outside git holding several Gradle builds isn't found (show the panel
+      by hand); a temporary git failure is cached as "outside git" for 30 s; each worktree of a bare
+      repository is its own project; a single-module app at the repository's root isn't found; a
+      repository with only an Android library counts as an app.
+  - **Which device a tab shows** (`pick.ts`): the tab's pick, else the project's (`devices.json`),
+    while connected; else the only device that fits; with several the panel asks. Outside an Android
+    app the project's pick doesn't open the panel by itself; it's used once the panel is shown by hand.
+    - **Holds:** a shown device that goes away stays, as "disconnected", for 10 s, and one still
+      connected stays when a second arrives (no drop to "Which device?"; the menu switches). Either
+      hold ends at once when the tab picks another device or moves to another project. The hold keeps
+      the stored pick's id, not the resolved device, or a tab's own pick unplugging (the project's
+      taking its place) would end it.
+    - **Projects:** a tab's pick and its View → Device Panel choice hold only in the project they were
+      made in, and count for nothing from the first render in another (`movedOn` in App.tsx), so a
+      `cd` can't start a stream. A tab coming to the front reads its project again before it
+      streams: another tab may have changed the pick.
+  - **The screen** (`DeviceScreen.tsx`):
+    - **Decoding:** WebCodecs in Annex B mode (no `description`): the config packet's SPS and PPS go in
+      front of the next key frame. The codec string comes from the SPS, with the constraint byte's two
+      reserved bits masked (Chromium refuses the string otherwise). A rotation needs no reconfigure:
+      the same codec string decodes both sizes (measured 2026-11-04). Only the latest
+      `VideoFrame` is kept (closed when replaced): frames left open stall the decoder.
+    - **Failures:** a failed decoder is replaced in software; after 3 failures in a row with no
+      picture between, "Couldn't show …" with Try again, rather than restart the device's encoder over
+      and over. Each view tries the GPU first again. More than 10 frames queued: skip to the next key
+      frame. Key frames asked for that way are one a second at most (each restarts the device's
+      encoder), and one held back is asked for once the gap has passed.
+    - **Canvas:** the fitted screen's size at `devicePixelRatio`, which it follows (another display,
+      zoom). Its edge is a box-shadow ring: a border squeezed the picture inside the canvas's size and
+      shifted touches. A picture of the old orientation isn't stretched into a turned canvas.
+    - **Touch:** one pointer at a time. A touch in progress when the frame changes size (a rotation)
+      is lifted at its last point for both sizes: scrcpy drops a touch made for another size, and may
+      switch before or after it says so. A finger down when the screen goes (a tab switch, a fold) is
+      lifted too. A pinch (a wheel with Ctrl) isn't a scroll; a wheel notch is taken as 100 px.
+    - **Keys** (`keys.ts`): macOS's Option+Backspace/Delete/←/→ are word-wise, so they go to Android
+      with Ctrl: Android's Alt+Backspace deletes the whole line. Shift is dropped on the deletes
+      (Android deletes nothing for Ctrl+Shift+Backspace) and kept on the arrows. Option+↑/↓ are plain
+      arrows (Android's Alt+↑/↓ jump to the text's ends). Cmd+←/→ go to the line's start/end
+      (`MOVE_HOME`/`MOVE_END`), Cmd+↑/↓ to the text's (the same with Ctrl); every other Cmd key stays
+      Deck's. Off macOS, Ctrl+Backspace/Delete/←/→ go to Android with Ctrl too (word-wise, the same
+      Shift rule) and Ctrl+Home/End to the text's ends; every other Ctrl key stays Deck's. Alt that
+      isn't AltGr never goes to the device there: Alt+F is a menu key, Alt+0233 an Alt code, Alt+Space
+      the window menu, and Android's Alt+Backspace would delete the whole line. AltGr types:
+      `getModifierState('AltGraph')`, or Ctrl+Alt, since Chromium may report AltGraph only for the
+      right-hand key. `menu.test.ts` checks that no menu shortcut is ever sent to the device. Tab and
+      Esc go to the device by design: the way out is a click elsewhere, or Deck's shortcuts.
+    - **Pastes:** Chromium fires the Edit menu's paste (and its own Ctrl+V) at the element holding the
+      page's text selection when there is one, else at the focused element. So the screen listens on
+      the document and takes a paste while it has the keyboard, and pressing on it clears the page's
+      selection. Off macOS, Ctrl+V and Ctrl+Shift+V both paste. Known limit: Cmd+A on the screen
+      selects Deck's own text (the Edit menu's Select All), not the device's.
+  - **The panel** (`DevicePanel.tsx`, App.tsx): 60 % of the right pane at first, 15–85 % by its
+    splitter (shared by every tab). Its slot shrinks first (`flex: 0 1 auto`): the device panel keeps
+    152 px (its header and 120 px of screen) and the Claude panel under it 160 px
+    (`.claude-pane.with-device`). Folded with no Claude panel, the pane keeps its width and shows the
+    header (View → Device Panel hides it). A thrown render says "The device panel couldn't show
+    this" with Try again.
+    - **Known limit:** below about 620 px of window height the right pane can't fit those 152 and
+      160 px and both cards, so the cards overflow and the clipboard card's Add button can end up
+      below the window, which breaks clipboard.css's "the card is never cut". Folding the device panel
+      removes its floor.
+    - **Keyboard:** clicks in the header and the chooser leave it where it was. The ▾ menu gives it
+      back where it was when the menu opened (the terminal, for a click) once it's gone: Esc, a pick,
+      the button again, or a click elsewhere that didn't take it. A screen that went with its device
+      falls back to the button, and Tab hands it to the button and moves on. Folding the panel, or
+      another device taking the screen's place, gives it to the terminal; a screen that pauses (a
+      wiggling cable, a minimised window) keeps it (`tabIndex` -1, not none) until it's back.
+  - **Screenshot:** the camera (while Claude runs) draws the last live frame into a PNG; main takes
+    only a PNG of at most 32 MiB, saves it with the clipboard's `saveImage` (same folder, cleared at
+    start and quit) and returns `quoteImagePath`'s text (see the clipboard's image paths above).
+  - **IPC:** a pick needs an absolute root and a project an absolute folder; a view of a device that
+    isn't listed is ignored (it could only cycle through retries); input goes through
+    `android/input.ts`'s checks. For M4, see Security below.
+  - **Cost:** only the active tab's unfolded panel streams, with the window visible (page
+    visibility); a stream lingers 10 s after its last viewer; lock and sleep stop it. Measured
+    2026-11-04 (dev build, the C66 and S25 FE on their lock screens, so almost no frames): main, GPU
+    and renderer about 0.5 % of a core each. A moving screen's cost isn't measured yet.
+  - **Checked on the devices** (2026-11-04, macOS, C66 and S25 FE over USB; the emulator streamed
+    earlier): Guard with no pick asked between the two, and the pick went to `devices.json` and
+    survived a restart. One `adb … shell CLASSPATH=…deck-scrcpy-server.jar` per stream; the jar gone
+    from the device once started; no forward left once connected. Switching devices, folding the
+    panel and hiding the window stop the old stream after its 10 s grace; showing the window again
+    brought it back in 0.7 s. Quitting within a second of a pick left nothing on the Mac (no
+    `adb shell`, no forward) or the devices (no server, no jar, settings back). At a 900 px window
+    the device panel had its 60 % (518 px) and the Claude panel 168 px. With real mouse clicks, a
+    pick from the ▾ menu gave the keyboard back to the terminal, a click on the screen took it, and
+    a fold while the screen had it gave it to the terminal.
+  - **Not yet checked:**
+    - by hand: taps, swipes, typing and pasting; rotating while a touch is held; the Option and Cmd
+      editing keys; a paste after selecting text in Claude's reply, and after Cmd+A; the wheel's
+      speed on macOS (Chromium may give 40 px a notch, not 100); the camera's `[Image #N]`; pulling
+      cables;
+    - Shift+arrows selecting in a classic (View-based) EditText. Android's TextView takes selection
+      from a separate Shift key event (MetaKeyKeyListener's state), not from the arrow's Shift flag,
+      and scrcpy sends Shift as its own key. If it doesn't select, `android/input.ts` should wrap a
+      Shift-flagged key in Shift down/up;
+    - dead keys: macOS should compose them (Option+E, E types "é"); unverified on Windows. Input
+      methods (Chinese, Japanese, Korean) don't reach the device;
+    - Windows, all of it: `docs/TESTING.md` 18p–18y.
+  - **Known limits, devices:** two devices sharing an id look like one (cheap boards' `0123456789ABCDEF`
+    serial; two copies of one AVD with `-read-only`); Linux's `no permissions` shows as offline, or
+    not at all when adb gives no reason; recovery and sideload devices are told to unplug; devices
+    with the same name look alike in the menu.
 
 **WezTerm prototype (v0):** does 1–4 with text (TUI) panes. It's the behaviour
 reference for M2/M3; keep it working until Deck replaces it.
@@ -287,7 +506,7 @@ reference for M2/M3; keep it working until Deck replaces it.
 | `build/installer*.bmp`, `uninstallerSidebar.bmp`, `installer.nsh`, `license.txt` | NSIS installer art, "Open in Deck" folder context menu, EULA (have Franco review) |
 | `build/trayTemplate*.png`, `tray.*` | Menu-bar / tray icons |
 | `build/entitlements.mac.plist` | Hardened-runtime entitlements (JIT, node-pty, network) |
-| `electron-builder.yml` | Mac dmg+zip (Apple silicon only, notarised), Windows NSIS (x64; arm64 later), GitHub publish; each keeps only its own node-pty prebuild |
+| `electron-builder.yml` | Mac dmg+zip (Apple silicon only, notarised), Windows NSIS (x64; arm64 later), GitHub publish; each keeps only its own node-pty prebuild; ships `resources/` (scrcpy's server, its JSON, the notices) as `extraResources`, and `beforePack` (`scripts/before-pack.cjs`) stops a build without the right server |
 | `.github/workflows/release.yml` | Tag `v*` or manual run → one draft release (notes from `CHANGELOG.md`); signs when secrets exist |
 
 The NSIS include passes `--open "<folder>"`: the app must handle that argument
@@ -417,6 +636,11 @@ excludes every `build` folder.
    accessible by integration"; seen 2026-10-31), so the run fails at the end.
    A Keychain-exported `.p12` uses old ciphers: OpenSSL 3 reads it only with
    `openssl pkcs12 -legacy`.
+5. Device panel: step 1 (Android) built 2026-11-03/04 and checked with two phones on macOS. Next:
+   Franco's hands-on checks (Device panel → "Not yet checked" above) and Windows
+   (`docs/TESTING.md` 18p–18y); then step 2, simulators (idb-companion), and step 3, iPhones (a
+   Swift helper on CoreMediaIO, once an iPhone has been seen streaming). Each step gets its own plan
+   and pull request.
 
 Deferred from the M1 review (`3f9feb6` fixed the important ones):
 - **Windows, untested:**
@@ -465,8 +689,25 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
     `symbolic-ref` runs twice per snapshot.
   - **Windows:** a repo path with non-ASCII characters may hit the PowerShell
     code-page issue above as "Not a git repository".
+- **Device panel follow-ups** (from the step 1 review):
+  - A `devices.json` that can't be parsed is replaced at the next pick, like `projects.json` above.
+  - CI downloads scrcpy's server on every run; cache it keyed on `resources/scrcpy-server.json`.
+    Node's `fetch` ignores `HTTPS_PROXY`, so behind a proxy the install-time download fails.
+  - A dev build without the server retries for about 8 s before it says so; a missing server could
+    go straight to the error.
+  - A paste of more than 256 KiB is dropped without a word.
+  - `DevicePanel`'s `State`, `Boundary` and `Chevron` copy `ClaudePanel`'s; the PNG signature check
+    is in both `devices/ipc.ts` and `clipboard/read.ts`.
+  - Tests: no test drives a real stream through `registerDeviceIpc` (a fake adb and a TCP server
+    standing in for scrcpy's would pin "nothing left on the phone" after a reload or quit), and
+    `App.tsx`'s panel rules (`movedOn`, `deviceNeeded`, `choice`, `showDevice`) could move into a
+    pure function with tests before step 2 adds simulators.
+- **Accepted risk (device panel):** on Windows `devices:project` accepts a UNC path from the tab's
+  folder, which other programs' output can set (OSC 7), so Deck may run git and stat files on a
+  network share: the same exposure as the git panel's.
 - **Security (M4):**
-  - Check the IPC sender frame (`clipboard:paste` hands password-manager text to the renderer).
+  - Check the IPC sender frame (`clipboard:paste` hands password-manager text to the renderer;
+    `devices:input` taps and types on a phone).
   - Load the renderer from a custom protocol, not `file://`.
   - Deny permission requests.
   - Set Electron fuses, after moving node-pty into a `utilityProcess` (its Windows
@@ -506,7 +747,11 @@ Give the dev build its own folder instead of quitting Franco's Deck:
 `npx electron-vite dev --remoteDebuggingPort 9333 --inspect 9229 -- --user-data-dir=<dir>`,
 and pass the same `--user-data-dir` to a second launch with `--open`. `--inspect` exposes
 the main process (evaluate through `process.mainModule.require`, since `require` isn't a
-global there).
+global there). Hide, show or quit the dev build from there:
+`process.mainModule.require('electron').BrowserWindow.getAllWindows()[0].hide()`, `.showInactive()`,
+or `process.mainModule.require('electron').app.quit()`. Run from Claude Code,
+`osascript -e 'tell application "System Events" to …'` (e.g. `set visible of process "Electron"`)
+hangs waiting for macOS's Automation permission (2026-11-04).
 
 Single instance: if the running Deck doesn't acknowledge a second launch within about
 20 s (Chromium's ProcessSingleton), the second launch kills it and takes over. It was seen

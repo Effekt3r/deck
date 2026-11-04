@@ -23,6 +23,7 @@ export async function gitDirs(repo: string): Promise<GitDirs | null> {
   if (!root || !gitDir || !commonDir) return null
   // The common dir comes relative to the folder git ran in (`../.git` from a sub-folder), so in
   // the caller's spelling, e.g. /Volumes/wyobi for /Volumes/Wyobi; for a worktree it's absolute.
+  // Pass a real path: through a symlink or junction the relative dir lands beside the repository.
   const [own, shared] = await Promise.all([canonical(resolve(gitDir)), canonical(resolve(repo, commonDir))])
   return { root, gitDir: own, commonDir: shared }
 }

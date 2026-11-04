@@ -19,6 +19,19 @@ asarUnpack:
 # Each platform's `files` below keeps only the prebuild its app runs.
 npmRebuild: false
 
+# scrcpy's server (scripts/fetch-scrcpy-server.mjs downloads it at install), its version and the
+# third-party notices, beside the app as plain files: adb pushes the server from a real path.
+extraResources:
+  - from: resources/scrcpy-server
+    to: scrcpy-server
+  - from: resources/scrcpy-server.json
+    to: scrcpy-server.json
+  - from: resources/THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
+
+# Stops a build whose scrcpy server is missing (scripts/before-pack.cjs).
+beforePack: scripts/before-pack.cjs
+
 # ---------------------------------------------------------------- macOS
 mac:
   category: public.app-category.developer-tools

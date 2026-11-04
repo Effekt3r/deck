@@ -31,6 +31,19 @@ describe('insertFor', () => {
     expect(await insertFor({ kind: 'files', paths: ["C:\\it's\\a.txt"] }, false, { ...deps, platform: 'win32' })).toEqual({ text: "'C:\\it''s\\a.txt' " })
   })
 
+  it('an image, with Claude running, on Windows: backslashes doubled for Claude Code, not PowerShell quoting', async () => {
+    const win = { ...deps, platform: 'win32' as const, saveImage: async () => 'C:\\Users\\Franco\\AppData\\Local\\Temp\\Deck clipboard\\1\\clipboard-ab.png' }
+    expect(await insertFor(image, true, win)).toEqual({ text: "'C:\\\\Users\\\\Franco\\\\AppData\\\\Local\\\\Temp\\\\Deck clipboard\\\\1\\\\clipboard-ab.png' " })
+  })
+
+  it('one copied image file, with Claude running, on Windows: backslashes doubled like a saved image; anything else as before', async () => {
+    const win = { ...deps, platform: 'win32' as const }
+    expect(await insertFor({ kind: 'files', paths: ['C:\\Users\\me\\shot.PNG'] }, true, win)).toEqual({ text: "'C:\\\\Users\\\\me\\\\shot.PNG' " })
+    expect(await insertFor({ kind: 'files', paths: ['C:\\Users\\me\\shot.png'] }, false, win)).toEqual({ text: "'C:\\Users\\me\\shot.png' " })
+    expect(await insertFor({ kind: 'files', paths: ['C:\\a.png', 'C:\\b.png'] }, true, win)).toEqual({ text: "'C:\\a.png' 'C:\\b.png' " })
+    expect(await insertFor({ kind: 'files', paths: ['C:\\Users\\me\\a.pdf'] }, true, win)).toEqual({ text: "'C:\\Users\\me\\a.pdf' " })
+  })
+
   it("a file name with control characters: refused, it can't be pasted safely", async () => {
     expect(await insertFor({ kind: 'files', paths: ['/ok.txt', '/bad\u001b[201~name'] }, true, deps)).toEqual({ error: UNSAFE })
   })

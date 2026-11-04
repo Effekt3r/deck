@@ -18,7 +18,8 @@
     "dist": "npm run build && electron-builder",
     "dist:mac": "npm run build && electron-builder --mac",
     "dist:win": "npm run build && electron-builder --win",
-    "postinstall": "node scripts/postinstall.mjs"
+    "postinstall": "node scripts/postinstall.mjs && node scripts/fetch-scrcpy-server.mjs",
+    "fetch:scrcpy": "node scripts/fetch-scrcpy-server.mjs"
   },
   "dependencies": {
     "node-pty": "^1.1.0"

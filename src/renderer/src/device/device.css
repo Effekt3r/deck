@@ -1,0 +1,120 @@
+/* The device panel, at the top of the right pane above the Claude panel (App.tsx: Workspace). Its
+   menu, states and spinner are the Claude panel's (claude/panel.css: .cp-menu, .cp-state). */
+
+.device-slot { display: flex; flex-direction: column; min-height: 0; }
+/* Under an unfolded device panel the Claude panel keeps 160 px (App.tsx: CLAUDE_MIN_BELOW): the device
+   panel gives way first in a short window. */
+.claude-pane.with-device > .claude-panel { min-height: 160px; }
+
+.device-panel {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.dp-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 32px;
+  padding: 0 8px 0 2px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+/* The Claude panel's section heading, without its full width. */
+.dp-head .dp-fold { width: auto; padding: 0 5px; }
+.dp-device {
+  display: inline-flex;
+  flex: 0 1 auto;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  height: 24px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.dp-device:hover { background: rgb(244 245 251 / 0.08); }
+.dp-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The detail gives way before the name. */
+.dp-detail { flex: 0 10000 auto; min-width: 0; overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; }
+.dp-detail.gone { color: var(--amber); }
+.dp-buttons { flex: none; display: flex; gap: 1px; }
+.dp-icon[aria-disabled='true'] { opacity: 0.4; }
+
+.dp-error { flex: none; padding: 4px 10px; color: var(--red); font-size: 11.5px; overflow-wrap: anywhere; }
+/* A short panel scrolls its chooser. */
+.dp-body { position: relative; flex: 1; min-height: 0; display: flex; overflow-y: auto; }
+
+.dp-area {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px;
+  overflow: hidden;
+}
+/* The canvas is the screen's own size (DeviceScreen), centred in the area. Its edge is a ring, not a
+   border: a border would squeeze the picture inside that size (blurring it) and shift touches. */
+.dp-screen {
+  flex: none;
+  display: block;
+  border-radius: 8px;
+  background: #000;
+  box-shadow: 0 0 0 1px var(--line-strong);
+  outline: none;
+  touch-action: none;
+}
+.dp-screen:focus { box-shadow: 0 0 0 2px var(--teal); }
+.dp-screen.dim { opacity: 0.35; }
+
+.dp-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 16px;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  pointer-events: none;
+}
+.dp-overlay strong { color: var(--text); font-weight: 600; }
+.dp-overlay.error strong { color: var(--red); }
+.dp-overlay-detail { max-width: 100%; color: var(--faint); font-size: 11.5px; overflow-wrap: anywhere; }
+.dp-overlay .button { height: 26px; margin-top: 4px; pointer-events: auto; }
+
+.dp-choose { margin: auto; display: flex; flex-direction: column; gap: 6px; width: min(100%, 300px); padding: 16px; }
+.dp-choose-title { margin-bottom: 2px; color: var(--text); font-weight: 600; text-align: center; }
+.dp-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 12px;
+  text-align: left;
+}
+.dp-choice:hover { border-color: var(--teal); }
+.dp-choice-detail { color: var(--muted); font-size: 11px; }

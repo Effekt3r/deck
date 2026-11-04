@@ -12,6 +12,9 @@ export interface ClipboardIpc {
   attach(win: BrowserWindow): void
   /** At quit: stop looking and remove the saved images. */
   dispose(): void
+  /** Saves a PNG beside the pasted images (cleared at start and quit): the device panel's
+   *  screenshots for Claude. Resolves with its path. */
+  saveImage(png: Uint8Array): Promise<string>
 }
 
 export function registerClipboardIpc(opts: { tempDir: string; platform: Platform }): ClipboardIpc {
@@ -74,5 +77,6 @@ export function registerClipboardIpc(opts: { tempDir: string; platform: Platform
       watch.stop()
       temp.clear()
     },
+    saveImage: (png) => temp.save(png),
   }
 }

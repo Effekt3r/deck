@@ -181,7 +181,7 @@ export function SessionPicker({ folder, current, following, anchor, onClose }: S
 }
 
 /** Under the button, inside the window. */
-function placeBelow(anchor: HTMLElement): CSSProperties {
+export function placeBelow(anchor: HTMLElement): CSSProperties {
   const r = anchor.getBoundingClientRect()
   const width = Math.min(340, window.innerWidth - 16)
   const top = r.bottom + 4

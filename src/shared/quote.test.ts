@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { quotePath, quotePaths } from './quote'
+import { quoteImagePath, quotePath, quotePaths } from './quote'
 
 // vitest can't interrupt a synchronous child process, so every spawnSync/execFileSync below gets
 // this hard timeout: a hung shell fails (or skips) instead of blocking CI.
@@ -63,6 +63,25 @@ describe('quotePath refuses control characters', () => {
 
   it('an empty path is null', () => {
     expect(quotePath('', 'darwin')).toBeNull()
+  })
+})
+
+describe('quoteImagePath', () => {
+  it('doubles every backslash for Claude Code on Windows, inside the same quoting', () => {
+    expect(quoteImagePath('C:\\Users\\Franco\\AppData\\Local\\Temp\\Deck clipboard\\1\\clipboard-ab.png', 'win32'))
+      .toBe("'C:\\\\Users\\\\Franco\\\\AppData\\\\Local\\\\Temp\\\\Deck clipboard\\\\1\\\\clipboard-ab.png'")
+  })
+
+  it("keeps an apostrophe as it is: Claude Code only strips the outer quotes, it doesn't parse what's inside", () => {
+    expect(quoteImagePath("C:\\Users\\O'Brien\\shot.png", 'win32')).toBe("'C:\\\\Users\\\\O'Brien\\\\shot.png'")
+  })
+
+  it('a control character is still unsafe to paste', () => {
+    expect(quoteImagePath('C:\\a\u001bb.png', 'win32')).toBeNull()
+  })
+
+  it("off Windows, it's quotePath's result", () => {
+    expect(quoteImagePath('/Users/franco/Desktop/shot.png', 'darwin')).toBe(quotePath('/Users/franco/Desktop/shot.png', 'darwin'))
   })
 })
 

@@ -63,8 +63,9 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
      lists them. **Add to Claude** puts both quoted paths into the prompt. (If only the first
      file arrives, report it: Windows' file list needs another route.)
 18b. Win+Shift+S a region, come back: the card shows the image; Ctrl+V in the Claude tab
-     inserts `[Image #1]`. (If Claude shows the path as text instead, report it: Windows
-     paths may need double quotes.)
+     inserts `[Image #1]`, and so does **Add to Claude**. (Deck pastes the image's path with its
+     backslashes doubled, as Claude Code expects; if Claude shows the path as text instead,
+     report it.)
 18c. Copy a password from your password manager: no card, and Ctrl+V pastes it as before.
 18d. Drag a PDF from Explorer onto the terminal: its quoted path appears.
 18e. Copy a new screenshot, then press Ctrl+V several times quickly in a Claude tab. Each
@@ -109,7 +110,50 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
      before), and the card offers Connect again. Connect once more: the card waits for Claude's
      next reply instead of showing the old numbers.
 
+**Device panel**
+
+18p. Install Android Studio (or Android's platform tools), plug in an Android phone with USB
+     debugging on, and allow this PC when the phone asks. In a terminal, note what
+     `adb shell settings get global stay_on_while_plugged_in` prints, for 18w (Android Studio puts
+     adb in `%LOCALAPPDATA%\Android\Sdk\platform-tools`). Open a tab in an Android app's folder: a
+     git repository or a Gradle build, with `app\src\main\AndroidManifest.xml` (or the same inside
+     `android\`). Within a few seconds the phone's screen shows at the top of the right pane, and
+     the header reads `Android <version> · USB`.
+18q. Click to tap, drag to swipe, hold to long-press; the wheel scrolls a list about a step per
+     notch. Back, Home, Recent apps and Power in the panel's header work. Rotate the phone while
+     holding a drag on its screen in Deck: the picture turns, and nothing stays pressed on the phone.
+18r. Click the screen, then type into a text field on the phone; Shift+arrows select text, and Home
+     and End go to the line's ends. With a German keyboard layout (add one in Settings, switch with
+     Win+Space): AltGr+Q and Ctrl+Alt+Q both type `@` on the phone, ´ (left of Backspace) then E
+     types `é`, and Alt+F does nothing there. Ctrl+Backspace deletes a word on the phone and Ctrl+←
+     moves back a word; Alt+Backspace does nothing there. Tab and Esc go to the phone too; clicking
+     the terminal gives it the keyboard back.
+18s. Ctrl+V and Ctrl+Shift+V paste copied text into a field on the phone. Select a word in Claude's
+     reply, Ctrl+C, click the screen, Ctrl+V: the word goes to the phone, not the terminal. Ctrl+A
+     with the screen selected, then Ctrl+V: the paste still goes to the phone. With Claude running in
+     the tab, the camera in the panel's header adds `[Image #N]` to Claude's prompt, and so does one
+     `.png` copied in Explorer and pasted with Ctrl+V in that tab.
+18t. Ctrl+Shift+D hides the panel and shows it again. With an emulator running too, the ▾ next to the
+     name switches between the two, and a new tab in the same folder shows the one picked last.
+18u. Pull the phone's cable: "disconnected" over the dimmed picture, and the panel goes 10 s later.
+     Plug it back in: the panel comes back.
+18v. Minimise Deck for 15 s, then restore it: the screen streams again within a couple of seconds.
+     Task Manager's Details tab then lists three adb.exe: adb's own server, Deck's device list and
+     the stream, with none left over from the stream before.
+18w. Fold the device panel (its caret) and wait 15 s; unfold it and close Deck within a second, while
+     it says "Connecting…". Then `adb shell pgrep -f com.genymobile.scrcpy.Server` prints nothing,
+     `adb shell settings get global stay_on_while_plugged_in` prints what it did in 18p, and Task
+     Manager shows no adb.exe beyond adb's own server.
+18x. In a Command Prompt (PowerShell rewrites a program's output), with the phone plugged in:
+     `adb track-devices -l > track.txt`, wait 5 s, then Ctrl+C. Attach `track.txt` to your report:
+     Deck reads adb's lists expecting Windows may turn their line ends into "\r\n", which hasn't been
+     seen yet.
+18y. Quit Deck, rename Android's `platform-tools` folder, and open Deck in the Android app's folder:
+     the panel isn't there (nothing to show without adb; View → Device Panel says Deck can't find adb).
+     Rename the folder back, click another window, then Deck: the phone's screen appears without a
+     restart.
+
 **Restart**
 
-19. Quit Deck and open it again: the panel widths are remembered (hiding a panel
-    lasts only while that tab stays in that repo).
+19. Quit Deck and open it again: the panel widths and the device panel's height are
+    remembered (hiding a panel lasts only while that tab stays in that repo).
