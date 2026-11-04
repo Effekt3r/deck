@@ -2,6 +2,9 @@
    menu, states and spinner are the Claude panel's (claude/panel.css: .cp-menu, .cp-state). */
 
 .device-slot { display: flex; flex-direction: column; min-height: 0; }
+/* Under an unfolded device panel the Claude panel keeps 160 px (App.tsx: CLAUDE_MIN_BELOW): the device
+   panel gives way first in a short window. */
+.claude-pane.with-device > .claude-panel { min-height: 160px; }
 
 .device-panel {
   position: relative;

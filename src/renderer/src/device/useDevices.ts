@@ -35,26 +35,35 @@ export function useDeviceList(needed: boolean): DeviceList | null {
 }
 
 /** The tab's project for the device panel (null until known), read again whenever the tab comes to
- *  the front, as another tab may have picked the project's device meanwhile; and how to pick one.
- *  A read that fails keeps what was known of the same folder. */
-export function useDeviceProject(folder: string, active: boolean): [DeviceProject | null, (id: string) => void] {
+ *  the front, as another tab may have picked the project's device meanwhile; how to pick one; and
+ *  whether it's been read since the tab came to the front (until then the panel may show the device
+ *  it had, but not stream it: the pick may have changed). A read that fails keeps what was known of
+ *  the same folder. */
+export function useDeviceProject(folder: string, active: boolean): [DeviceProject | null, (id: string) => void, boolean] {
   const [known, setKnown] = useState<{ folder: string; project: DeviceProject } | null>(null)
+  const [fresh, setFresh] = useState(false)
   const project = known?.project ?? null
   const current = useRef(project)
   useLayoutEffect(() => {
     current.current = project
   }, [project])
   useEffect(() => {
-    if (!folder || !active) return
+    // Stale once the tab goes to the back; a cd while it's in front reads again, but the pick stays
+    // good meanwhile (no stream is cut short for it).
+    if (!active) return setFresh(false)
+    if (!folder) return setFresh(true)
     let live = true
     window.deck.devices.project(folder).then(
       (next) => {
-        if (live) setKnown({ folder, project: next })
+        if (!live) return
+        setKnown({ folder, project: next })
+        setFresh(true)
       },
       (err: unknown) => {
         if (!live) return
         console.error('device panel: reading the project failed', err)
         setKnown((k) => (k?.folder === folder ? k : null))
+        setFresh(true)
       },
     )
     return () => {
@@ -67,7 +76,7 @@ export function useDeviceProject(folder: string, active: boolean): [DeviceProjec
     setKnown((k) => (k ? { ...k, project: { ...k.project, pick: id } } : k))
     window.deck.devices.pick(p.root, id).catch((err: unknown) => console.error('device panel: saving the pick failed', err))
   }, [])
-  return [project, pick]
+  return [project, pick, fresh]
 }
 
 /** The panel's view (panelView): a shown device that went away stays, as gone, for 10 s, unless the

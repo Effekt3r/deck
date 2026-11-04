@@ -43,7 +43,11 @@ const DEVICE_OPEN_KEY = 'deck.deviceOpen'
  *  stored in thousandths: 15 … 85 %. */
 const DEVICE_SHARE_KEY = 'deck.deviceShare'
 const DEVICE_SHARE = 0.6
-/** The device panel keeps its header and 120 px of screen; the Claude panel under it 160 px. */
+const SHARE_MIN = 0.15
+const SHARE_MAX = 0.85
+/** The device panel keeps its header and 120 px of screen; the Claude panel under it 160 px (and
+ *  device.css: .claude-pane.with-device), the usage and clipboard cards below that their own heights.
+ *  A window too short for all of it takes the room from the device panel first. */
 const DEVICE_MIN = 152
 const CLAUDE_MIN_BELOW = 160
 const NO_DEVICES: DeviceInfo[] = []
@@ -53,7 +57,7 @@ const clampWidth = (px: number, min: number, share: number, room = Infinity) =>
   Math.round(Math.min(Math.max(px, min), Math.max(min, Math.min(window.innerWidth * share, room))))
 const clampGitWidth = (px: number, room?: number) => clampWidth(px, GIT_MIN, GIT_MAX_SHARE, room)
 const clampClaudeWidth = (px: number, room?: number) => clampWidth(px, CLAUDE_MIN, CLAUDE_MAX_SHARE, room)
-const clampShare = (share: number) => Math.min(Math.max(share, 0.15), 0.85)
+const clampShare = (share: number) => Math.min(Math.max(share, SHARE_MIN), SHARE_MAX)
 
 export function App() {
   const platform = window.deck.platform
@@ -292,7 +296,8 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     // × via the keyboard leaves focus on the card's button, about to unmount: give it to the terminal.
     if (claudeRef.current?.contains(document.activeElement)) rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
   }, [])
-  /** The usage card lost the keyboard to nowhere (its button went): the terminal gets it. */
+  /** A button that had the keyboard went (the usage card's, a device chosen from the keyboard): the
+   *  terminal gets it. */
   const focusTerminal = useCallback(() => {
     rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
   }, [])
@@ -300,18 +305,28 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   // The device panel: the tab's project (read when the tab comes to the front), the devices adb sees
   // while this tab may show one (null until known), and which one it shows. Shown by hand, it works
   // without a project too.
-  const [project, pickForProject] = useDeviceProject(folder, active)
-  const byHand = tab.deviceHidden === false
+  const [project, pickForProject, projectFresh] = useDeviceProject(folder, active)
+  // A tab's device and its View → Device Panel choice hold in the project they were made in: in
+  // another one they don't count, from its first render (the effect below then clears them), so a cd
+  // can't start a stream for a device that was never to show there.
+  const deviceRoot = project?.root ?? null
+  const deviceRootSeen = useRef<string | null>(null)
+  const movedOn = deviceRoot !== null && deviceRootSeen.current !== null && deviceRoot !== deviceRootSeen.current
+  const tabDevice = movedOn ? undefined : tab.device
+  const tabHidden = movedOn ? undefined : tab.deviceHidden
+  const byHand = tabHidden === false
   // Outside an Android app the panel shows only when asked for: the project's pick is remembered for
   // then, but doesn't open the panel in every new tab there.
-  const deviceNeeded = tab.deviceHidden !== true && (byHand || project?.android === true || Boolean(tab.device))
+  const deviceNeeded = tabHidden !== true && (byHand || project?.android === true || Boolean(tabDevice))
   const deviceList = useDeviceList(deviceNeeded)
   const devices = deviceList?.devices ?? NO_DEVICES
-  const choice = deviceList && (project || byHand)
-    ? choosePanel({ tab: tab.device, project: project?.pick ?? null, android: project?.android ?? false, byHand, devices })
+  // Not needed any more, the list is the old one until its effect lets it go: nothing to choose from.
+  const choice = deviceNeeded && deviceList && (project || byHand)
+    ? choosePanel({ tab: tabDevice, project: project?.pick ?? null, android: project?.android ?? false, byHand, devices })
     : null
-  const deviceView = useHeldView(choice, devices, project?.root ?? null, tab.device ?? project?.pick ?? null)
-  const showDevice = tab.deviceHidden !== true && (deviceView.kind !== 'none' || byHand)
+  const deviceView = useHeldView(choice, devices, deviceRoot, tabDevice ?? project?.pick ?? null)
+  const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand)
+  const shownDevice = deviceView.kind === 'device' ? deviceView.device.id : null
   const showRight = showClaude || showDevice
   const [deviceDrag, setDeviceDrag] = useState<number | null>(null)
   const deviceRef = useRef<HTMLDivElement>(null)
@@ -345,9 +360,7 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     onUpdate(tab.id, { deviceHidden: showDevice })
   }, [deviceToggle]) // showDevice, tab.id and onUpdate as of this render
 
-  // A tab's device and its View → Device Panel choice hold in the project they were made in.
-  const deviceRoot = project?.root ?? null
-  const deviceRootSeen = useRef<string | null>(null)
+  // A tab's device and its View → Device Panel choice hold in the project they were made in (above).
   useEffect(() => {
     if (!deviceRoot) return
     if (deviceRootSeen.current !== null && deviceRootSeen.current !== deviceRoot) onUpdate(tab.id, { device: undefined, deviceHidden: undefined })
@@ -384,29 +397,42 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     else if (claudeKey && claudeKey !== claudeChoiceIn.current) onUpdate(tab.id, { claudeHidden: undefined })
   }, [tab.claudeHidden, tab.id, claudeKey, onUpdate])
 
-  // Hiding a panel while it had the keyboard would leave it with nobody: give it to the terminal.
+  // Hiding a panel while it had the keyboard would leave it with nobody: give it to the terminal. So
+  // would folding the device panel, or another device taking the screen's place.
   useEffect(() => {
     if (!active) return
     const focused = document.activeElement
     if (!focused || focused === document.body) rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
-  }, [showGit, showClaude, showDevice, active])
+  }, [showGit, showClaude, showDevice, deviceOpen, shownDevice, active])
+
+  // A drag cut short (the splitter went: the Claude panel hidden mid-drag) leaves no height behind.
+  const deviceSplit = showDevice && showClaude && deviceOpen
+  useEffect(() => {
+    if (!deviceSplit) setDeviceDrag(null)
+  }, [deviceSplit])
 
   /** What a panel can have: the workspace less the other panel, the splitters and the terminal's minimum. */
   const roomBeside = (other: HTMLDivElement | null) =>
     (rootRef.current?.clientWidth ?? window.innerWidth) - (other?.offsetWidth ?? 0) - 2 - TERMINAL_MIN
 
-  /** The device panel's height, leaving the Claude panel under it its minimum. */
+  /** The device panel's height for a drag: within its share's bounds (as stored, so it doesn't jump on
+   *  release) and its minimum, and leaving the Claude panel under it its minimum (the cards below it
+   *  keep their heights, so the room is what the two panels have now). */
   const clampDevice = (px: number) => {
     const pane = claudeRef.current?.clientHeight ?? window.innerHeight
-    return Math.round(Math.min(Math.max(px, DEVICE_MIN), Math.max(DEVICE_MIN, pane - CLAUDE_MIN_BELOW)))
+    const claudePanel = claudeRef.current?.querySelector<HTMLElement>('.claude-panel')
+    const room = (deviceRef.current?.offsetHeight ?? 0) + (claudePanel?.offsetHeight ?? 0) - CLAUDE_MIN_BELOW
+    const min = Math.max(DEVICE_MIN, pane * SHARE_MIN)
+    const max = Math.max(min, Math.min(room, pane * SHARE_MAX))
+    return Math.round(Math.min(Math.max(px, min), max))
   }
-  // Alone, the device panel takes the pane; folded, its header; else its share, which CSS keeps
-  // within its minimum and the Claude panel's when the window shrinks.
+  // Alone, the device panel takes the pane; folded, its header; else its share, which gives way when
+  // the window is too short for it and the Claude panel's minimum.
   const deviceStyle: CSSProperties = !showClaude
     ? { flex: '1 1 0' }
     : !deviceOpen
       ? { flex: 'none' }
-      : { flex: 'none', height: deviceDrag ?? `${deviceShare * 100}%`, minHeight: DEVICE_MIN, maxHeight: `calc(100% - ${CLAUDE_MIN_BELOW}px)` }
+      : { flex: '0 1 auto', height: deviceDrag ?? `${deviceShare * 100}%`, minHeight: DEVICE_MIN, maxHeight: `calc(100% - ${CLAUDE_MIN_BELOW}px)` }
 
   return (
     <div className={active ? 'workspace' : 'workspace is-hidden'} ref={rootRef}>
@@ -438,15 +464,15 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
           onReset={() => onClaudeWidth(CLAUDE_WIDTH)} />
       )}
       {showRight && (
-        <div className="claude-pane" ref={claudeRef} style={{ width: claudeDrag ?? claudeWidth }}>
+        <div className={deviceSplit ? 'claude-pane with-device' : 'claude-pane'} ref={claudeRef} style={{ width: claudeDrag ?? claudeWidth }}>
           {showDevice && (
             <div className="device-slot" ref={deviceRef} style={deviceStyle}>
               <DevicePanel view={deviceView} devices={devices} problem={deviceList?.problem ?? null} looking={deviceList === null}
-                open={deviceOpen} onToggle={onDeviceToggle} visible={active && pageVisible} claudeRuns={claudeRuns}
+                open={deviceOpen} onToggle={onDeviceToggle} visible={active && pageVisible && projectFresh} claudeRuns={claudeRuns}
                 onPick={pickDevice} onInsert={insert} onFocusLost={focusTerminal} />
             </div>
           )}
-          {showDevice && showClaude && deviceOpen && (
+          {deviceSplit && (
             <Splitter orientation="horizontal" label="Resize the device panel"
               getSize={() => deviceRef.current?.offsetHeight ?? DEVICE_MIN}
               onResize={(px) => setDeviceDrag(clampDevice(px))}
