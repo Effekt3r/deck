@@ -5541,6 +5541,7 @@ Things that changed from the plan, to record in CLAUDE.md's device panel section
   - CPU (dev build, phones on their lock screens, so almost no frames): main, GPU and renderer about 0.5% each; a moving screen still to measure (Franco).
   - Driving the dev build: `osascript … System Events … set visible` hangs waiting for macOS's Automation permission when run from Claude Code; start the dev build with `--inspect 9229` and hide/show/quit from main (`process.mainModule.require('electron').BrowserWindow.getAllWindows()[0].hide()`, `.showInactive()`, `app.quit()`) instead. Add to CLAUDE.md's "Checking the running app".
   - Found: after a mouse pick from the ▾ menu the keyboard landed on the device button (fixed: it goes back where it was).
+- Task 15 re-check after the review fixes (2026-11-04): Guard reopened on its saved pick; at a 900 px window the device panel had its 60 % (518 px) and the Claude panel under it 168 px; with real mouse clicks a pick from the ▾ menu gives the keyboard back to the terminal, a click on the screen takes it, and folding while the screen has it gives it to the terminal; quitting left the Mac and both phones clean.
 
 - [ ] **Step 1: CLAUDE.md**
 
