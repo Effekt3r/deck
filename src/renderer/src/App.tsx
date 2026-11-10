@@ -6,7 +6,7 @@ import { useClaudeSession } from './claude/useClaude'
 import { ClipboardCard } from './clipboard/ClipboardCard'
 import { useClipboardItem } from './clipboard/useClipboardItem'
 import { DevicePanel } from './device/DevicePanel'
-import { choosePanel, menuOrder, stillLooking } from './device/pick'
+import { menuOrder, panelRules } from './device/pick'
 import { useDeviceList, useDeviceProject, useHeldView } from './device/useDevices'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
@@ -250,9 +250,10 @@ interface WorkspaceProps {
 }
 
 /** A terminal tab: the git panel while the shell is in a repo (unless hidden with View → Git
- *  Panel), the terminal, and the right pane: the device panel while a device fits the project
- *  (unless hidden with View → Device Panel) above the Claude panel while Claude runs in the tab or
- *  the folder has a session (unless hidden with View → Claude Panel). Inactive tabs stay mounted. */
+ *  Panel), the terminal, and the right pane: the device panel while a device fits the project, or a
+ *  booted simulator Deck can't show asks for idb-companion (unless hidden with View → Device Panel),
+ *  above the Claude panel while Claude runs in the tab or the folder has a session (unless hidden
+ *  with View → Claude Panel). Inactive tabs stay mounted. */
 const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const { tab, active, home, gitWidth, claudeWidth, findRequest, claudeToggle, windowsBuild, clipItem } = props
   const { usage, usageOpen, onUsageToggle, onGitWidth, onClaudeWidth, onUpdate, onClose } = props
@@ -302,9 +303,9 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
   }, [])
 
-  // The device panel: the tab's project (read when the tab comes to the front), the devices adb sees
-  // while this tab may show one (null until known), and which one it shows. Shown by hand, it works
-  // without a project too.
+  // The device panel: the tab's project (read when the tab comes to the front), every device adb
+  // and, on macOS, idb-companion see while this tab may show one (null until known), and which one
+  // it shows. Shown by hand, it works without a project too.
   const [project, pickForProject, projectFresh] = useDeviceProject(folder, active)
   // A tab's device and its View → Device Panel choice hold in the project they were made in: in
   // another one they don't count, from its first render (the effect below then clears them), so a cd
@@ -315,24 +316,17 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const tabDevice = movedOn ? undefined : tab.device
   const tabHidden = movedOn ? undefined : tab.deviceHidden
   const byHand = tabHidden === false
-  // Outside an app the panel shows only when asked for: the project's picks are remembered for
-  // then, but don't open the panel in every new tab there.
-  const deviceNeeded = tabHidden !== true && (byHand || project?.android === true || project?.ios === true || Boolean(tabDevice))
+  const platform = window.deck.platform
+  // pick.ts's panelRules has the rest of the panel's rules (needed, apps, wants, looking, the choice,
+  // the iOS hint). needed decides whether to ask useDeviceList for a list at all, so it's read before
+  // that hook gives one; its own formula never looks at the list, so this agrees with the second call
+  // below, once useDeviceList answers (or doesn't: needed may still be false).
+  const deviceNeeded = panelRules({ project, tabDevice, tabHidden, byHand, list: null, platform }).needed
   const deviceList = useDeviceList(deviceNeeded)
   const devices = deviceList?.devices ?? NO_DEVICES
-  const apps = { android: project?.android ?? false, ios: project?.ios ?? false }
-  const deviceLooking = stillLooking(deviceList, project, byHand, tabDevice)
-  // Not needed any more, the list is the old one until its effect lets it go: nothing to choose from.
-  const choice = deviceNeeded && deviceList && !deviceLooking && (project || byHand)
-    ? choosePanel({ tab: tabDevice, project: project?.picks ?? [], ...apps, byHand, devices })
-    : null
+  const { apps, wants, looking: deviceLooking, choice, iosHint } = panelRules({ project, tabDevice, tabHidden, byHand, list: deviceList, platform })
   const deviceView = useHeldView(choice, devices, deviceRoot, tabDevice ?? project?.picks[0] ?? null)
-  // A booted simulator Deck can't show (no idb-companion, or one without sim-video) opens an iOS
-  // project's panel to say what to install.
-  const iosHint = apps.ios && (deviceList?.iosProblem === 'no-idb' || deviceList?.iosProblem === 'old-idb')
   const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand || iosHint)
-  // What the panel speaks of when it has nothing: the kinds the tab shows (iOS only on macOS).
-  const wants = { android: byHand || apps.android, ios: (byHand && window.deck.platform === 'darwin') || apps.ios }
   const shownDevice = deviceView.kind === 'device' ? deviceView.device.id : null
   const showRight = showClaude || showDevice
   const [deviceDrag, setDeviceDrag] = useState<number | null>(null)

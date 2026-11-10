@@ -19,7 +19,7 @@ interface DevicePanelProps {
   iosProblem: DeviceList['iosProblem']
   /** The kinds of device the tab shows, for what to say with none. */
   wants: { android: boolean; ios: boolean }
-  /** The devices aren't known yet: adb is starting, or they're still saying what they are. */
+  /** adb or idb-companion still finding their first devices the tab may show. */
   looking: boolean
   /** Unfolded: one flag for the window, so every tab's panel folds together. */
   open: boolean
@@ -194,11 +194,16 @@ function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, o
 /** The panel was asked for (or a simulator can't be shown) and there's nothing to show. */
 function Nothing({ problem, iosProblem, wants, looking }: { problem: DeviceList['problem']; iosProblem: DeviceList['iosProblem']; wants: { android: boolean; ios: boolean }; looking: boolean }) {
   if (looking) return <State busy title="Looking for devices…" />
-  // Nested, not `wants.ios && iosProblem === …`: TS can't narrow iosProblem past a check joined
-  // with `wants.ios` by &&, since wants.ios could be false while iosProblem still was that literal.
+  // Nested so each problem narrows.
   if (wants.ios) {
-    if (iosProblem === 'no-idb') return <Install title="Deck shows simulators with idb-companion:" command="brew install facebook/fb/idb-companion" />
-    if (iosProblem === 'old-idb') return <Install title="This idb-companion can't stream a simulator's screen. Update it:" command="brew upgrade idb-companion" />
+    if (iosProblem === 'no-idb') {
+      const command = 'brew install facebook/fb/idb-companion'
+      return <Install key={command} title="Deck shows simulators with idb-companion:" command={command} />
+    }
+    if (iosProblem === 'old-idb') {
+      const command = 'brew upgrade idb-companion'
+      return <Install key={command} title="This idb-companion can't stream a simulator's screen. Update it:" command={command} />
+    }
     if (iosProblem) return <State error title="Deck couldn't list the simulators" detail={iosProblem.error} />
   }
   if (wants.android) {
@@ -216,13 +221,18 @@ function Nothing({ problem, iosProblem, wants, looking }: { problem: DeviceList[
 /** What to run in a terminal, with Copy. */
 function Install({ title, command }: { title: string; command: string }) {
   const [copied, setCopied] = useState(false)
+  useEffect(() => {
+    if (!copied) return
+    const timer = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(timer)
+  }, [copied])
   return (
     <State title={title}>
       <code className="dp-command">{command}</code>
-      <button className="button" onClick={() => {
+      <button className="button" title="Copy the command" onMouseDown={keepFocus} onClick={() => {
         window.deck.app.copyText(command)
         setCopied(true)
-      }}>{copied ? 'Copied' : 'Copy'}</button>
+      }}>{copied ? '✓ Copied' : 'Copy'}</button>
     </State>
   )
 }

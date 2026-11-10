@@ -232,7 +232,7 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     expect(t.pushes()).toHaveLength(0)
   })
 
-  it('no idb, then installed: a focus starts the notifier and clears the stale hint at once', async () => {
+  it('no idb, then installed: a focus starts the notifier, and the stale hint stays up until it lists', async () => {
     const t = setup()
     h.booted = async () => true
     t.watch()
@@ -242,8 +242,9 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     t.focus()
     await tick()
     expect(notifiers()).toHaveLength(1)
-    // The stale "no-idb" hint is gone the instant the notifier starts, not ~2.5 s later when it lists.
-    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: null, pending: ['ios'] })
+    // The stale "no-idb" hint stays exactly as it was: no "Looking…" flash (or a shown simulator
+    // dropped) for the ~2.5 s the notifier takes to list. Only its own first list replaces it.
+    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: 'no-idb', pending: [] })
     notifiers()[0].fp.stdout.write(LINE)
     await tick()
     expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [] })

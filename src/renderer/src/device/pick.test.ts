@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { DeviceInfo, DeviceList } from '@shared/types'
-import { choosePanel, GONE_MS, menuOrder, panelView, stillLooking } from './pick'
+import type { DeviceInfo, DeviceList, DeviceProject } from '@shared/types'
+import { choosePanel, GONE_MS, menuOrder, panelRules, panelView, stillLooking } from './pick'
 
 const device = (id: string, name: string): DeviceInfo => ({ id, kind: id.startsWith('emulator:') ? 'emulator' : 'android', name, detail: '', state: 'ready' })
 const c66 = device('android:8d2e61a', 'C66')
@@ -146,5 +146,58 @@ describe('panelView', () => {
     expect(at9_9s.view).toEqual({ kind: 'device', device: s25, gone: true })
     const at10s = panelView({ kind: 'device', device: c66 }, [c66], at9_9s.held, 1000 + GONE_MS, pick)
     expect(at10s.view).toEqual({ kind: 'device', device: c66, gone: false })
+  })
+})
+
+describe('panelRules', () => {
+  const list = (over: Partial<DeviceList> = {}): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending: [], ...over })
+  // main (ipc.ts) masks a project's ios to false off macOS, even for an Xcode project: panelRules
+  // only ever sees that already-masked value, never the Xcode scan's own result.
+  const xcodeOffMac: DeviceProject = { root: '/ios-app', android: false, ios: false, picks: [] }
+  const iosApp: DeviceProject = { root: '/ios-app', android: false, ios: true, picks: [] }
+  const androidApp: DeviceProject = { root: '/android-app', android: true, ios: false, picks: [] }
+  const base = { tabDevice: undefined, tabHidden: undefined, byHand: false, list: null }
+
+  it("Windows: an Xcode project main already reports as ios:false wants nothing and isn't watched for one", () => {
+    const rules = panelRules({ ...base, project: xcodeOffMac, platform: 'win32' })
+    expect(rules.needed).toBe(false)
+    expect(rules.wants).toEqual({ android: false, ios: false })
+  })
+
+  it('Windows, by hand: wants Android only, never iOS (iOS only counts on macOS)', () => {
+    const rules = panelRules({ ...base, project: null, tabHidden: false, byHand: true, platform: 'win32' })
+    expect(rules.wants).toEqual({ android: true, ios: false })
+  })
+
+  it('macOS, by hand: wants both', () => {
+    const rules = panelRules({ ...base, project: null, tabHidden: false, byHand: true, platform: 'darwin' })
+    expect(rules.wants).toEqual({ android: true, ios: true })
+  })
+
+  it('a pending iOS source: looking only for a tab that may show iOS', () => {
+    const pendingIos = list({ pending: ['ios'] })
+    expect(panelRules({ ...base, project: androidApp, list: pendingIos, platform: 'darwin' }).looking).toBe(false)
+    expect(panelRules({ ...base, project: iosApp, list: pendingIos, platform: 'darwin' }).looking).toBe(true)
+  })
+
+  it('the hint opens only for an iOS project, and only for no-idb/old-idb', () => {
+    expect(panelRules({ ...base, project: iosApp, list: list({ iosProblem: 'no-idb' }), platform: 'darwin' }).iosHint).toBe(true)
+    expect(panelRules({ ...base, project: iosApp, list: list({ iosProblem: 'old-idb' }), platform: 'darwin' }).iosHint).toBe(true)
+    expect(panelRules({ ...base, project: iosApp, list: list({ iosProblem: { error: 'boom' } }), platform: 'darwin' }).iosHint).toBe(false)
+    expect(panelRules({ ...base, project: iosApp, list: list(), platform: 'darwin' }).iosHint).toBe(false)
+    expect(panelRules({ ...base, project: androidApp, list: list({ iosProblem: 'no-idb' }), platform: 'darwin' }).iosHint).toBe(false)
+  })
+
+  it('once needed, not looking, and the project is known: the choice is choosePanel\'s', () => {
+    const rules = panelRules({ ...base, project: androidApp, list: list({ devices: [c66] }), platform: 'darwin' })
+    expect(rules.choice).toEqual({ kind: 'device', device: c66 })
+  })
+
+  it('View → Device Panel hidden wins: no watch and nothing to choose, whatever else is true', () => {
+    // byHand is normally tabHidden === false, so this pair never happens in the app; passing them
+    // independently here proves tabHidden !== true is checked first, not merely checked at all.
+    const rules = panelRules({ project: iosApp, tabDevice: emu.id, tabHidden: true, byHand: true, list: list({ devices: [emu] }), platform: 'darwin' })
+    expect(rules.needed).toBe(false)
+    expect(rules.choice).toBeNull()
   })
 })

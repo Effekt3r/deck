@@ -147,10 +147,10 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
         ios = { pending: false, devices: [], problem: booted ? (found ? 'old-idb' : 'no-idb') : null }
         return update()
       }
-      // Clears a stale hint (no-idb, old-idb, an earlier error) at once: the notifier itself takes
-      // about 2.5 s to list, and ios otherwise wouldn't change until it does.
-      ios = { pending: true, devices: [], problem: null }
-      update()
+      // Keeps whatever ios already said (a stale hint, a shown simulator) until the notifier's own
+      // first list replaces it: resetting to pending here flashed "Looking…" (or dropped a shown
+      // device) for the ~2.5 s the notifier takes to list, on a focus re-look after idb-companion is
+      // installed while a tab already shows something.
       startSimulators(found.companion)
     } finally {
       if (idbLook === look) idbLook = null
@@ -198,7 +198,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     const cached = projects.get(folder)
     if (cached && now - cached.at < 30_000) return cached.value
     if (projects.size > 200) projects.clear()
-    const value = describeProject(folder, opts.home)
+    // Simulators never show off macOS: describeProject skips the Xcode scan there too, not just its result.
+    const value = describeProject(folder, opts.home, opts.platform === 'darwin')
     projects.set(folder, { at: now, value })
     // A later look at the same folder may already have replaced this entry (its own, newer value):
     // a failure must only clear the entry it caused, never a fresher one that's since taken its place.

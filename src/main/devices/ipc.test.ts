@@ -108,6 +108,12 @@ describe('registerDeviceIpc', () => {
     await expect(call(IPC.devicesProject, 'relative/app')).rejects.toThrow('No folder given.')
   })
 
+  it("reports no iOS app off macOS (this registration is 'linux'), even with an Xcode project", async () => {
+    const ios = makeRepo()
+    commit(ios, 'app', { 'App.xcodeproj/project.pbxproj': '// !$*UTF8*$!' })
+    expect(await call<DeviceProject>(IPC.devicesProject, ios)).toEqual({ root: ios, android: false, ios: false, picks: [] })
+  })
+
   it('devices:pick rejects a relative root, a non-string id, and an over-long id', async () => {
     await expect(call(IPC.devicesPick, 'relative/app', 'android:1')).rejects.toThrow('No project or device given.')
     await expect(call(IPC.devicesPick, '/abs/app', 42)).rejects.toThrow('No project or device given.')

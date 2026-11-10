@@ -74,6 +74,10 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
   const failures = useRef(0)
   const software = useRef(false)
   const lastKeyframe = useRef(-Infinity)
+  /** A held-back key frame request (the gap since the last ask hasn't passed yet): scheduled for when
+   *  it will, since sim-video (unlike scrcpy) sends nothing while the screen is still, so there may
+   *  be no next packet to recheck on. Cleared when a key frame arrives, or the view stops. */
+  const keyframeRetry = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The latest picture, kept for redraws and screenshots; each one before it is closed. */
   const frame = useRef<VideoFrame | null>(null)
   const timestamp = useRef(0)
@@ -150,9 +154,24 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
     failures.current = 0
     software.current = false
     setBroken(null)
+    const clearKeyframeRetry = () => {
+      if (keyframeRetry.current === null) return
+      clearTimeout(keyframeRetry.current)
+      keyframeRetry.current = null
+    }
     const keyframe = () => {
+      clearKeyframeRetry()
       lastKeyframe.current = performance.now()
       window.deck.devices.keyframe(deviceId)
+    }
+    /** Asks again once the gap since the last ask has passed: now, if it already has, else on a
+     *  timer — sim-video sends nothing while the screen is still, so the next packet (which a moving
+     *  scrcpy screen would have sent by then, to recheck on) can't be relied on. */
+    const keyframeSoon = () => {
+      const elapsed = performance.now() - lastKeyframe.current
+      if (elapsed >= KEYFRAME_GAP_MS) return keyframe()
+      clearKeyframeRetry()
+      keyframeRetry.current = setTimeout(keyframe, KEYFRAME_GAP_MS - elapsed)
     }
     /** A decoder failed (its error, or a frame it refused). A new one starts at the next key frame,
      *  in software from now on, since most such failures are the GPU decoder's; after MAX_FAILURES
@@ -209,16 +228,16 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
       const d = decoder.current
       if (!d || d.state !== 'configured') return
       if (waitKey.current && !event.key) {
-        // A key frame not asked for yet (one was, just before) is asked for once the gap has passed:
-        // frames keep coming (scrcpy repeats the last one every 100 ms) to check on.
-        if (behind.current && performance.now() - lastKeyframe.current >= KEYFRAME_GAP_MS) keyframe()
+        // A key frame not asked for yet (one was, just before) is asked for again once the gap has
+        // passed.
+        if (behind.current) keyframeSoon()
         return
       }
       if (d.decodeQueueSize > MAX_QUEUE) {
-        // Behind: skip to a key frame, asking for one now unless one was asked for just now.
+        // Behind: skip to a key frame, asking for one now, or once the gap since the last ask passes.
         waitKey.current = true
         behind.current = true
-        if (performance.now() - lastKeyframe.current >= KEYFRAME_GAP_MS) keyframe()
+        keyframeSoon()
         return
       }
       try {
@@ -230,6 +249,7 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
         if (event.key) {
           waitKey.current = false
           behind.current = false
+          clearKeyframeRetry()
         }
       } catch (err) {
         failed(err)
@@ -243,6 +263,7 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
       stopViewing()
       off()
       closeDecoder() // the last picture stays until the stream comes back
+      clearKeyframeRetry()
     }
   }, [deviceId, live, draw, closeDecoder, lift])
 
