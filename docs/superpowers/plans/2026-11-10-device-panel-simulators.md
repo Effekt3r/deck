@@ -2268,6 +2268,15 @@ Claude-Session: https://claude.ai/code/session_012TidnBvRYbxhSYqPzFZuph"
 
 ---
 
+**After review** (built in `50853a9`, `2d3067c`): the macOS test runs a fake SDK adb (never
+Homebrew's real one) and sets up in `beforeAll`; `ipc.watch.test.ts` pins the watch's races (focus
+during a look, watch/unwatch/watch in either order, dispose mid-look, the notifier failing before or
+after listing, the push order, Linux unchanged); the adb look has a token like idb's; when a look
+starts the notifier, iOS goes back to pending at once (the hint goes), and `update()` publishes once
+any list has gone out.
+
+---
+
 ### Task 9: A simulator's session
 
 One viewed simulator: its own companion and socket, describe for the screen's points, sim-video for
@@ -2782,8 +2791,9 @@ Claude-Session: https://claude.ai/code/session_012TidnBvRYbxhSYqPzFZuph"
 
 - [ ] **Step 1: The start by kind**
 
-In `ipc.ts`, import `import { simulatorIo, startSimulator } from './ios/simulator'` and
-`udidOf` from `./ios/simulators`, and make the streams' `start`:
+In `ipc.ts`, import `import { simulatorIo, startSimulator } from './ios/simulator'`,
+`udidOf` from `./ios/simulators` and `defaultSimulatorSet` from `./ios/tools`, and make the streams'
+`start`:
 
 ```ts
     start: async (id, events, signal) => {
@@ -3242,6 +3252,19 @@ In `docs/superpowers/specs/2026-11-03-device-panel-design.md`:
   `DECK_SIMULATOR_SET`); a rotated simulator in a landscape app is unchecked; an iOS project outside
   git is found only by an Xcode project in the folder itself;
 - **Build order:** step 2 built 2026-11-10.
+- **Facts from the reviews, for CLAUDE.md's device panel section:** `src/main/devices/ios/` is
+  un-ignored in `.gitignore` (Franco's global gitignore excludes every `ios` folder, as with
+  `build/`); main runs on Electron 45's Node 24.22 while CI runs Node 22, and `node:http2` differs
+  (`request()` on a closed session throws on 22, fails the stream a tick later on 24; a stream the
+  server ends while ours is open never closes until we end our side), so the `ios/` tests run on
+  both; on Node 22 a `kill()` in the same tick as a spawn that fails signals the whole process
+  group; the no-idb hint uses `pgrep -x launchd_sim` (the selected Xcode's `simctl` is a wrapper that
+  can run `xcodebuild -runFirstLaunch`); sim-video is found through Homebrew's `opt` link (a
+  `brew upgrade` deletes the versioned path); the notifier gets 20 s for its first list (doubling to
+  2 minutes after each miss) and SIGKILL 2 s after a SIGTERM it ignores.
+- **Known limits from the reviews:** a symlinked `.xcodeproj` (or a symlinked first-level folder)
+  isn't seen; idb-companion uninstalled while its notifier runs shows spawn's ENOENT, not the
+  install hint; a notifier that never lists is retried, with its 20 s wait doubling.
 
 - [ ] **Step 3: `CLAUDE.md`**
 
