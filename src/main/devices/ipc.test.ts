@@ -73,6 +73,7 @@ const devices = registerDeviceIpc({
   platform: 'linux',
   home: join(root, 'home'),
   env,
+  socketDir: join(root, 'sockets'),
   saveImage: (png) => saveImageImpl(png),
 })
 const { win, sent } = fakeWindow()

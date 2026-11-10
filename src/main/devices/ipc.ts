@@ -10,8 +10,11 @@ import { adbIo, startScrcpy } from './android/scrcpy'
 import { scrcpyServer } from './android/server'
 import { androidSession } from './android/session'
 import { AndroidTracker } from './android/tracker'
+import { SimulatorTracker } from './ios/simulators'
+import { anySimulatorBooted, findIdb, idbCandidates, type IdbTools } from './ios/tools'
 import { PicksStore } from './picks'
 import { describeProject } from './project'
+import { type AndroidState, combineLists, type IosState } from './registry'
 import { DeviceStreams } from './streams'
 
 export interface DeviceIpcOptions {
@@ -22,6 +25,9 @@ export interface DeviceIpcOptions {
   platform: Platform
   home: string
   env: NodeJS.ProcessEnv
+  /** Where simulators' companions put their sockets: short (macOS limits a Unix socket's path) and
+   *  this instance's own (`socketDirFor` in ios/simulator.ts, Task 9). */
+  socketDir: string
   /** Saves a PNG where Claude can read it (the clipboard card's folder); resolves with its path. */
   saveImage(png: Uint8Array): Promise<string>
 }
@@ -49,10 +55,20 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   let list: DeviceList | null = null
   let watchers = 0
   let tracker: AndroidTracker | null = null
+  let simulators: SimulatorTracker | null = null
   /** Looked for again at each start of watching, so an SDK installed since is found. */
   let adb: string | null = null
-  /** Bumped by every start and stop, so a slow look for adb can't start watching late. */
+  let idb: IdbTools | null = null
+  /** A look for adb under way: Deck coming to the front doesn't start a second one. */
+  let lookingForAdb = false
+  /** The look for idb under way, if any: a focus waits for it, a new watch's look takes it over. */
+  let idbLook: object | null = null
+  let android: AndroidState = { pending: true, devices: [], problem: null }
+  let ios: IosState = { pending: false, devices: [], problem: null }
+  /** Bumped by every start and stop, so a slow look can't start watching late. */
   let generation = 0
+  /** A custom device set, for checks (Xcode's own otherwise). */
+  const simulatorSet = opts.env.DECK_SIMULATOR_SET || null
 
   const send = (channel: string, ...args: unknown[]) => {
     if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, ...args)
@@ -72,23 +88,85 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     send: (id, event) => send(IPC.devicesStream, id, event),
   })
 
-  const startWatching = async () => {
-    const mine = ++generation
-    const found = await findAdb(adbCandidates(opts.env, opts.platform, opts.home))
-    if (mine !== generation) return
+  /** The list, once some source has answered: until then a tab waits rather than taking "no
+   *  devices" for an answer. */
+  const update = () => {
+    if (watchers > 0 && (!android.pending || !ios.pending)) publish(combineLists(android, ios))
+  }
+
+  const watchAndroid = async (mine: number) => {
+    lookingForAdb = true
+    const found = await findAdb(adbCandidates(opts.env, opts.platform, opts.home)).finally(() => {
+      lookingForAdb = false
+    })
+    if (mine !== generation || tracker) return
     adb = found
-    if (!found) return publish({ devices: [], problem: 'no-adb', iosProblem: null, pending: [] })
+    if (!found) {
+      android = { pending: false, devices: [], problem: 'no-adb' }
+      return update()
+    }
     tracker = new AndroidTracker({
       track: () => spawn(found, ['track-devices', '-l'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }),
       identify: async (serial) => parseIdentity(await runAdb(found, ['-s', serial, 'shell', IDENTITY_SCRIPT], 10_000)),
-      publish: (devices, error) => publish({ devices, problem: error && devices.length === 0 ? { error } : null, iosProblem: null, pending: [] }),
+      publish: (devices, error) => {
+        android = { pending: false, devices, problem: error && devices.length === 0 ? { error } : null }
+        update()
+      },
     })
     tracker.start()
+  }
+
+  /** Simulators: macOS only, with idb-companion. Without it (or with one too old for sim-video), a
+   *  booted simulator gets the panel to say what to install (asked with pgrep: cheap and starting
+   *  nothing, so a focus may ask too, and an idb-companion installed meanwhile changes the hint). */
+  const watchSimulators = async (mine: number, focus = false) => {
+    if (opts.platform !== 'darwin' || (focus && idbLook)) return
+    const look = (idbLook = {})
+    try {
+      const found = await findIdb(idbCandidates(opts.env))
+      if (mine !== generation || simulators) return
+      idb = found
+      if (!found?.simVideo) {
+        const booted = await anySimulatorBooted()
+        if (mine !== generation) return
+        ios = { pending: false, devices: [], problem: booted ? (found ? 'old-idb' : 'no-idb') : null }
+        return update()
+      }
+      startSimulators(found.companion)
+    } finally {
+      if (idbLook === look) idbLook = null
+    }
+  }
+
+  const startSimulators = (companion: string) => {
+    simulators = new SimulatorTracker({
+      notify: () => spawn(companion, ['--notify', 'stdout', '--only', 'simulator', ...(simulatorSet ? ['--device-set-path', simulatorSet] : [])], { stdio: ['ignore', 'pipe', 'pipe'] }),
+      publish: (devices) => {
+        ios = { pending: false, devices, problem: null }
+        update()
+      },
+      failed: (why, listed) => {
+        if (listed) return // this run had listed: its list stands until the notifier is back
+        ios = { pending: false, devices: [], problem: { error: why } }
+        update()
+      },
+    })
+    simulators.start()
+  }
+
+  const startWatching = () => {
+    const mine = ++generation
+    android = { pending: true, devices: [], problem: null }
+    ios = { pending: opts.platform === 'darwin', devices: [], problem: null }
+    void watchAndroid(mine)
+    void watchSimulators(mine)
   }
   const stopWatching = () => {
     generation++
     tracker?.stop()
     tracker = null
+    simulators?.stop()
+    simulators = null
     // No push: every tab that watched has already stopped listening (it calls off() before unwatch).
     list = null
   }
@@ -113,7 +191,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
 
   // ipcMain.on listeners check their arguments: a throw there becomes an error dialog.
   ipcMain.on(IPC.devicesWatch, () => {
-    if (++watchers === 1) void startWatching()
+    if (++watchers === 1) startWatching()
   })
   ipcMain.on(IPC.devicesUnwatch, () => {
     if (watchers > 0 && --watchers === 0) stopWatching()
@@ -179,10 +257,12 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       win = w
       w.webContents.on('did-start-loading', forget)
       w.webContents.on('render-process-gone', forget)
-      // adb installed while Deck runs (Android Studio, the platform tools): look again when Deck comes
-      // to the front, rather than only when a tab starts needing devices.
+      // adb or idb-companion installed while Deck runs: look again when Deck comes to the front,
+      // rather than only when a tab starts needing devices.
       w.on('focus', () => {
-        if (watchers > 0 && !tracker) void startWatching()
+        if (watchers === 0) return
+        if (!tracker && !lookingForAdb) void watchAndroid(generation)
+        if (opts.platform === 'darwin' && !simulators) void watchSimulators(generation, true)
       })
       // A locked screen or a sleeping Mac: nobody's watching, and the device may sleep. Waking with
       // a password fires resume, then unlock-screen: stream again only once unlocked.
@@ -205,6 +285,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       generation++
       tracker?.stop()
       tracker = null
+      simulators?.stop()
+      simulators = null
     },
   }
 }
