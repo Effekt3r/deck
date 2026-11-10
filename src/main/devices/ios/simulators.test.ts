@@ -128,7 +128,7 @@ describe('SimulatorTracker', () => {
       tracker.stop()
     })
 
-    it('a second start() while wedged on a throw is still a no-op', async () => {
+    it('a second start() while waiting to retry after a throw is still a no-op', async () => {
       const { tracker, failures, throwOnCall } = setup()
       throwOnCall(1)
       tracker.start()
@@ -332,6 +332,126 @@ describe('SimulatorTracker', () => {
       expect(failures).toHaveLength(0)
       expect(spawned[0].killed()).toBe(false)
       tracker.stop()
+    })
+
+    it('doubles after each deadline kill, capped at 2 min; a run that lists resets it to 20 s', async () => {
+      const { tracker, spawned } = setup()
+      tracker.start()
+      const schedule = [
+        { deadline: 20_000, restartWait: 1000 },
+        { deadline: 40_000, restartWait: 2000 },
+        { deadline: 80_000, restartWait: 4000 },
+        { deadline: 120_000, restartWait: 8000 }, // capped: would double to 160 s
+        { deadline: 120_000, restartWait: 16_000 },
+      ]
+      for (let i = 0; i < schedule.length; i++) {
+        const { deadline, restartWait } = schedule[i]
+        await vi.advanceTimersByTimeAsync(deadline - 1)
+        expect(spawned[i].killed()).toBe(false) // not yet, one ms early
+        await vi.advanceTimersByTimeAsync(1) // this run's own deadline fires right on time
+        expect(spawned[i].killed()).toBe(true)
+        await vi.advanceTimersByTimeAsync(restartWait)
+        expect(spawned).toHaveLength(i + 2)
+      }
+      // The newest run lists: the deadline resets to 20 s for whatever comes after it, not 120 s.
+      const listedIndex = schedule.length
+      spawned[listedIndex].stdout.write(line(sim('A', 'iPhone 17', 'Booted')))
+      spawned[listedIndex].exit(1)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(30_000) // its own restart wait, capped by now
+      expect(spawned).toHaveLength(listedIndex + 2)
+      await vi.advanceTimersByTimeAsync(19_999)
+      expect(spawned.at(-1)!.killed()).toBe(false) // back to a 20 s deadline, not 120 s
+      await vi.advanceTimersByTimeAsync(1)
+      expect(spawned.at(-1)!.killed()).toBe(true)
+      tracker.stop()
+    })
+  })
+
+  describe('a notifier that ignores SIGTERM (idb_companion handles it on a dispatch queue)', () => {
+    it('is escalated to SIGKILL 2 s after the deadline kill', async () => {
+      const spawned: FakeProcess[] = []
+      const closed: boolean[] = []
+      const tracker = new SimulatorTracker({
+        notify: () => {
+          const p = fakeProcess({ ignoreSigterm: true })
+          const i = spawned.length
+          closed.push(false)
+          p.proc.on('close', () => {
+            closed[i] = true
+          })
+          spawned.push(p)
+          return p.proc
+        },
+        publish: () => {},
+        failed: () => {},
+      })
+      tracker.start()
+      await vi.advanceTimersByTimeAsync(20_000) // the deadline fires, sends SIGTERM (ignored)
+      expect(closed[0]).toBe(false)
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(closed[0]).toBe(false) // still not, one ms early
+      await vi.advanceTimersByTimeAsync(1) // 2 s after the deadline's kill(): SIGKILL
+      // A setImmediate scheduled from inside a setTimeout that advanceTimersByTimeAsync just fired
+      // isn't flushed by a further (0) advance, only a non-zero one.
+      await vi.advanceTimersByTimeAsync(1)
+      expect(closed[0]).toBe(true)
+      tracker.stop()
+    })
+
+    it('is escalated to SIGKILL 2 s after stop()', async () => {
+      const spawned: FakeProcess[] = []
+      const closed: boolean[] = []
+      const tracker = new SimulatorTracker({
+        notify: () => {
+          const p = fakeProcess({ ignoreSigterm: true })
+          closed.push(false)
+          p.proc.on('close', () => {
+            closed[0] = true
+          })
+          spawned.push(p)
+          return p.proc
+        },
+        publish: () => {},
+        failed: () => {},
+      })
+      tracker.start()
+      spawned[0].stdout.write(line(sim('A', 'iPhone 17', 'Booted')))
+      tracker.stop() // sends SIGTERM (ignored); must not throw, and must still schedule the SIGKILL
+      expect(closed[0]).toBe(false)
+      await vi.advanceTimersByTimeAsync(1999)
+      expect(closed[0]).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      // A setImmediate scheduled from inside a setTimeout that advanceTimersByTimeAsync just fired
+      // isn't flushed by a further (0) advance, only a non-zero one.
+      await vi.advanceTimersByTimeAsync(1)
+      expect(closed[0]).toBe(true)
+    })
+
+    it('does not pile up: a 10 min run of nothing-but-hangs leaves nothing alive after stop()', async () => {
+      // Mirrors the reviewer's probe (D1), which found 15 notifiers still alive this way before the
+      // fix: with no escalation, kill() alone never stops a notifier stuck ignoring SIGTERM.
+      const closed: boolean[] = []
+      let spawnCount = 0
+      const tracker = new SimulatorTracker({
+        notify: () => {
+          const p = fakeProcess({ ignoreSigterm: true })
+          const i = spawnCount++
+          closed.push(false)
+          p.proc.on('close', () => {
+            closed[i] = true
+          })
+          return p.proc
+        },
+        publish: () => {},
+        failed: () => {},
+      })
+      tracker.start()
+      await vi.advanceTimersByTimeAsync(10 * 60_000)
+      tracker.stop()
+      await vi.advanceTimersByTimeAsync(60_000) // grace for the last SIGKILL to land
+      expect(spawnCount).toBeGreaterThan(1) // several hang/restart cycles happened
+      expect(closed.filter((c) => !c)).toHaveLength(0) // none left running
     })
   })
 

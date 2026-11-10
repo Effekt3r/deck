@@ -53,25 +53,20 @@ function runTool(cmd: string, args: string[]): Promise<string> {
   })
 }
 
-export interface SimulatorBootedDeps {
+export interface AnySimulatorBootedDeps {
   run(cmd: string, args: string[]): Promise<string>
-  exists(path: string): Promise<boolean>
 }
 
-/** Whether any simulator is booted, asked without idb (to say idb-companion is missing). Runs
- *  `/usr/bin/xcode-select -p` by absolute path for the developer folder, then runs `simctl` directly
- *  at `<developer dir>/usr/bin/simctl` if it's there. Never `xcrun`: with no developer folder
- *  selected, it offers to install the command line tools instead of just failing. */
-export async function simulatorBooted(
-  deps: SimulatorBootedDeps = { run: runTool, exists: (path) => stat(path).then(() => true, () => false) },
-): Promise<boolean> {
+/** Whether any simulator is booted, asked without idb (to say idb-companion is missing). Each booted
+ *  simulator runs one `launchd_sim`, so `pgrep -x launchd_sim` finds it without starting anything:
+ *  unlike the selected Xcode's `usr/bin/simctl` (a bash wrapper that can run
+ *  `xcodebuild -runFirstLaunch` after an Xcode update), which a background hint must never trigger.
+ *  Counts any device set, which is fine for a hint. True when pgrep exits 0 with output; false
+ *  otherwise (exit 1: no match; anything else: unreadable). */
+export async function anySimulatorBooted(deps: AnySimulatorBootedDeps = { run: runTool }): Promise<boolean> {
   try {
-    const developerDir = (await deps.run('/usr/bin/xcode-select', ['-p'])).trim()
-    const simctl = join(developerDir, 'usr', 'bin', 'simctl')
-    if (!(await deps.exists(simctl))) return false
-    const out = await deps.run(simctl, ['list', 'devices', 'booted', '-j'])
-    const devices = (JSON.parse(out) as { devices?: Record<string, { state?: string }[]> }).devices ?? {}
-    return Object.values(devices).some((list) => Array.isArray(list) && list.some((d) => d?.state === 'Booted'))
+    const out = await deps.run('/usr/bin/pgrep', ['-x', 'launchd_sim'])
+    return out.trim().length > 0
   } catch {
     return false
   }

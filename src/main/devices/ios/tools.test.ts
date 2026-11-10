@@ -2,7 +2,7 @@ import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, w
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { findIdb, idbCandidates, simulatorBooted } from './tools'
+import { anySimulatorBooted, findIdb, idbCandidates } from './tools'
 
 // realpath'd: findIdb resolves the symlink, and on macOS tmpdir() is itself under /var, a symlink
 // to /private/var, so the raw mkdtemp path wouldn't match what realpath resolves to (same fix as
@@ -77,47 +77,30 @@ describe('findIdb', () => {
   })
 })
 
-describe('simulatorBooted', () => {
-  function deps(opts: { xcodeSelect?: string | Error; exists?: boolean; simctl?: string | Error }) {
-    const calls: string[] = []
-    return {
-      calls,
-      run: async (cmd: string) => {
-        calls.push(cmd)
-        if (cmd === '/usr/bin/xcode-select') {
-          if (opts.xcodeSelect instanceof Error) throw opts.xcodeSelect
-          return opts.xcodeSelect ?? '/Applications/Xcode.app\n'
-        }
-        if (opts.simctl instanceof Error) throw opts.simctl
-        return opts.simctl ?? ''
-      },
-      exists: async () => opts.exists ?? true,
+describe('anySimulatorBooted', () => {
+  it('says true when pgrep -x launchd_sim finds one', async () => {
+    const calls: [string, string[]][] = []
+    const run = async (cmd: string, args: string[]) => {
+      calls.push([cmd, args])
+      return '1234\n'
     }
-  }
-
-  it('says false with no developer folder, even though simctl would say booted (no xcrun to fall back to)', async () => {
-    const booted = JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ state: 'Booted' }] } })
-    const d = deps({ xcodeSelect: new Error('no developer folder'), simctl: booted })
-    expect(await simulatorBooted(d)).toBe(false)
-    expect(d.calls).toEqual(['/usr/bin/xcode-select']) // never reaches simctl
+    expect(await anySimulatorBooted({ run })).toBe(true)
+    expect(calls).toEqual([['/usr/bin/pgrep', ['-x', 'launchd_sim']]])
   })
 
-  it('says false when simctl is missing at the developer folder, never running xcrun', async () => {
-    const d = deps({ exists: false })
-    expect(await simulatorBooted(d)).toBe(false)
-    expect(d.calls).toEqual(['/usr/bin/xcode-select'])
-    expect(d.calls).not.toContain('xcrun')
+  it('says false when pgrep exits 1 (no match), or fails outright', async () => {
+    const noMatch = async () => {
+      throw Object.assign(new Error('Command failed'), { code: 1 })
+    }
+    expect(await anySimulatorBooted({ run: noMatch })).toBe(false)
+    const broken = async () => {
+      throw new Error('pgrep: not found')
+    }
+    expect(await anySimulatorBooted({ run: broken })).toBe(false)
   })
 
-  it('runs simctl directly at <developer dir>/usr/bin/simctl', async () => {
-    const booted = JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ state: 'Booted' }] } })
-    const d = deps({ xcodeSelect: '/Applications/Xcode.app\n', simctl: booted })
-    expect(await simulatorBooted(d)).toBe(true)
-    expect(d.calls).toEqual(['/usr/bin/xcode-select', join('/Applications/Xcode.app', 'usr', 'bin', 'simctl')])
-  })
-
-  it('says false for no booted devices, or unparseable JSON', async () => {
-    expect(await simulatorBooted(deps({ xcodeSelect: '/x\n', simctl: JSON.stringify({ devices: {} }) }))).toBe(false)
-    expect(await simulatorBooted(deps({ xcodeSelect: '/x\n', simctl: 'not json' }))).toBe(false)
+  it('says false even if pgrep somehow exits 0 with no output', async () => {
+    expect(await anySimulatorBooted({ run: async () => '' })).toBe(false)
+    expect(await anySimulatorBooted({ run: async () => '\n' })).toBe(false)
   })
 })

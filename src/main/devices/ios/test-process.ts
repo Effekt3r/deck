@@ -13,7 +13,14 @@ export interface FakeProcess {
   exit(code?: number | null): void
 }
 
-export function fakeProcess(): FakeProcess {
+export interface FakeProcessOptions {
+  /** kill() with no signal, or SIGTERM, does nothing: only kill('SIGKILL') ends it. Simulates
+   *  idb_companion, which handles SIGTERM itself on a dispatch queue, so a run hung on it may never
+   *  act on one. */
+  ignoreSigterm?: boolean
+}
+
+export function fakeProcess(options: FakeProcessOptions = {}): FakeProcess {
   const emitter = new EventEmitter()
   const stdin = new PassThrough()
   const stdout = new PassThrough()
@@ -34,9 +41,10 @@ export function fakeProcess(): FakeProcess {
     stdin,
     stdout,
     stderr,
-    kill: () => {
+    kill: (signal?: NodeJS.Signals | number) => {
       killed = true
-      exit(null, 'SIGTERM')
+      if (options.ignoreSigterm && signal !== 'SIGKILL') return true
+      exit(null, typeof signal === 'string' ? signal : 'SIGTERM')
       return true
     },
   }) as unknown as ChildProcess
