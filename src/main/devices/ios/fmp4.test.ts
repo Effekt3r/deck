@@ -25,6 +25,14 @@ describe('Fmp4Reader', () => {
     }
   })
 
+  it('reads the same config from a real High-profile avcC with its ISO/IEC 14496-15 extension bytes', () => {
+    // chroma_format_idc, bit_depth_luma_minus8, bit_depth_chroma_minus8 (each with reserved bits
+    // set, as a real encoder writes), then numOfSequenceParameterSetExt = 0.
+    const extra = Buffer.from([0xfd, 0xf8, 0xf8, 0x00])
+    const events = new Fmp4Reader().push(Buffer.concat([initSegment(604, 1312, 4, extra), fragment([nal(0x65)])]))
+    expect(events[0]).toEqual(expected[0])
+  })
+
   it('takes 2-byte NAL lengths, several NALs per picture, and a second init segment', () => {
     const reader = new Fmp4Reader()
     const events = reader.push(Buffer.concat([initSegment(604, 1312, 2), fragment([nal(0x06, 3), nal(0x65)], 2), initSegment(1312, 604)]))
@@ -35,6 +43,8 @@ describe('Fmp4Reader', () => {
   it('refuses a picture before the init segment, a box out of bounds, and broken pictures', () => {
     expect(() => new Fmp4Reader().push(fragment([nal(0x65)]))).toThrow('before its configuration')
     expect(() => new Fmp4Reader().push(Buffer.concat([u32(4), Buffer.from('mdat')]))).toThrow('of 4 bytes')
+    // size 1 means a 64-bit largesize follows, in real ISO BMFF; sim-video never writes one.
+    expect(() => new Fmp4Reader().push(Buffer.concat([u32(1), Buffer.from('mdat')]))).toThrow('of 1 bytes')
     expect(() => new Fmp4Reader().push(Buffer.concat([u32(MAX_BOX + 1), Buffer.from('mdat')]))).toThrow('bytes')
     const bad = Buffer.concat([initSegment(), box('mdat', u32(50), nal(0x65))]) // a length past the end
     expect(() => new Fmp4Reader().push(bad)).toThrow('broken picture')

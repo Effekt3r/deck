@@ -34,9 +34,11 @@ export const PPS = Buffer.from([0x68, 0xeb, 0xe3, 0xcb])
 export const nal = (header: number, n = 6) => Buffer.from([header, ...Array<number>(n - 1).fill(0xab)])
 
 /** The init segment sim-video writes: ftyp, then moov › trak › mdia › minf › stbl › stsd › avc1
- *  (`width`×`height`) › avcC with one SPS and one PPS and `lengthSize`-byte NAL lengths. */
-export function initSegment(width = 604, height = 1312, lengthSize = 4): Buffer {
-  const avcC = box('avcC', Buffer.from([1, 0x64, 0x00, 0x1f, 0xfc | (lengthSize - 1), 0xe1]), u16(SPS.length), SPS, Buffer.from([1]), u16(PPS.length), PPS)
+ *  (`width`×`height`) › avcC with one SPS and one PPS, `lengthSize`-byte NAL lengths, and `extra`
+ *  bytes appended (a High-profile avcC's ISO/IEC 14496-15 extension: chroma format, luma and
+ *  chroma bit depth, and further SPSes — none here). */
+export function initSegment(width = 604, height = 1312, lengthSize = 4, extra: Buffer = Buffer.alloc(0)): Buffer {
+  const avcC = box('avcC', Buffer.from([1, 0x64, 0x00, 0x1f, 0xfc | (lengthSize - 1), 0xe1]), u16(SPS.length), SPS, Buffer.from([1]), u16(PPS.length), PPS, extra)
   const fields = Buffer.alloc(78) // a visual sample entry's fields, width and height at 24 and 26
   fields.writeUInt16BE(width, 24)
   fields.writeUInt16BE(height, 26)

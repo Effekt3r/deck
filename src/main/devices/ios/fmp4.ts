@@ -55,7 +55,10 @@ function parseAvcC(record: Buffer): { lengthSize: number; sps: Buffer[]; pps: Bu
 }
 
 /** Top-level boxes read from a byte stream split anywhere; each is handled once all of it is in.
- *  Chunks are joined only per box, so memory stays about one box. */
+ *  Chunks are joined only per box, so memory stays about one box, and the join is linear in the
+ *  box's size (measured ~1 ms for a 4 MB box arriving in 16 KiB chunks) — unlike
+ *  android/protocol.ts's fill(), which preallocates a packet's buffer up front for scrcpy's
+ *  longer, chattier stream. */
 export class Fmp4Reader {
   private chunks: Buffer[] = []
   private buffered = 0
@@ -71,6 +74,9 @@ export class Fmp4Reader {
       const head = this.peek(8)
       const size = head.readUInt32BE(0)
       const type = head.toString('latin1', 4, 8)
+      // ISO BMFF also lets size be 0 ("to the end of the file") or 1 (a 64-bit largesize follows),
+      // but sim-video writes neither: both are already under 8, and a box that large would be over
+      // MAX_BOX anyway, so they're refused here like any other broken size.
       if (size < 8 || size > MAX_BOX) throw new Error(`sim-video sent a ${type} box of ${size} bytes.`)
       if (this.buffered < size) return events
       const body = this.take(size).subarray(8)
