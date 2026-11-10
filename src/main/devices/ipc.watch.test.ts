@@ -242,8 +242,9 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     t.focus()
     await tick()
     expect(notifiers()).toHaveLength(1)
-    // The stale "no-idb" hint stays exactly as it was: no "Looking…" flash (or a shown simulator
-    // dropped) for the ~2.5 s the notifier takes to list. Only its own first list replaces it.
+    // The stale "no-idb" hint stays exactly as it was: no "Looking…" flash — which would drop, say,
+    // an Android device already shown in a tab that also wants iOS — for the ~2.5 s the notifier
+    // takes to list. Only its own first list replaces it.
     expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: 'no-idb', pending: [] })
     notifiers()[0].fp.stdout.write(LINE)
     await tick()

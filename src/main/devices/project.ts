@@ -106,7 +106,7 @@ export async function isIosApp(root: string): Promise<boolean> {
  *  unpacked project, no `.git`), only when the folder is itself a Gradle build. Outside git, an
  *  Xcode project counts only in the folder itself. `wantIos` false (ipc.ts, off macOS: simulators
  *  never show there) skips the Xcode scan too, not just its result: always `ios: false`. */
-export async function describeProject(folder: string, home: string, wantIos = true): Promise<{ root: string; android: boolean; ios: boolean }> {
+export async function describeProject(folder: string, home: string, wantIos: boolean): Promise<{ root: string; android: boolean; ios: boolean }> {
   const { root, git } = await findRoot(folder)
   const realHome = await realpath(home).catch(() => resolve(home))
   if (pathKey(resolve(root)) === pathKey(realHome)) return { root, android: false, ios: false }

@@ -69,17 +69,28 @@ export interface PanelInputs {
   project: DeviceProject | null
   tabDevice: string | undefined
   tabHidden: boolean | undefined
-  byHand: boolean
   list: DeviceList | null
   platform: Platform
 }
 
-/** What App.tsx needs back: whether main should be asked to watch for devices, the project's own
- *  apps, what the panel speaks of when it has nothing, whether a kind the tab may show is still
- *  being looked for, the device to show (a choice, or none), and whether a booted simulator Deck
- *  can't show should open the panel anyway. */
+/** Whether main should be asked to watch for devices: outside an app the panel shows only when asked
+ *  for by hand (`tabHidden === false`) — the project's picks are remembered for then, but don't open
+ *  the panel in every new tab there — hidden by hand (`tabHidden === true`) wins over everything
+ *  else. Takes `PanelInputs` minus `list` so a caller can read this before `useDeviceList` gives one:
+ *  the type itself says this never reads the list that depends on its answer. */
+export function devicesNeeded({ project, tabDevice, tabHidden }: Omit<PanelInputs, 'list'>): boolean {
+  const byHand = tabHidden === false
+  return tabHidden !== true && (byHand || project?.android === true || project?.ios === true || Boolean(tabDevice))
+}
+
+/** What App.tsx needs back from `panelRules`: whether main should be asked to watch for devices
+ *  (`devicesNeeded` again, now that the list it gates is known), the panel was asked for by hand, the
+ *  project's own apps, what the panel speaks of when it has nothing, whether a kind the tab may show
+ *  is still being looked for, the device to show (a choice, or none), and whether a booted simulator
+ *  Deck can't show should open the panel anyway. */
 export interface PanelRules {
   needed: boolean
+  byHand: boolean
   apps: { android: boolean; ios: boolean }
   wants: { android: boolean; ios: boolean }
   looking: boolean
@@ -87,20 +98,17 @@ export interface PanelRules {
   iosHint: boolean
 }
 
-/** The device panel's rules, outside React: App.tsx calls this (`list` is useDeviceList's, read
- *  after it, since `needed` decides whether to ask it for one — `needed`'s own formula never looks
- *  at `list`, so a first call with `list: null` to open that hook's gate agrees with a second, once
- *  it answers) and useHeldView (a hook, so it can't live in here) for the device itself. Hidden by
- *  hand (`tabHidden === true`) wins over everything else. Outside an app the panel shows only when
- *  asked for: the project's picks are remembered for then, but don't open the panel in every new tab
- *  there. The choice is null — nothing to choose from yet — while the panel isn't needed, the list
- *  hasn't answered, it's still looking (a kind the tab may show hasn't had its first list: "not
- *  needed any more" would otherwise show the old list's choice), or neither the project nor byHand is
- *  known yet. A booted simulator Deck can't show (no idb-companion, or one without sim-video) opens
- *  an iOS project's panel to say what to install. */
-export function panelRules({ project, tabDevice, tabHidden, byHand, list, platform }: PanelInputs): PanelRules {
+/** The device panel's rules once the list is known, outside React: App.tsx calls `devicesNeeded`
+ *  before `useDeviceList`, then this (`list` is what it answered) and useHeldView (a hook, so it
+ *  can't live in here) for the device itself. The choice is null — nothing to choose from yet — while
+ *  the panel isn't needed, the list hasn't answered, it's still looking (a kind the tab may show
+ *  hasn't had its first list: "not needed any more" would otherwise show the old list's choice), or
+ *  neither the project nor byHand is known yet. A booted simulator Deck can't show (no idb-companion,
+ *  or one without sim-video) opens an iOS project's panel to say what to install. */
+export function panelRules({ project, tabDevice, tabHidden, list, platform }: PanelInputs): PanelRules {
+  const byHand = tabHidden === false
   const apps = { android: project?.android ?? false, ios: project?.ios ?? false }
-  const needed = tabHidden !== true && (byHand || apps.android || apps.ios || Boolean(tabDevice))
+  const needed = devicesNeeded({ project, tabDevice, tabHidden, platform })
   const looking = stillLooking(list, project, byHand, tabDevice)
   const choice = needed && list && !looking && (project || byHand)
     ? choosePanel({ tab: tabDevice, project: project?.picks ?? [], ...apps, byHand, devices: list.devices })
@@ -110,7 +118,7 @@ export function panelRules({ project, tabDevice, tabHidden, byHand, list, platfo
   const iosHint = apps.ios && (list?.iosProblem === 'no-idb' || list?.iosProblem === 'old-idb')
   // What the panel speaks of when it has nothing: the kinds the tab shows (iOS only on macOS).
   const wants = { android: byHand || apps.android, ios: (byHand && platform === 'darwin') || apps.ios }
-  return { needed, apps, wants, looking, choice, iosHint }
+  return { needed, byHand, apps, wants, looking, choice, iosHint }
 }
 
 /** How long a device that went away keeps its place. */

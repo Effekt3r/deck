@@ -151,26 +151,26 @@ describe('panelView', () => {
 
 describe('panelRules', () => {
   const list = (over: Partial<DeviceList> = {}): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending: [], ...over })
-  // main (ipc.ts) masks a project's ios to false off macOS, even for an Xcode project: panelRules
-  // only ever sees that already-masked value, never the Xcode scan's own result.
-  const xcodeOffMac: DeviceProject = { root: '/ios-app', android: false, ios: false, picks: [] }
   const iosApp: DeviceProject = { root: '/ios-app', android: false, ios: true, picks: [] }
   const androidApp: DeviceProject = { root: '/android-app', android: true, ios: false, picks: [] }
-  const base = { tabDevice: undefined, tabHidden: undefined, byHand: false, list: null }
+  const base = { tabDevice: undefined, tabHidden: undefined, list: null }
 
-  it("Windows: an Xcode project main already reports as ios:false wants nothing and isn't watched for one", () => {
-    const rules = panelRules({ ...base, project: xcodeOffMac, platform: 'win32' })
+  it('nothing to watch for: no apps, no pick, not asked for by hand', () => {
+    const plain: DeviceProject = { root: '/plain', android: false, ios: false, picks: [] }
+    const rules = panelRules({ ...base, project: plain, platform: 'win32' })
     expect(rules.needed).toBe(false)
-    expect(rules.wants).toEqual({ android: false, ios: false })
+    expect(rules.choice).toBeNull()
   })
 
-  it('Windows, by hand: wants Android only, never iOS (iOS only counts on macOS)', () => {
-    const rules = panelRules({ ...base, project: null, tabHidden: false, byHand: true, platform: 'win32' })
+  it('Windows, by hand (tabHidden === false): wants Android only, never iOS (iOS only counts on macOS)', () => {
+    const rules = panelRules({ ...base, project: null, tabHidden: false, platform: 'win32' })
+    expect(rules.byHand).toBe(true)
     expect(rules.wants).toEqual({ android: true, ios: false })
   })
 
-  it('macOS, by hand: wants both', () => {
-    const rules = panelRules({ ...base, project: null, tabHidden: false, byHand: true, platform: 'darwin' })
+  it('macOS, by hand (tabHidden === false): wants both', () => {
+    const rules = panelRules({ ...base, project: null, tabHidden: false, platform: 'darwin' })
+    expect(rules.byHand).toBe(true)
     expect(rules.wants).toEqual({ android: true, ios: true })
   })
 
@@ -178,6 +178,12 @@ describe('panelRules', () => {
     const pendingIos = list({ pending: ['ios'] })
     expect(panelRules({ ...base, project: androidApp, list: pendingIos, platform: 'darwin' }).looking).toBe(false)
     expect(panelRules({ ...base, project: iosApp, list: pendingIos, platform: 'darwin' }).looking).toBe(true)
+  })
+
+  it('choice stays null while a kind the tab may show is still pending, even with a device already listed', () => {
+    const rules = panelRules({ ...base, project: androidApp, list: list({ devices: [c66], pending: ['android'] }), platform: 'darwin' })
+    expect(rules.looking).toBe(true)
+    expect(rules.choice).toBeNull()
   })
 
   it('the hint opens only for an iOS project, and only for no-idb/old-idb', () => {
@@ -193,11 +199,10 @@ describe('panelRules', () => {
     expect(rules.choice).toEqual({ kind: 'device', device: c66 })
   })
 
-  it('View → Device Panel hidden wins: no watch and nothing to choose, whatever else is true', () => {
-    // byHand is normally tabHidden === false, so this pair never happens in the app; passing them
-    // independently here proves tabHidden !== true is checked first, not merely checked at all.
-    const rules = panelRules({ project: iosApp, tabDevice: emu.id, tabHidden: true, byHand: true, list: list({ devices: [emu] }), platform: 'darwin' })
+  it('View → Device Panel hidden (tabHidden === true) wins: no watch, no byHand, nothing to choose, whatever else is true', () => {
+    const rules = panelRules({ project: iosApp, tabDevice: emu.id, tabHidden: true, list: list({ devices: [emu] }), platform: 'darwin' })
     expect(rules.needed).toBe(false)
+    expect(rules.byHand).toBe(false)
     expect(rules.choice).toBeNull()
   })
 })

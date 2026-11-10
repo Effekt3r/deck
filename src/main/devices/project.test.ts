@@ -137,14 +137,14 @@ describe('describeProject', () => {
     const tree = join(makeDir('deck-dev-wt-'), 'task')
     run(repo, 'worktree', 'add', '-q', '-b', 'task', tree)
     const home = makeDir('deck-dev-home-')
-    expect(await describeProject(tree, home)).toEqual({ root: repo, android: true, ios: false })
+    expect(await describeProject(tree, home, true)).toEqual({ root: repo, android: true, ios: false })
   })
 
   it("does not scan a plain folder that isn't itself a Gradle build", async () => {
     const dir = makeDir('deck-dev-')
     touch(join(dir, 'app', 'src', 'main', 'AndroidManifest.xml'))
     const home = makeDir('deck-dev-home-')
-    expect(await describeProject(dir, home)).toEqual({ root: dir, android: false, ios: false })
+    expect(await describeProject(dir, home, true)).toEqual({ root: dir, android: false, ios: false })
   })
 
   it('scans a plain folder that is itself a Gradle build, directly or through android/', async () => {
@@ -152,18 +152,18 @@ describe('describeProject', () => {
     touch(join(dir, 'settings.gradle'))
     touch(join(dir, 'app', 'src', 'main', 'AndroidManifest.xml'))
     const home = makeDir('deck-dev-home-')
-    expect(await describeProject(dir, home)).toEqual({ root: dir, android: true, ios: false })
+    expect(await describeProject(dir, home, true)).toEqual({ root: dir, android: true, ios: false })
 
     const flutter = makeDir('deck-dev-')
     touch(join(flutter, 'Android', 'settings.gradle'))
     touch(join(flutter, 'Android', 'app', 'src', 'main', 'AndroidManifest.xml'))
-    expect(await describeProject(flutter, home)).toEqual({ root: flutter, android: true, ios: false })
+    expect(await describeProject(flutter, home, true)).toEqual({ root: flutter, android: true, ios: false })
   })
 
   it('does not scan the home folder, even inside a repo', async () => {
     const repo = makeRepo()
     commit(repo, 'app', { 'app/src/main/AndroidManifest.xml': '<manifest/>' })
-    expect(await describeProject(repo, repo)).toEqual({ root: repo, android: false, ios: false })
+    expect(await describeProject(repo, repo, true)).toEqual({ root: repo, android: false, ios: false })
   })
 
   it('resolves the home folder through a symlink before comparing', async () => {
@@ -171,29 +171,29 @@ describe('describeProject', () => {
     commit(repo, 'app', { 'app/src/main/AndroidManifest.xml': '<manifest/>' })
     const link = join(makeDir('deck-dev-links-'), 'home-link')
     symlinkSync(repo, link, 'junction')
-    expect(await describeProject(repo, link)).toEqual({ root: repo, android: false, ios: false })
+    expect(await describeProject(repo, link, true)).toEqual({ root: repo, android: false, ios: false })
   })
 
   it('an Xcode project in a repository is an iOS app, and Flutter is both', async () => {
     const home = makeDir('deck-dev-home-')
     const ios = makeRepo()
     commit(ios, 'app', { 'App.xcodeproj/project.pbxproj': '// !$*UTF8*$!' })
-    expect(await describeProject(ios, home)).toEqual({ root: ios, android: false, ios: true })
+    expect(await describeProject(ios, home, true)).toEqual({ root: ios, android: false, ios: true })
     const flutter = makeRepo()
     commit(flutter, 'app', {
       'android/app/src/main/AndroidManifest.xml': '<manifest/>',
       'ios/Runner.xcworkspace/contents.xcworkspacedata': '<Workspace/>',
     })
-    expect(await describeProject(flutter, home)).toEqual({ root: flutter, android: true, ios: true })
+    expect(await describeProject(flutter, home, true)).toEqual({ root: flutter, android: true, ios: true })
   })
 
   it('outside git, only the folder itself is looked at for an Xcode project', async () => {
     const home = makeDir('deck-dev-home-')
     const copied = makeDir('deck-dev-')
     mkdirSync(join(copied, 'App.xcworkspace'))
-    expect(await describeProject(copied, home)).toEqual({ root: copied, android: false, ios: true })
+    expect(await describeProject(copied, home, true)).toEqual({ root: copied, android: false, ios: true })
     const plain = makeDir('deck-dev-')
     mkdirSync(join(plain, 'some', 'App.xcodeproj'), { recursive: true })
-    expect(await describeProject(plain, home)).toEqual({ root: plain, android: false, ios: false })
+    expect(await describeProject(plain, home, true)).toEqual({ root: plain, android: false, ios: false })
   })
 })

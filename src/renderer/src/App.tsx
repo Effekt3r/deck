@@ -6,7 +6,7 @@ import { useClaudeSession } from './claude/useClaude'
 import { ClipboardCard } from './clipboard/ClipboardCard'
 import { useClipboardItem } from './clipboard/useClipboardItem'
 import { DevicePanel } from './device/DevicePanel'
-import { menuOrder, panelRules } from './device/pick'
+import { devicesNeeded, menuOrder, panelRules } from './device/pick'
 import { useDeviceList, useDeviceProject, useHeldView } from './device/useDevices'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
@@ -315,16 +315,12 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const movedOn = deviceRoot !== null && deviceRootSeen.current !== null && deviceRoot !== deviceRootSeen.current
   const tabDevice = movedOn ? undefined : tab.device
   const tabHidden = movedOn ? undefined : tab.deviceHidden
-  const byHand = tabHidden === false
   const platform = window.deck.platform
-  // pick.ts's panelRules has the rest of the panel's rules (needed, apps, wants, looking, the choice,
-  // the iOS hint). needed decides whether to ask useDeviceList for a list at all, so it's read before
-  // that hook gives one; its own formula never looks at the list, so this agrees with the second call
-  // below, once useDeviceList answers (or doesn't: needed may still be false).
-  const deviceNeeded = panelRules({ project, tabDevice, tabHidden, byHand, list: null, platform }).needed
+  // devicesNeeded gates useDeviceList; pick.ts's panelRules has the rest, once it answers.
+  const deviceNeeded = devicesNeeded({ project, tabDevice, tabHidden, platform })
   const deviceList = useDeviceList(deviceNeeded)
   const devices = deviceList?.devices ?? NO_DEVICES
-  const { apps, wants, looking: deviceLooking, choice, iosHint } = panelRules({ project, tabDevice, tabHidden, byHand, list: deviceList, platform })
+  const { byHand, apps, wants, looking: deviceLooking, choice, iosHint } = panelRules({ project, tabDevice, tabHidden, list: deviceList, platform })
   const deviceView = useHeldView(choice, devices, deviceRoot, tabDevice ?? project?.picks[0] ?? null)
   const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand || iosHint)
   const shownDevice = deviceView.kind === 'device' ? deviceView.device.id : null

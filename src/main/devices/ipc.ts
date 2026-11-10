@@ -147,10 +147,11 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
         ios = { pending: false, devices: [], problem: booted ? (found ? 'old-idb' : 'no-idb') : null }
         return update()
       }
-      // Keeps whatever ios already said (a stale hint, a shown simulator) until the notifier's own
-      // first list replaces it: resetting to pending here flashed "Looking…" (or dropped a shown
-      // device) for the ~2.5 s the notifier takes to list, on a focus re-look after idb-companion is
-      // installed while a tab already shows something.
+      // Keeps whatever ios already said (a stale hint, or nothing: no simulator can be shown yet
+      // here, since simulators is still null) until the notifier's own first list replaces it:
+      // resetting to pending flashed "Looking…" — dropping, say, an Android device already shown in
+      // a tab that also wants iOS — for the ~2.5 s the notifier takes to list, on a focus re-look
+      // after idb-companion is installed.
       startSimulators(found.companion)
     } finally {
       if (idbLook === look) idbLook = null
