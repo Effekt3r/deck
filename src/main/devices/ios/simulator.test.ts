@@ -301,7 +301,30 @@ describe('startSimulator, when its processes fail or hang', () => {
     await vi.waitFor(() => expect(t.ends[0]).toHaveLength(500))
   })
 
-  it("ends in sim-video's last line when it gave no error, once the companion has had a second to say why", async () => {
+  it('says how a process ended when its last line is only routine', async () => {
+    vi.useFakeTimers()
+    const t = setup()
+    await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    t.videos[0].stderr.write('Overlay setup: screenInfo=1206x2622@3.0x\n')
+    t.videos[0].exit(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(t.ends).toEqual(['sim-video stopped (exit code 1).'])
+
+    const u = setup()
+    await startSimulator('U1', u.events, u.io, new AbortController().signal)
+    u.videos[0].proc.emit('close', null, 'SIGKILL')
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(u.ends).toEqual(['sim-video was stopped (SIGKILL).'])
+
+    const w = setup()
+    await startSimulator('U1', w.events, w.io, new AbortController().signal)
+    w.companions[0].stderr.write('2026-11-10 14:21:57.805+0200 [U1] Accepted a connection on its socket\n')
+    w.companions[0].exit(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(w.ends).toEqual(['idb_companion stopped (exit code 1).'])
+  })
+
+  it("ends in sim-video's last line when it reads as a failure, once the companion has had a second to say why", async () => {
     vi.useFakeTimers()
     const t = setup()
     await startSimulator('U1', t.events, t.io, new AbortController().signal)
@@ -342,10 +365,11 @@ describe('startSimulator, when its processes fail or hang', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it("gives up on the companion's socket after 10 s, in its words", async () => {
+  it("gives up on the companion's socket after 10 s, in its words when they read as a failure", async () => {
     vi.useFakeTimers()
     for (const [said, why] of [
       ['', "idb_companion didn't open its socket in 10 s."],
+      ['2026-11-10 10:00:00.000+0200 [U1] Using the simulator set at /x\n', "idb_companion didn't open its socket in 10 s."],
       ['2026-11-10 10:00:00.000+0200 GRPCCore.RuntimeError error 1\n', 'GRPCCore.RuntimeError error 1'],
     ]) {
       const t = setup()

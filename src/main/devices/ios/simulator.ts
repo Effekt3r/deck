@@ -3,7 +3,7 @@ import type { DeviceSession, StreamEvents, StreamPacket } from '../session'
 import { Fmp4Reader } from './fmp4'
 import { GrpcNoAnswer, type GrpcStream } from './grpc'
 import { simulatorEvents } from './input'
-import { lastLine, stopper } from './process'
+import { asFailure, endedHow, lastLine, stopper } from './process'
 import { DESCRIBE_PATH, HID_PATH, parseDescribe, type ScreenSize } from './proto'
 
 /** What a session needs of the gRPC client. */
@@ -112,9 +112,10 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
   })
   gone.catch(() => {}) // also raced below
   let spawnError = ''
-  const companionEnd = () => {
+  /** Its last line when that reads as a failure, else why its spawn failed, else how it ended. */
+  const companionEnd = (code: number | null = null, signal: NodeJS.Signals | null = null) => {
     if (companionEnded) return
-    companionEnded = new Error(companionSaid() || spawnError || 'idb_companion stopped.')
+    companionEnded = new Error(asFailure(companionSaid()) || spawnError || endedHow('idb_companion', code, signal))
     if (started) end(companionEnded.message)
     else rejectGone(companionEnded)
   }
@@ -140,7 +141,7 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
   try {
     const socketLate = new Promise<never>((_, reject) => {
       socketTimer = setTimeout(
-        () => reject(new Error(companionSaid() || `idb_companion didn't open its socket in ${SOCKET_WAIT / 1000} s.`)),
+        () => reject(new Error(asFailure(companionSaid()) || `idb_companion didn't open its socket in ${SOCKET_WAIT / 1000} s.`)),
         SOCKET_WAIT,
       )
     })
@@ -227,14 +228,14 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
     })
     // Ending the stdin of a sim-video that has just gone can fail (EPIPE): its 'close' says why.
     proc.stdin?.on('error', () => {})
-    const over = () => {
+    const over = (code: number | null = null, signal: NodeJS.Signals | null = null) => {
       if (video !== v || ended || stopping) return
       const definite = error() || spawnFailed
       if (definite) return end(definite)
       // No error of its own: most often its simulator shutting down, which the companion, going too,
       // explains better a moment later. Nothing to replay or restart meanwhile.
       config = null
-      endSoon(said() || 'sim-video stopped.')
+      endSoon(asFailure(said()) || endedHow('sim-video', code, signal))
     }
     proc.on('error', (err) => {
       spawnFailed ||= err.message

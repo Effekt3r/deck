@@ -11,6 +11,24 @@ const MAX_SOCKET_PATH = 103
 /** A socket's name in its folder: "/", the simulator's first 8 characters, "-", 8 hex, ".sock". */
 const SOCKET_NAME = 23
 
+/** Whether `dir` is this user's own folder, closed to everyone else; lstat, so a link in its place
+ *  is refused. */
+function isPrivateDir(dir: string): boolean {
+  const owned = lstatSync(dir)
+  return owned.isDirectory() && owned.uid === process.getuid?.() && (owned.mode & 0o077) === 0
+}
+
+/** Removes the companions' socket folder (at quit), sockets and all, only when it's this user's own
+ *  private folder, as companion() checks: a folder in /tmp that another user owns could have been
+ *  swapped for a link, so anything else is left alone. Never throws. */
+export function removeSocketDir(dir: string): void {
+  try {
+    if (isPrivateDir(dir)) rmSync(dir, { recursive: true, force: true })
+  } catch {
+    // Gone already, or not ours to remove: nothing to do at quit either way.
+  }
+}
+
 /** The folder for the companions' sockets: Deck's own in the temp folder, or `/tmp` when that path
  *  would leave too little room for a socket's name. macOS paths, whatever the platform: only macOS
  *  runs simulators. */
@@ -36,10 +54,7 @@ export function simulatorIo(
       mkdirSync(opts.dir, { recursive: true, mode: 0o700 })
       // Only this user may reach the companion: refuse a folder someone else made (in /tmp), or a
       // link in its place.
-      const owned = lstatSync(opts.dir)
-      if (!owned.isDirectory() || owned.uid !== process.getuid?.() || (owned.mode & 0o077) !== 0) {
-        throw new Error(`${opts.dir} isn't private to this user.`)
-      }
+      if (!isPrivateDir(opts.dir)) throw new Error(`${opts.dir} isn't private to this user.`)
       rmSync(socket, { force: true })
       const child = deps.spawn(opts.companion, [
         '--udid', udid, '--grpc-domain-sock', socket, '--terminate-offline', 'true', '--log-level', 'info',

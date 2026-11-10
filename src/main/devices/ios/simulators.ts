@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import type { DeviceInfo } from '@shared/types'
-import { lastLine, stopper } from './process'
+import { endedHow, lastLine, stopper } from './process'
 
 /** What idb_companion's notifier says of a simulator. */
 export interface SimTarget {
@@ -65,7 +65,7 @@ export interface SimulatorTrackerDeps {
 }
 
 /** No line is ever this long: a run of garbage with no newline. */
-const MAX_LINE = 4 * 1024 * 1024
+const MAX_PENDING_LINE = 4 * 1024 * 1024
 /** idb-companion's first line normally comes in about 2.5 s (measured); a run that never lists
  *  anything in this long is treated as hung and killed. Doubles after each such kill (capped at
  *  DEADLINE_MAX), since a notifier that needs longer than this on every cold start would otherwise
@@ -162,7 +162,7 @@ export class SimulatorTracker {
       if (this.child !== child) return
       const lines = (rest + text).split('\n')
       rest = lines.pop() ?? ''
-      if (rest.length > MAX_LINE) rest = '' // no line is this long: garbage
+      if (rest.length > MAX_PENDING_LINE) rest = '' // no line is this long: garbage
       for (const line of lines) {
         if (!line.trim()) continue
         const next = readNotifyLine(line, this.targets, first)
@@ -178,12 +178,7 @@ export class SimulatorTracker {
     // 'error' and 'close' can both fire for a failed spawn (e.g. EACCES): whichever comes first
     // finalizes the run (finish's own guard drops the other), each with its own best reason.
     child.on('error', (err) => finish(said() || err.message))
-    child.on('close', (code, signal) =>
-      finish(
-        said() ||
-          (signal ? `idb_companion was stopped (${signal}).` : code ? `idb_companion stopped (exit code ${code}).` : 'idb_companion stopped.'),
-      ),
-    )
+    child.on('close', (code, signal) => finish(said() || endedHow('idb_companion', code, signal)))
   }
 
   /** `listed`: whether the run that just ended had listed anything before it died (not sticky across

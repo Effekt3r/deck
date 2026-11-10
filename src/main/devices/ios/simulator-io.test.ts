@@ -3,7 +3,7 @@ import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { simulatorIo, socketDirFor } from './simulator-io'
+import { removeSocketDir, simulatorIo, socketDirFor } from './simulator-io'
 import { fakeProcess, type FakeProcess } from './test-process'
 
 const flush = () => new Promise((r) => setImmediate(r))
@@ -63,6 +63,18 @@ describe.skipIf(process.platform === 'win32')('simulatorIo on macOS', () => {
     made.push(dir)
     return dir
   }
+  /** A link as private as a folder: macOS gives a link its own mode from the umask, so under 077 only
+   *  its not being a folder can refuse it. */
+  const privateLink = (target: string, link: string) => {
+    const umask = process.umask(0o077)
+    try {
+      symlinkSync(target, link)
+    } finally {
+      process.umask(umask)
+    }
+    expect(lstatSync(link).mode & 0o077).toBe(0)
+    return link
+  }
 
   it('gives every start its own socket: an old companion closing late removes only its own', async () => {
     const dir = tempDir()
@@ -95,19 +107,37 @@ describe.skipIf(process.platform === 'win32')('simulatorIo on macOS', () => {
     const base = tempDir()
     const own = join(base, 'own')
     mkdirSync(own, { mode: 0o700 })
-    const link = join(base, 'link')
-    // macOS gives a link its own mode from the umask: under 077 it's as private as the folder, so
-    // only its not being a folder refuses it.
-    const umask = process.umask(0o077)
-    try {
-      symlinkSync(own, link)
-    } finally {
-      process.umask(umask)
-    }
-    expect(lstatSync(link).mode & 0o077).toBe(0)
+    const link = privateLink(own, join(base, 'link'))
     const t = ioIn(link)
     expect(() => t.io.companion('U1', join(link, 'U1.sock'))).toThrow("isn't private to this user")
     expect(t.spawned).toEqual([])
+  })
+
+  it('removes its own private socket folder at quit, socket and all', async () => {
+    const own = join(tempDir(), 'own')
+    mkdirSync(own, { mode: 0o700 })
+    const server = net.createServer().listen(join(own, 'ABCDEF12-0011aabb.sock'))
+    await new Promise((resolve) => server.once('listening', resolve))
+    removeSocketDir(own)
+    await new Promise((resolve) => server.close(resolve))
+    expect(existsSync(own)).toBe(false)
+    expect(() => removeSocketDir(own)).not.toThrow() // gone already
+  })
+
+  it('leaves a folder open to others, or a link in its place, where they are', () => {
+    const base = tempDir()
+    const shared = join(base, 'shared')
+    mkdirSync(shared)
+    chmodSync(shared, 0o755)
+    removeSocketDir(shared)
+    expect(existsSync(shared)).toBe(true)
+    const target = join(base, 'target')
+    mkdirSync(target, { mode: 0o700 })
+    writeFileSync(join(target, 'keep'), '')
+    const link = privateLink(target, join(base, 'link'))
+    removeSocketDir(link)
+    expect(lstatSync(link).isSymbolicLink()).toBe(true)
+    expect(existsSync(join(target, 'keep'))).toBe(true)
   })
 
   it('waits for the socket, and stops waiting when told', async () => {
