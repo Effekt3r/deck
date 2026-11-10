@@ -306,6 +306,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       tracker = null
       simulators?.stop()
       simulators = null
+      // Now, not after the companions it just signalled have exited: quitting mustn't wait out their
+      // 2 s kill escalation, and unlinking a socket one still holds open is harmless.
       removeSocketDir(opts.socketDir)
     },
   }

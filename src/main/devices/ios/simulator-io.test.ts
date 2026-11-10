@@ -10,11 +10,11 @@ const flush = () => new Promise((r) => setImmediate(r))
 
 /** The real io, except that its spawns are fakes: nothing here may start an idb_companion or a
  *  sim-video, and these paths don't exist anyway. */
-function ioIn(dir: string) {
+function ioIn(dir: string, customSet = false) {
   const children: FakeProcess[] = []
   const spawned: { command: string; args: string[] }[] = []
   const io = simulatorIo(
-    { companion: '/nonexistent/idb_companion', simVideo: '/nonexistent/sim-video', set: '/nonexistent/set', customSet: false, dir },
+    { companion: '/nonexistent/idb_companion', simVideo: '/nonexistent/sim-video', set: '/nonexistent/set', customSet, dir },
     {
       spawn: (command, args) => {
         spawned.push({ command, args })
@@ -49,6 +49,12 @@ describe('simulatorIo', () => {
     expect(first).toMatch(/^\/private\/d\/ABCDEF12-[0-9a-f]{8}\.sock$/)
     expect(second).toMatch(/^\/private\/d\/ABCDEF12-[0-9a-f]{8}\.sock$/)
     expect(second).not.toBe(first)
+  })
+
+  it("video() passes the device set even without a custom one, and scales to 3 decimals", () => {
+    const t = ioIn('/private/d') // customSet: false, yet --set is still there
+    t.io.video('U1', 0.61)
+    expect(t.spawned[0].args).toEqual(['stream', '--set', '/nonexistent/set', '--udid', 'U1', '--scale', '0.610', '--key-frame-rate', '2', '--transport', 'fmp4', '-'])
   })
 })
 
@@ -92,6 +98,17 @@ describe.skipIf(process.platform === 'win32')('simulatorIo on macOS', () => {
     await flush()
     expect(existsSync(old)).toBe(false)
     expect(existsSync(current)).toBe(true)
+  })
+
+  it('passes --device-set-path only with a custom set', () => {
+    const dir = tempDir()
+    const custom = ioIn(dir, true)
+    custom.io.companion('U1', join(dir, 'U1.sock'))
+    expect(custom.spawned[0].args).toEqual(['--udid', 'U1', '--grpc-domain-sock', join(dir, 'U1.sock'), '--terminate-offline', 'true', '--log-level', 'info', '--device-set-path', '/nonexistent/set'])
+
+    const xcodes = ioIn(dir, false)
+    xcodes.io.companion('U2', join(dir, 'U2.sock'))
+    expect(xcodes.spawned[0].args).toEqual(['--udid', 'U2', '--grpc-domain-sock', join(dir, 'U2.sock'), '--terminate-offline', 'true', '--log-level', 'info'])
   })
 
   it("refuses a socket folder that isn't private to this user, before starting anything", () => {
