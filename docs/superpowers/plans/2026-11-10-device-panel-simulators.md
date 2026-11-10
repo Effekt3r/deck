@@ -88,6 +88,7 @@ Homebrew, Xcode with iOS 27.0 simulators):
 New, main (`src/main/devices/`):
 - `session.ts`: `StreamEvents` and `DeviceSession`, the shape every kind of stream has.
 - `registry.ts`: one `DeviceList` from adb's devices and the simulators (pure).
+- `android/session.ts`: scrcpy's session as a `DeviceSession` (built in Task 1's review).
 - `ios/proto.ts`: idb's HID and describe messages, and gRPC message framing (pure).
 - `ios/grpc.ts`: a gRPC client on `node:http2` over a Unix socket.
 - `ios/fmp4.ts`: sim-video's fragmented MP4 to Annex B packets (pure).
@@ -772,8 +773,10 @@ describe.skipIf(process.platform === 'win32')('GrpcClient', () => {
   /** Messages of the open hid call, as they arrive. */
   const streamed: Buffer[] = []
   const server = http2.createServer()
+  const serverSessions: http2.ServerHttp2Session[] = []
 
   beforeAll(async () => {
+    server.on('session', (session) => serverSessions.push(session))
     server.on('stream', (stream, headers) => {
       const path = String(headers[':path'])
       const chunks: Buffer[] = []
@@ -848,6 +851,14 @@ describe.skipIf(process.platform === 'win32')('GrpcClient', () => {
     client.close()
   })
 
+  it('says when the connection closes under it', async () => {
+    const closed = vi.fn()
+    const client = new GrpcClient(socket, closed)
+    await client.unary('/test/describe', Buffer.from('hi'))
+    serverSessions.at(-1)!.destroy()
+    await vi.waitFor(() => expect(closed).toHaveBeenCalled())
+  })
+
   it('never throws on a closed connection: a call rejects, a stream does nothing', async () => {
     const client = new GrpcClient(socket)
     client.close()
@@ -904,11 +915,13 @@ export class GrpcClient {
   /** Why the connection failed, for the calls it takes down. */
   private failure: Error | null = null
 
-  constructor(socket: string) {
+  /** `onClose`: the connection closed (also after close()). */
+  constructor(socket: string, onClose?: () => void) {
     this.session = http2.connect('http://localhost', { createConnection: () => net.connect(socket) })
     this.session.on('error', (err) => {
       this.failure = err
     })
+    this.session.on('close', () => onClose?.())
   }
 
   /** One message there, one back: the answer's message, or the server's own words for a failure. */
@@ -2274,6 +2287,7 @@ function setup(opts: { describe?: () => Promise<Buffer> } = {}) {
       this.closed = true
     },
   }
+  let closeConnection: () => void = () => {}
   const io: SimulatorIo = {
     socketFor: (udid) => `/tmp/sock/${udid}.sock`,
     companion: () => {
@@ -2282,7 +2296,10 @@ function setup(opts: { describe?: () => Promise<Buffer> } = {}) {
       return p.proc
     },
     socketReady: async () => {},
-    connect: () => connection,
+    connect: (_socket, onClose) => {
+      closeConnection = onClose
+      return connection
+    },
     video: (udid, scale) => {
       videoArgs.push([udid, scale])
       const p = fakeProcess()
@@ -2294,7 +2311,7 @@ function setup(opts: { describe?: () => Promise<Buffer> } = {}) {
   const packets: StreamPacket[] = []
   const ends: string[] = []
   const events = { size: (w: number, h: number) => sizes.push([w, h]), packet: (p: StreamPacket) => packets.push(p), end: (why: string) => ends.push(why) }
-  return { io, events, companions, videos, videoArgs, streams, connection, sizes, packets, ends }
+  return { io, events, companions, videos, videoArgs, streams, connection, sizes, packets, ends, closeConnection: () => closeConnection() }
 }
 
 const flush = () => new Promise((r) => setImmediate(r))
@@ -2364,6 +2381,14 @@ describe('startSimulator', () => {
     u.companions[0].exit(0)
     await vi.waitFor(() => expect(u.ends).toEqual(['Target is no longer booted, companion going offline']))
     expect(u.videos[0].killed()).toBe(true)
+  })
+
+  it('ends when the connection closes while the companion runs on', async () => {
+    const t = setup()
+    await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    t.closeConnection()
+    expect(t.ends).toEqual(["The simulator's companion stopped answering."])
+    expect(t.companions[0].killed()).toBe(true)
   })
 
   it('ends on a broken picture stream', async () => {
@@ -2453,7 +2478,8 @@ export interface SimulatorIo {
   companion(udid: string, socket: string): ChildProcess
   /** Resolves once the socket is there; rejects when `signal` aborts. */
   socketReady(socket: string, signal: AbortSignal): Promise<void>
-  connect(socket: string): IdbConnection
+  /** A gRPC client on the socket; `onClose` when its connection closes. */
+  connect(socket: string, onClose: () => void): IdbConnection
   /** `sim-video stream … --scale <scale> --key-frame-rate 2 --transport fmp4 -`, stdin kept open. */
   video(udid: string, scale: number): ChildProcess
 }
@@ -2509,6 +2535,8 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
   let hid: GrpcStream | null = null
   let stopping = false
   let ended = false
+  /** Resolved: from here a failure ends the session (before, it rejects the start). */
+  let started = false
   const close = () => {
     hid?.close()
     client?.close()
@@ -2533,7 +2561,11 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
   let screen: ScreenSize
   try {
     await Promise.race([io.socketReady(socket, signal), companionGone])
-    client = io.connect(socket)
+    // The companion running on with its gRPC server gone would take input nowhere: the stream ends,
+    // and the streams start it again.
+    client = io.connect(socket, () => {
+      if (started) end("The simulator's companion stopped answering.")
+    })
     screen = parseDescribe(await Promise.race([client.unary(DESCRIBE_PATH, Buffer.alloc(0)), companionGone]))
     if (signal.aborted) throw new Error('Stopped.')
   } catch (err) {
@@ -2593,6 +2625,7 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
 
   const points = { width: screen.widthPoints, height: screen.heightPoints }
   const connection = client
+  started = true
   return {
     input(input) {
       if (ended || stopping) return
@@ -2647,7 +2680,7 @@ export function simulatorIo(opts: { companion: string; simVideo: string; set: st
       }
       throw new Error('Stopped.')
     },
-    connect: (socket) => new GrpcClient(socket),
+    connect: (socket, onClose) => new GrpcClient(socket, onClose),
     video: (udid, scale) => spawn(opts.simVideo, [
       'stream', '--set', opts.set, '--udid', udid, '--scale', scale.toFixed(3), '--key-frame-rate', '2', '--transport', 'fmp4', '-',
     ], { stdio: ['pipe', 'pipe', 'pipe'] }),
@@ -3129,10 +3162,11 @@ In `docs/superpowers/specs/2026-11-03-device-panel-design.md`:
 - **How › Simulators:** `--transport fmp4` instead of `annex-b` (and why), the companion's flags
   (`--terminate-offline true`, `--log-level info`), the socket folder (`socketDirFor`, private, under
   104 bytes, removed at quit), describe and hid over `node:http2`, touches as downs and an up,
-  typing and pastes as a US keyboard (at most 1,000 characters), the replayed group of pictures;
+  typing and pastes as a US keyboard (at most 1,000 characters), a key frame by replaying a short
+  group of pictures (at most 8) or else starting sim-video again;
 - **The view:** "`sim-video`'s Annex B stream is cut into frames" → its fMP4 fragments are turned
-  into Annex B in main; "`sim-video` sends one every 2 s" → while the screen changes, and a joining
-  view gets the current group replayed;
+  into Annex B in main; "`sim-video` sends one every 2 s" → while the screen changes; a key frame
+  asked for replays a short group or starts sim-video again;
 - **States › No idb-companion:** shown with a simulator booted, also for an idb-companion without
   sim-video, with Copy; and "Deck couldn't list the simulators" with the notifier's last words;
 - **Code:** `session.ts`, `registry.ts` (a pure merge; starting and stopping stays in `ipc.ts`),
@@ -3154,12 +3188,18 @@ In `docs/superpowers/specs/2026-11-03-device-panel-design.md`:
   checked on a throwaway simulator; iPhones are step 3.
 - Device panel section: a **Simulators** bullet with the facts at the top of this plan that aren't
   obvious from the code (Homebrew's layout; the notifier's first line and changes; the socket path
-  limit and its error; fMP4 and why; key frames only while the screen changes, so the group is
-  replayed; iOS's paste prompt; two companions per simulator are fine; `DECK_SIMULATOR_SET` and
+  limit and its error; fMP4 and why; key frames only while the screen changes, so a short group is
+  replayed and a long one restarts sim-video (the view's 10-picture backlog rule); iOS's paste prompt; two companions per simulator are fine; `DECK_SIMULATOR_SET` and
   `DECK_IDB_COMPANION` for checks; never touch Franco's own simulators in a check). The
   **Which projects** bullet: the iOS rule. The **Which device a tab shows** bullet: devices fit by
   platform; `pending` and `stillLooking`.
 - "Next steps" item 5: step 2 built; next the hands-on checks, then step 3 (iPhones).
+
+- **A stale claim** (found in Task 1's review): CLAUDE.md says a throw in an `ipcMain.on` listener
+  shows a modal error dialog, and `src/main/devices/ipc.ts` repeats it. Electron 45's own
+  `uncaughtException` handler shows the dialog only when no other handler exists, and Deck's main
+  registers its own logging ones (`src/main/index.ts`). Check that, then say what really happens
+  (it's logged, and the caller's work is left half done) in both places.
 
 - [ ] **Step 4: `README.md` and `docs/DECK.md`**
 
@@ -3210,8 +3250,11 @@ throwaway one in the scratchpad is enough), through a second launch with the sam
 - a synthetic pointer down/up on the canvas over Settings' "General" opens it (screenshot);
 - typing into the search field types "Ab1!"; a paste event with "xyz" types it;
 - Home goes back to the home screen;
-- switching tabs and back within 10 s shows the picture at once (the group replayed), with no
-  restart (one `sim-video` process, `pgrep -fl sim-video`);
+- switching tabs and back within 10 s: with the screen still since its last key frame (a short
+  group), the picture is back at once from the same `sim-video` (same pid in `pgrep -fl sim-video`);
+  after scrolling a while (a long group), a fresh `sim-video` (still exactly one) shows the picture
+  within about a second;
+- left idle for two minutes, a tap still works (the companion's connection held);
 - quitting leaves no `idb_companion --udid "$U"` and no `sim-video`, and the socket folder is gone;
 - with `DECK_IDB_COMPANION=/nowhere` and a simulator booted in Xcode's own set (Franco's are, but
   look only): an iOS project's panel says "Deck shows simulators with idb-companion:" with Copy.
