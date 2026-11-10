@@ -9,6 +9,9 @@ node_modules/
 out/
 dist/
 
+# the simulator code; un-ignore over a global "ios" exclude (Franco's other, native, iOS folders)
+!/src/main/devices/ios/
+
 # scrcpy's server, downloaded at install (scripts/fetch-scrcpy-server.mjs)
 /resources/scrcpy-server
 /resources/scrcpy-server.*.tmp
