@@ -8,8 +8,8 @@ export type PanelChoice =
 export interface ChoiceInput {
   /** The tab's own pick. */
   tab: string | undefined
-  /** The project's last pick. */
-  project: string | null
+  /** The devices picked in the project, latest first. */
+  project: string[]
   /** The project is an Android app. */
   android: boolean
   /** The panel was asked for (View → Device Panel), so every device fits. */
@@ -17,13 +17,15 @@ export interface ChoiceInput {
   devices: DeviceInfo[]
 }
 
-/** The device a tab's panel shows: its own pick, else its project's, while connected; else the only
- *  device that fits. With several the panel asks; with none there's no panel. */
+/** The device a tab's panel shows: its own pick, else the latest of its project's picks that's
+ *  connected. Nothing picked yet, the only device that fits; with several the panel asks. Once
+ *  something has been picked, a device the project never picked doesn't open the panel (the C66's
+ *  project doesn't open on the S25 meanwhile), unless it was asked for. With none there's no panel. */
 export function choosePanel({ tab, project, android, byHand, devices }: ChoiceInput): PanelChoice {
-  const find = (id: string | null | undefined) => (id ? devices.find((d) => d.id === id) : undefined)
-  const picked = find(tab) ?? find(project)
+  const find = (id: string | undefined) => (id ? devices.find((d) => d.id === id) : undefined)
+  const picked = find(tab) ?? project.map(find).find((d) => d !== undefined)
   if (picked) return { kind: 'device', device: picked }
-  const fits = android || byHand ? devices : []
+  const fits = byHand || (android && !tab && project.length === 0) ? devices : []
   if (fits.length === 1) return { kind: 'device', device: fits[0] }
   if (fits.length > 1) return { kind: 'choose', devices: fits }
   return { kind: 'none' }
@@ -41,9 +43,9 @@ export type PanelView =
 export interface Held {
   device: DeviceInfo
   goneSince: number | null
-  /** The pick in force when it was shown: the tab's own pick, else the project's, else null — the
-   *  stored id itself, never `choosePanel`'s resolved device. Passing the resolved device would end
-   *  the hold the moment a tab's own pick unplugs and the project's pick takes its place. */
+  /** The pick in force when it was shown: the tab's own pick, else the project's latest, else null —
+   *  the stored id itself, never `choosePanel`'s resolved device. Passing the resolved device would
+   *  end the hold the moment a tab's own pick unplugs and the project's pick takes its place. */
   pick: string | null
 }
 
@@ -52,8 +54,8 @@ export interface Held {
  *  wiggles doesn't move the pane, and (2) a still-connected device stays shown rather than jumping
  *  to the chooser when a second device arrives — the menu switches instead. A new pick (the tab or
  *  project pick changed) ends both at once, showing the new choice straight away. `pick` is the
- *  tab's own pick, else the project's, else null: the stored ids themselves (see `Held.pick`), not
- *  `choosePanel`'s resolved device. Also what to hold for next time. */
+ *  tab's own pick, else the project's latest, else null: the stored ids themselves (see
+ *  `Held.pick`), not `choosePanel`'s resolved device. Also what to hold for next time. */
 export function panelView(choice: PanelChoice, devices: DeviceInfo[], held: Held | null, now: number, pick: string | null): { view: PanelView; held: Held | null } {
   if (held && held.pick === pick) {
     const current = devices.find((d) => d.id === held.device.id)

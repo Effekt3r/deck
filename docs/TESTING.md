@@ -135,7 +135,9 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
      `.png` copied in Explorer and pasted with Ctrl+V in that tab.
 18t. Ctrl+Shift+D hides the panel and shows it again. With an emulator running too, the ▾ next to the
      name switches between the two, and a new tab in the same folder shows the one picked last.
-18u. Pull the phone's cable: "disconnected" over the dimmed picture, and the panel goes 10 s later.
+     Close the emulator: that tab shows the phone again, since it was picked there too.
+18u. Pull the phone's cable: "disconnected" over the dimmed picture, and the panel goes 10 s later
+     (the emulator closed).
      Plug it back in: the panel comes back.
 18v. Minimise Deck for 15 s, then restore it: the screen streams again within a couple of seconds.
      Task Manager's Details tab then lists three adb.exe: adb's own server, Deck's device list and

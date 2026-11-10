@@ -78,8 +78,8 @@ Windows installer; publish it once it looks right.
   shows it in any other tab): the phone or emulator the app runs on, live. Click to tap, drag to
   swipe, scroll with the wheel, and type and paste with the screen selected (Option and Cmd editing
   keys work as on a Mac); Back, Home, Recent apps and Power in its header and, while Claude runs, a
-  camera that adds a screenshot to Claude's prompt. Each project remembers its device (the ▾ menu
-  picks another, per tab). It streams only while you can see it. Needs adb (Android Studio or
+  camera that adds a screenshot to Claude's prompt. Each project remembers the devices picked in it
+  and opens only on those (the ▾ menu picks another, per tab). It streams only while you can see it. Needs adb (Android Studio or
   Android's platform tools). Deck runs scrcpy's server on the device over adb; the server deletes
   itself, and the screen setting it changes while shown is put back. A paste goes through the
   device's clipboard and stays there.

@@ -6,13 +6,18 @@ in /Volumes/Wyobi/AccessControl_Android then show either the emulator or the S25
 depending on the task we're busy with, should be selectable.. if we're in /Volumes/Wyobi/AccessControl_iOS
 then show the view from the simulator or my connected iphone". He chose how Deck gets the screens (below).
 The rest was decided without a round of questions: review it here. Updated 2026-11-04 with the
-decisions made while building and reviewing step 1 (Android).
+decisions made while building and reviewing step 1 (Android). Updated 2026-11-10: Franco asked "you
+should auto pick c66 for guardapp and s25 for residents app, but I should be able to attach to ios as
+well". With the C66 unplugged, Guard's panel asked between the S25 FE and a face terminal that belongs
+to another repository, which wasn't found as an Android app at all (its app sits in
+`apps/<build>/<module>/`). So a project now remembers every device picked in it, and opens only on
+those; and a Gradle build two levels down is looked into.
 
 ## Goal
 
 In a tab whose project is an Android or iOS app, show the device the app runs on, live, at the top of
-the right pane. A tab can pick its device and a project remembers its last pick, so Guard shows the C66
-and AccessControl_Android shows the emulator or the S25 FE, whichever the task needs.
+the right pane. A tab can pick its device and a project remembers the devices picked in it, so Guard
+shows the C66 and AccessControl_Android shows the emulator or the S25 FE, whichever the task needs.
 
 ## What was there (measured 2026-11-03)
 
@@ -74,19 +79,23 @@ Rejected:
   - never in the home folder: looking through `~` would read inside Desktop, Documents and Downloads,
     which can make macOS ask whether Deck may, and a "Don't Allow" there also keeps Deck's terminals
     out of those folders;
-  - at most 200 folders per level, and 200 in all at the second level. The answer is kept for 30 s
-    per folder (it's asked whenever a tab comes to the front).
+  - at most 200 folders per level, and 200 in all at the second and third levels. The answer is kept
+    for 30 s per folder (it's asked whenever a tab comes to the front).
 - **An Android app** has an `AndroidManifest.xml` in `src/main/` (or Kotlin Multiplatform's
   `src/androidMain/`) of a module one level down (`app/src/main/`: Guard, AccessControl_Android), or
   two levels down inside a first-level `android/` folder in any case (`android/app/src/main/`:
-  Flutter, React Native) or inside a first-level folder that's a Gradle build of its own.
+  Flutter, React Native) or inside a first-level folder that's a Gradle build of its own, or three
+  levels down inside a Gradle build two levels down (a monorepo's `apps/<build>/<module>/`, an app's
+  `mobile/android/app/`). The other first-level folders are listed for that only when nothing was
+  found higher up.
 - **An iOS app** has an Xcode project or workspace at the project's root or one folder down
   (`ios/Runner.xcworkspace`).
 - **Both** (Flutter, React Native, Kotlin Multiplatform) take both kinds of device.
 - **The panel shows when a device that fits is connected**: Android phones and emulators for an
-  Android app; simulators and iPhones (macOS only) for an iOS app. Elsewhere it shows only when asked
-  for, and then offers every device. A project's pick doesn't open it there by itself: the pick is
-  used once the panel is shown by hand.
+  Android app; simulators and iPhones (macOS only) for an iOS app. Once the project has picked
+  devices, only those open it (below). Elsewhere it shows only when asked for, and then offers every
+  device. A project's picks don't open it there by themselves: they're used once the panel is shown
+  by hand.
 - **View → Device Panel** (⌘⇧D; Ctrl+Shift+D off macOS) hides or shows it per tab, like the git and
   Claude panels. The choice holds in the project it was made in.
 
@@ -96,13 +105,20 @@ Rejected:
   AccessControl_Android can show the emulator and the S25 FE. In another project the pick no longer
   counts, from the moment the tab gets there, so a `cd` never starts a stream for the old project's
   device.
-- **A project remembers the last device picked in it** (`devices.json` in Deck's data folder). A tab
-  that hasn't picked shows that one, so every Guard tab shows the C66 once it has been picked there.
-  A tab coming to the front reads it again before it streams, since another tab may have picked
-  meanwhile.
-- **Nothing picked, or the pick isn't connected:**
-  - one device fits: it's shown, without becoming the pick, so the picked one takes over when it's back;
-  - several fit: the panel asks which, listing them, unless one is already shown (below);
+- **A project remembers the devices picked in it**, the latest first and at most 8 (`devices.json`
+  in Deck's data folder; Deck 0.4's one device per project is read as a list of one). A tab that
+  hasn't picked shows the latest of them that's connected, so every Guard tab shows the C66 once it
+  has been picked there, and AccessControl_Android shows the emulator or, while it's closed, the
+  S25 FE. A tab coming to the front reads them again before it streams, since another tab may have
+  picked meanwhile.
+- **None of them connected:**
+  - the project has picked devices: no panel. Another project's phone never opens it, so Guard with
+    its C66 unplugged doesn't ask between the S25 FE and a face terminal; View → Device Panel still
+    offers every device;
+  - nothing picked yet, one device fits: it's shown, without becoming a pick, so a picked one takes
+    over when it's connected;
+  - nothing picked yet, several fit: the panel asks which, listing them, unless one is already shown
+    (below);
   - none fits: no panel.
 - **The device shown stays put** while the pick doesn't change:
   - one that goes away stays, as "disconnected" over its last picture, for 10 s, so a cable that
@@ -402,12 +418,13 @@ and likewise for iOS.
 ### Code
 
 - `src/shared/`: `DeviceInfo` (id, kind, name, detail, state), `DeviceList` (the devices, or why there
-  are none), `DeviceProject` (root, Android app or not, pick), a stream's events (size, packet,
+  are none), `DeviceProject` (root, Android app or not, picks), a stream's events (size, packet,
   state) and input (touch, scroll, key, text, paste); `DeckApi.devices` and the `devices:*` channels;
   `quoteImagePath` in `quote.ts`.
 - `src/main/devices/`:
   - `project.ts`: a folder's project and whether it's an Android app (tested on temp folders);
-  - `picks.ts`: `devices.json`, written beside and renamed (`fs/atomic.ts`);
+  - `picks.ts`: `devices.json` (each project's picks, latest first), written beside and renamed
+    (`fs/atomic.ts`);
   - `streams.ts`: a stream's viewers, its 10 s grace, its retries and its start deadline, for every
     kind;
   - `ipc.ts`: wiring, the 30 s project cache, lock and sleep. Every listener checks its arguments.
@@ -486,7 +503,10 @@ Each step gets its own plan and pull request and works without the next.
   an adb that never lists anything leaves "Looking for devices…" up.
 - **Which projects:** a folder outside git that holds several Gradle builds isn't found (show the
   panel by hand); a git failure is taken as "outside git" for 30 s; a single-module app at the
-  repository's root isn't found; a repository with only an Android library counts as an app.
+  repository's root isn't found, nor an app deeper than a Gradle build two levels down
+  (`apps/<app>/android/app/`); a repository with only an Android library counts as an app.
+- **A project's devices:** a device picked once by hand stays among the project's until 8 newer
+  picks push it out, so it opens that project's panel whenever the others are unplugged.
 - **A crash while starting:** if Deck crashes in the second a stream takes to start, the adb client
   and the server on the device are left waiting, with the screen kept on, as scrcpy itself would.
 - **A very short window:** below about 620 px of window height the right pane can't fit the device
@@ -522,8 +542,9 @@ Each step gets its own plan and pull request and works without the next.
     belonging to its project;
   - `track-devices -l` lists: USB; Wi-Fi (mDNS and `ip:port`); emulators; `unauthorized`; `offline`;
     empty. One phone over USB and Wi-Fi merged;
-  - picks: the tab's, the project's, the only device that fits, several, none, asked for by hand, the
-    picked device coming back, and the 10 s of "disconnected";
+  - picks: the tab's, the project's latest connected, the only device that fits, several, none, a
+    project whose devices are all unplugged, asked for by hand, the picked device coming back, and
+    the 10 s of "disconnected";
   - scrcpy's video stream parsed from chunks split anywhere (dummy byte, name, codec, sessions, config
     and media packets), and control messages byte for byte against scrcpy's own
     `test_control_msg_serialize.c`;

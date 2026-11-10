@@ -315,16 +315,16 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const tabDevice = movedOn ? undefined : tab.device
   const tabHidden = movedOn ? undefined : tab.deviceHidden
   const byHand = tabHidden === false
-  // Outside an Android app the panel shows only when asked for: the project's pick is remembered for
-  // then, but doesn't open the panel in every new tab there.
+  // Outside an Android app the panel shows only when asked for: the project's picks are remembered
+  // for then, but don't open the panel in every new tab there.
   const deviceNeeded = tabHidden !== true && (byHand || project?.android === true || Boolean(tabDevice))
   const deviceList = useDeviceList(deviceNeeded)
   const devices = deviceList?.devices ?? NO_DEVICES
   // Not needed any more, the list is the old one until its effect lets it go: nothing to choose from.
   const choice = deviceNeeded && deviceList && (project || byHand)
-    ? choosePanel({ tab: tabDevice, project: project?.pick ?? null, android: project?.android ?? false, byHand, devices })
+    ? choosePanel({ tab: tabDevice, project: project?.picks ?? [], android: project?.android ?? false, byHand, devices })
     : null
-  const deviceView = useHeldView(choice, devices, deviceRoot, tabDevice ?? project?.pick ?? null)
+  const deviceView = useHeldView(choice, devices, deviceRoot, tabDevice ?? project?.picks[0] ?? null)
   const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand)
   const shownDevice = deviceView.kind === 'device' ? deviceView.device.id : null
   const showRight = showClaude || showDevice

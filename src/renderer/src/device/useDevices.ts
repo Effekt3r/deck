@@ -73,16 +73,16 @@ export function useDeviceProject(folder: string, active: boolean): [DeviceProjec
   const pick = useCallback((id: string) => {
     const p = current.current
     if (!p) return
-    setKnown((k) => (k ? { ...k, project: { ...k.project, pick: id } } : k))
+    setKnown((k) => (k ? { ...k, project: { ...k.project, picks: [id, ...k.project.picks.filter((other) => other !== id)] } } : k))
     window.deck.devices.pick(p.root, id).catch((err: unknown) => console.error('device panel: saving the pick failed', err))
   }, [])
   return [project, pick, fresh]
 }
 
 /** The panel's view (panelView): a shown device that went away stays, as gone, for 10 s, unless the
- *  tab picks another device (`pick`: the tab's, else the project's) or moves to another project
- *  (`root`). Nothing while `choice` is null (the project or the devices aren't known: the panel
- *  isn't needed, or its project couldn't be read), and the hold is let go then. */
+ *  tab picks another device (`pick`: the tab's, else the project's latest) or moves to another
+ *  project (`root`). Nothing while `choice` is null (the project or the devices aren't known: the
+ *  panel isn't needed, or its project couldn't be read), and the hold is let go then. */
 export function useHeldView(choice: PanelChoice | null, devices: DeviceInfo[], root: string | null, pick: string | null): PanelView {
   const held = useRef<{ root: string | null; held: Held | null }>({ root: null, held: null })
   const [tick, rerender] = useState(0)

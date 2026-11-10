@@ -57,20 +57,31 @@ async function isGradleProject(root: string): Promise<boolean> {
   return (await Promise.all(android.map(isGradleBuild))).some(Boolean)
 }
 
+const anyManifest = async (modules: string[]): Promise<boolean> => (await Promise.all(modules.map(hasManifest))).some(Boolean)
+
 /** An Android app has an AndroidManifest.xml in `src/main/` or `src/androidMain/` of a module one
  *  level down (`app/src/main/`, `composeApp/src/androidMain/`), or two levels down inside a
  *  first-level folder named `android` in any case (Flutter, React Native), or one that is a Gradle
- *  build of its own (`settings.gradle`/`.kts`: an SDK's `android-demo/` or `sdk/`). */
+ *  build of its own (`settings.gradle`/`.kts`: an SDK's `android-demo/` or `sdk/`), or three levels
+ *  down inside a Gradle build two levels down (a monorepo's `apps/<build>/`, an app's
+ *  `mobile/android/`). */
 export async function isAndroidApp(root: string): Promise<boolean> {
   const first = await subfolders(root)
-  if ((await Promise.all(first.map(hasManifest))).some(Boolean)) return true
+  if (await anyManifest(first)) return true
   const look = await Promise.all(
     first.map(async (dir) => basename(dir).toLowerCase() === 'android' || (await isGradleBuild(dir))),
   )
   // Capped again, flattened: otherwise up to MAX_FOLDERS nested builds could each contribute up to
   // MAX_FOLDERS modules, and every one of those would get stat'd for a manifest.
   const second = (await Promise.all(first.filter((_, i) => look[i]).map(subfolders))).flat().slice(0, MAX_FOLDERS)
-  return (await Promise.all(second.map(hasManifest))).some(Boolean)
+  if (await anyManifest(second)) return true
+  // Only now are the other first-level folders listed, for Gradle builds of their own two levels
+  // down: an app found above costs no extra reads. Capped like the second level.
+  const plain = (await Promise.all(first.filter((_, i) => !look[i]).map(subfolders))).flat().slice(0, MAX_FOLDERS)
+  const nested = [...second, ...plain]
+  const builds = await Promise.all(nested.map(isGradleBuild))
+  const third = (await Promise.all(nested.filter((_, i) => builds[i]).map(subfolders))).flat().slice(0, MAX_FOLDERS)
+  return anyManifest(third)
 }
 
 /** `android` is never scanned for the home folder — resolved with `realpath` first, so a `$HOME`

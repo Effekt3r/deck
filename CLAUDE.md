@@ -376,17 +376,25 @@ Things that aren't obvious from the code:
     stats inside Desktop, Documents and Downloads, which can raise macOS privacy prompts for Deck,
     and a "Don't Allow" also blocks the terminals there. An app has `AndroidManifest.xml` in
     `src/main/` or `src/androidMain/` of a first-level folder, or of a second-level one inside
-    `android/` (any case) or a first-level Gradle build of its own; at most 200 folders per level, and
-    200 in all at the second. Main caches {root, android} per folder for 30 s and reads the pick fresh.
+    `android/` (any case) or a first-level Gradle build of its own, or of a third-level one inside a
+    second-level Gradle build (`apps/<build>/<module>/`: a monorepo's; the other first-level folders
+    are listed only when nothing was found higher up); at most 200 folders per level, and 200 in all
+    at the second and third. Main caches {root, android} per folder for 30 s and reads the picks fresh.
     `gitDirs` resolves git's relative common dir against the path it's given, so pass it a real
     path (`project.ts` realpaths first): through a symlink or junction it lands beside the repository.
     - **Known limits:** a folder outside git holding several Gradle builds isn't found (show the panel
       by hand); a temporary git failure is cached as "outside git" for 30 s; each worktree of a bare
-      repository is its own project; a single-module app at the repository's root isn't found; a
-      repository with only an Android library counts as an app.
-  - **Which device a tab shows** (`pick.ts`): the tab's pick, else the project's (`devices.json`),
-    while connected; else the only device that fits; with several the panel asks. Outside an Android
-    app the project's pick doesn't open the panel by itself; it's used once the panel is shown by hand.
+      repository is its own project; a single-module app at the repository's root isn't found, nor
+      one deeper than a Gradle build two levels down (`apps/<app>/android/app/`); a repository with
+      only an Android library counts as an app.
+  - **Which device a tab shows** (`pick.ts`): the tab's pick, else the latest connected of the
+    project's picks (`devices.json`: each project's devices, latest first, at most 8; Deck 0.4 wrote
+    one id per project, read as a list of one). A project that has picked devices shows no panel
+    while none of them is connected: another project's phone never opens it (Guard with its C66
+    unplugged asked between the S25 FE and another repository's face terminal, 2026-11-10). Nothing
+    picked yet: the only device that fits; with several the panel asks. Shown by hand, every device
+    fits. Outside an Android app the project's picks don't open the panel by themselves; they're used
+    once the panel is shown by hand.
     - **Holds:** a shown device that goes away stays, as "disconnected", for 10 s, and one still
       connected stays when a second arrives (no drop to "Which device?"; the menu switches). Either
       hold ends at once when the tab picks another device or moves to another project. The hold keeps

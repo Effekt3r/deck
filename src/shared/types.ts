@@ -315,8 +315,8 @@ export interface DeviceProject {
   root: string
   /** It's an Android app, so it takes Android phones and emulators. */
   android: boolean
-  /** The device last picked in it. */
-  pick: string | null
+  /** The devices picked in it, latest first (at most 8). */
+  picks: string[]
 }
 
 /** News of a device's stream. */
@@ -430,9 +430,9 @@ export interface DeckApi {
      *  list is pushed when it's there. */
     list(): Promise<DeviceList | null>
     onList(cb: (list: DeviceList) => void): () => void
-    /** `folder`'s project: its root, whether it's an Android app, and its device. */
+    /** `folder`'s project: its root, whether it's an Android app, and the devices picked in it. */
     project(folder: string): Promise<DeviceProject>
-    /** Remembers `id` as the project's device. */
+    /** Puts `id` first among the project's devices. */
     pick(root: string, id: string): Promise<void>
     /** Streams device `id` from now; the function stops viewing. A stream nobody views stops 10 s
      *  later, so viewing it again before then picks it up. */

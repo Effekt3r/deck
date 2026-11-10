@@ -122,12 +122,12 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   ipcMain.handle(IPC.devicesProject, async (_e, folder: unknown): Promise<DeviceProject> => {
     if (typeof folder !== 'string' || !isAbsolute(folder)) throw new Error('No folder given.')
     const { root, android } = await describe(folder)
-    // An unreadable devices.json must not hide every tab's panel: no pick, then.
-    const pick = await picks.get(root).catch((err: unknown) => {
+    // An unreadable devices.json must not hide every tab's panel: no picks, then.
+    const picked = await picks.get(root).catch((err: unknown): string[] => {
       console.error('devices: reading devices.json failed', err)
-      return null
+      return []
     })
-    return { root, android, pick }
+    return { root, android, picks: picked }
   })
   ipcMain.handle(IPC.devicesPick, async (_e, root: unknown, id: unknown) => {
     if (typeof root !== 'string' || !isAbsolute(root) || root.length > 4096 || typeof id !== 'string' || !id || id.length > 4096) {

@@ -48,6 +48,32 @@ describe('isAndroidApp', () => {
     touch(join(cased, 'Android', 'app', 'src', 'main', 'AndroidManifest.xml'))
     expect(await isAndroidApp(cased)).toBe(true)
   })
+
+  it("finds a module three levels down in a Gradle build two levels down: a monorepo's apps/, an app's mobile/android/", async () => {
+    const mono = makeDir('deck-dev-')
+    touch(join(mono, 'apps', 'bridge', 'settings.gradle.kts'))
+    touch(join(mono, 'apps', 'bridge', 'app-kiosk', 'src', 'main', 'AndroidManifest.xml'))
+    expect(await isAndroidApp(mono)).toBe(true)
+
+    const mobile = makeDir('deck-dev-')
+    touch(join(mobile, 'mobile', 'android', 'settings.gradle'))
+    touch(join(mobile, 'mobile', 'android', 'app', 'src', 'main', 'AndroidManifest.xml'))
+    expect(await isAndroidApp(mobile)).toBe(true)
+
+    const inBuild = makeDir('deck-dev-')
+    touch(join(inBuild, 'sdk', 'settings.gradle'))
+    touch(join(inBuild, 'sdk', 'demo', 'settings.gradle'))
+    touch(join(inBuild, 'sdk', 'demo', 'app', 'src', 'main', 'AndroidManifest.xml'))
+    expect(await isAndroidApp(inBuild)).toBe(true)
+  })
+
+  it('looks three levels down only inside a Gradle build', async () => {
+    const dir = makeDir('deck-dev-')
+    touch(join(dir, 'apps', 'bridge', 'app', 'src', 'main', 'AndroidManifest.xml'))
+    touch(join(dir, 'apps', 'build', 'settings.gradle'))
+    touch(join(dir, 'apps', 'build', 'app', 'src', 'main', 'AndroidManifest.xml'))
+    expect(await isAndroidApp(dir)).toBe(false)
+  })
 })
 
 describe('projectRoot', () => {

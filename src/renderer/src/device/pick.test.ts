@@ -8,11 +8,25 @@ const s25 = device('android:R5CW20XY7QZ', "Franco's S25 FE")
 const emu = device('emulator:Pixel_9', 'Pixel 9')
 
 describe('choosePanel', () => {
-  const base = { tab: undefined, project: null, android: true, byHand: false }
+  const base = { tab: undefined, project: [] as string[], android: true, byHand: false }
 
-  it("shows the tab's pick, else the project's, while connected", () => {
-    expect(choosePanel({ ...base, tab: s25.id, project: c66.id, devices: [c66, s25] })).toEqual({ kind: 'device', device: s25 })
-    expect(choosePanel({ ...base, tab: s25.id, project: c66.id, devices: [c66] })).toEqual({ kind: 'device', device: c66 })
+  it("shows the tab's pick, else the latest of the project's that's connected", () => {
+    expect(choosePanel({ ...base, tab: s25.id, project: [c66.id], devices: [c66, s25] })).toEqual({ kind: 'device', device: s25 })
+    expect(choosePanel({ ...base, tab: s25.id, project: [c66.id], devices: [c66] })).toEqual({ kind: 'device', device: c66 })
+    expect(choosePanel({ ...base, project: [emu.id, s25.id], devices: [c66, s25, emu] })).toEqual({ kind: 'device', device: emu })
+    expect(choosePanel({ ...base, project: [emu.id, s25.id], devices: [c66, s25] })).toEqual({ kind: 'device', device: s25 })
+  })
+
+  it("once a project has picked, none of its own connected means no panel: another project's device never opens it", () => {
+    expect(choosePanel({ ...base, project: [c66.id], devices: [s25] })).toEqual({ kind: 'none' })
+    expect(choosePanel({ ...base, project: [c66.id], devices: [s25, emu] })).toEqual({ kind: 'none' })
+    expect(choosePanel({ ...base, tab: c66.id, devices: [s25] })).toEqual({ kind: 'none' })
+  })
+
+  it('shown by hand, every device fits, whatever the project picked', () => {
+    expect(choosePanel({ ...base, project: [c66.id], byHand: true, devices: [s25] })).toEqual({ kind: 'device', device: s25 })
+    expect(choosePanel({ ...base, project: [c66.id], byHand: true, devices: [s25, emu] })).toEqual({ kind: 'choose', devices: [s25, emu] })
+    expect(choosePanel({ ...base, project: [c66.id], byHand: true, devices: [s25, c66] })).toEqual({ kind: 'device', device: c66 })
   })
 
   it('shows the only device that fits, asks among several, and shows nothing without one', () => {
@@ -24,7 +38,7 @@ describe('choosePanel', () => {
   it('outside an Android app: only when asked for, or when the project picked a device', () => {
     expect(choosePanel({ ...base, android: false, devices: [c66] })).toEqual({ kind: 'none' })
     expect(choosePanel({ ...base, android: false, byHand: true, devices: [c66] })).toEqual({ kind: 'device', device: c66 })
-    expect(choosePanel({ ...base, android: false, project: c66.id, devices: [c66, s25] })).toEqual({ kind: 'device', device: c66 })
+    expect(choosePanel({ ...base, android: false, project: [c66.id], devices: [c66, s25] })).toEqual({ kind: 'device', device: c66 })
   })
 
   it('an unauthorized device counts as the only one that fits', () => {
