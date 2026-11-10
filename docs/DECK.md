@@ -150,10 +150,11 @@ deck/
      files show previews (2026-11-02). Specs:
      `docs/superpowers/specs/2026-10-31-clipboard-design.md`,
      `docs/superpowers/specs/2026-11-02-clipboard-image-previews-design.md`.
-   - **Device panel** (step 1, Android, built 2026-11-03/04; Windows to test): the device a tab's
-     project runs on, live at the top of the right pane (scrcpy's server over adb, decoded with
-     WebCodecs), with touch, keys, paste and a screenshot for Claude. Simulators (idb-companion) and
-     iPhones (a Swift helper on CoreMediaIO) are steps 2 and 3. Spec:
+   - **Device panel** (step 1, Android, built 2026-11-03/04, Windows to test; step 2, simulators,
+     built 2026-11-10, macOS): the device a tab's project runs on, live at the top of the right pane
+     (scrcpy's server over adb, or idb-companion's `sim-video` and `idb_companion` for a simulator;
+     decoded with WebCodecs), with touch, keys, paste and a screenshot for Claude. iPhones (a Swift
+     helper on CoreMediaIO) are step 3. Spec:
      `docs/superpowers/specs/2026-11-03-device-panel-design.md`.
    - **Permissions guide on first launch:** walk through every permission Deck
      needs, including what Claude Code and the other tools in its tabs need

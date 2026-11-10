@@ -210,7 +210,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     return value
   }
 
-  // ipcMain.on listeners check their arguments: a throw there becomes an error dialog.
+  // ipcMain.on listeners check their arguments: a throw there leaves the listener's work half done
+  // and reaches only main's uncaught exception handler, which logs it (index.ts).
   ipcMain.on(IPC.devicesWatch, () => {
     if (++watchers === 1) startWatching()
   })
