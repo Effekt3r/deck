@@ -2782,6 +2782,17 @@ Claude-Session: https://claude.ai/code/session_012TidnBvRYbxhSYqPzFZuph"
 
 ---
 
+**After review** (built in `d1de1c1`, `789f988`): the companion's spawn `'error'` is handled; the start
+has its own signal (a failed start stops its socket poll), waits at most 10 s for the socket and
+lands a stop at every wait; failed spawns clean up; processes get SIGKILL 2 s after a SIGTERM they
+ignore (`ios/process.ts`, shared with the notifier, never killing a child without a pid); socket names
+are random per start (`<udid8>-<8 hex>.sock`); `simulatorIo` and `socketDirFor` live in
+`ios/simulator-io.ts` (POSIX paths, Unix-socket tests skipped on Windows); a key frame asked for
+before the first key frame does nothing; sim-video's end waits up to 1 s for the companion's words
+unless it printed an `Error:` line; end reasons are capped at 500 characters.
+
+---
+
 ### Task 10: Streaming a simulator
 
 `ipc.ts` starts simulator sessions; `index.ts` gives it the socket folder; the folder goes at quit.
@@ -2791,7 +2802,8 @@ Claude-Session: https://claude.ai/code/session_012TidnBvRYbxhSYqPzFZuph"
 
 - [ ] **Step 1: The start by kind**
 
-In `ipc.ts`, import `import { simulatorIo, startSimulator } from './ios/simulator'`,
+In `ipc.ts`, import `startSimulator` from `./ios/simulator` and `simulatorIo` from
+`./ios/simulator-io` (Task 9's review moved it there),
 `udidOf` from `./ios/simulators` and `defaultSimulatorSet` from `./ios/tools`, and make the streams'
 `start`:
 
@@ -2810,12 +2822,14 @@ In `ipc.ts`, import `import { simulatorIo, startSimulator } from './ios/simulato
     },
 ```
 
-(`androidSession` lives in `android/session.ts` since Task 1's review.) In `dispose()`, after stopping the streams: `rmSync(opts.socketDir, { recursive: true, force: true })`
-(import `rmSync` from `node:fs`).
+(`androidSession` lives in `android/session.ts` since Task 1's review.) In `dispose()`, after stopping the streams, remove the socket folder inside try/catch (a `/tmp`
+folder another user squatted would make `rmSync` throw at quit):
+`try { rmSync(opts.socketDir, { recursive: true, force: true }) } catch {}` (import `rmSync` from
+`node:fs`).
 
 - [ ] **Step 2: Give main the folder**
 
-In `src/main/index.ts`, import `socketDirFor` from `./devices/ios/simulator`, and make the option
+In `src/main/index.ts`, import `socketDirFor` from `./devices/ios/simulator-io`, and make the option
 Task 8 added:
 
 ```ts
