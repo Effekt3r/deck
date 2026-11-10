@@ -23,6 +23,21 @@ describe('readNotifyLine', () => {
     expect(readNotifyLine('2026-11-10 starting', new Map(), true)).toBeNull()
   })
 
+  it('keeps only iOS simulators: watchOS, tvOS and visionOS report "Simulator" too, but are not iOS', () => {
+    const read = readNotifyLine(
+      line(
+        sim('A', 'iPhone 17', 'Booted'),
+        sim('P', 'iPad Pro', 'Booted', 'iOS 17.0'), // an iPad: also reports "iOS", so it's kept
+        sim('W', 'Apple Watch Series 10', 'Booted', 'watchOS 11.2'),
+        sim('T', 'Apple TV', 'Booted', 'tvOS 18.1'),
+        sim('V', 'Apple Vision Pro', 'Booted', 'visionOS 3.0'),
+      ),
+      new Map(),
+      true,
+    )!
+    expect([...read.keys()]).toEqual(['A', 'P'])
+  })
+
   it('ignores a udid shaped wrong for a socket path or argv', () => {
     // udids go into a gRPC socket's filename and sim-video's argv: only plain, shell-safe ones are
     // trusted. A real UDID is upper-hex with dashes (e.g. "5A2F...-...-..."), so this is generous.
@@ -87,6 +102,15 @@ describe('SimulatorTracker', () => {
     spawned[0].stdout.write(text.slice(20))
     await vi.waitFor(() => expect(published).toEqual([['simulator:A'], ['simulator:A', 'simulator:B']]))
     expect(tracker.booted('B')).toBe(true)
+    tracker.stop()
+  })
+
+  it('keeps booted() consistent with the list: a booted watchOS simulator never enters either', async () => {
+    const { tracker, spawned, published } = setup()
+    tracker.start()
+    spawned[0].stdout.write(line(sim('A', 'iPhone 17', 'Booted'), sim('W', 'Apple Watch', 'Booted', 'watchOS 11.2')))
+    await vi.waitFor(() => expect(published).toEqual([['simulator:A']]))
+    expect(tracker.booted('W')).toBe(false)
     tracker.stop()
   })
 
@@ -298,10 +322,23 @@ describe('SimulatorTracker', () => {
     it('caps the reported stderr line at 500 characters', async () => {
       const { tracker, spawned, failures } = setup()
       tracker.start()
-      spawned[0].stderr.write(`${'E'.repeat(600)}\n`)
+      spawned[0].stderr.write(`Error: ${'E'.repeat(600)}\n`)
       spawned[0].exit(1)
       await vi.advanceTimersByTimeAsync(0)
       expect(failures[0][0]).toHaveLength(500)
+      tracker.stop()
+    })
+
+    it("ignores a routine line that doesn't read as a failure, falling back to the exit code", async () => {
+      // --log-level info still prints routine lines ("Overlay setup: …" is sim-video's own example,
+      // but idb_companion's stderr carries the same kind of chatter at info level); only a line that
+      // reads as a failure (asFailure, shared with sim-video's and a session's companion) is a reason.
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      spawned[0].stderr.write('idb_companion started, listening for connections\n')
+      spawned[0].exit(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[0]).toEqual(['idb_companion stopped (exit code 1).', false])
       tracker.stop()
     })
   })

@@ -48,8 +48,9 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const isPng = (data: Uint8Array): boolean => PNG_SIGNATURE.every((byte, i) => data[i] === byte)
 
 /** The device panel's main side: Android devices adb sees and, on macOS, booted simulators
- *  idb-companion sees (each looked for only while a tab needs them), each project's device, scrcpy
- *  streams for the devices viewed, and screenshots for Claude. */
+ *  idb-companion sees (each looked for only while a tab needs them), each project's device, streams
+ *  for the devices viewed (scrcpy for Android, idb-companion's sim-video for simulators), and
+ *  screenshots for Claude. */
 export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   const picks = new PicksStore(opts.picksFile)
   let win: BrowserWindow | null = null
@@ -70,6 +71,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   let ios: IosState = { pending: false, devices: [], problem: null }
   /** Bumped by every start and stop, so a slow look can't start watching late. */
   let generation = 0
+  /** dispose() is final: once set, nothing (a focus included) starts a source again. */
+  let disposed = false
   /** A custom device set, for checks (Xcode's own otherwise). */
   const simulatorSet = opts.env.DECK_SIMULATOR_SET || null
 
@@ -160,7 +163,9 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
 
   const startSimulators = (companion: string) => {
     simulators = new SimulatorTracker({
-      notify: () => spawn(companion, ['--notify', 'stdout', '--only', 'simulator', ...(simulatorSet ? ['--device-set-path', simulatorSet] : [])], { stdio: ['ignore', 'pipe', 'pipe'] }),
+      // --log-level info, as a simulator's own companion is started (simulator-io.ts): idb's default
+      // (debug) fills stderr with chatter, which would otherwise outrank a real failure's last line.
+      notify: () => spawn(companion, ['--notify', 'stdout', '--only', 'simulator', '--log-level', 'info', ...(simulatorSet ? ['--device-set-path', simulatorSet] : [])], { stdio: ['ignore', 'pipe', 'pipe'] }),
       publish: (devices) => {
         ios = { pending: false, devices, problem: null }
         update()
@@ -280,9 +285,10 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       w.webContents.on('did-start-loading', forget)
       w.webContents.on('render-process-gone', forget)
       // adb or idb-companion installed while Deck runs: look again when Deck comes to the front,
-      // rather than only when a tab starts needing devices.
+      // rather than only when a tab starts needing devices. Never once disposed: that's final, even
+      // in theory (only will-quit disposes, after which a focus shouldn't reach here at all).
       w.on('focus', () => {
-        if (watchers === 0) return
+        if (disposed || watchers === 0) return
         if (!tracker) void watchAndroid(generation, true)
         if (opts.platform === 'darwin' && !simulators) void watchSimulators(generation, true)
       })
@@ -303,6 +309,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       })
     },
     dispose() {
+      disposed = true
       streams.stopAll()
       generation++
       tracker?.stop()

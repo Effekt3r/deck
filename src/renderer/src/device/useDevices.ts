@@ -4,8 +4,9 @@ import { GONE_MS, type Held, type PanelChoice, type PanelView, panelView } from 
 
 const NONE: PanelView = { kind: 'none' }
 
-/** The devices Deck sees while `needed` (main runs adb only while some tab needs it); null until
- *  main has its first list. */
+/** The devices Deck sees while `needed` (main runs adb, and on macOS idb-companion, only while some
+ *  tab needs them); null until a list comes (each source answers once; `DeviceList.pending` names
+ *  those still looking). */
 export function useDeviceList(needed: boolean): DeviceList | null {
   const [list, setList] = useState<DeviceList | null>(null)
   useEffect(() => {

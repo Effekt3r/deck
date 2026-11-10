@@ -1,7 +1,7 @@
 import type { MenuItemConstructorOptions } from 'electron'
 import { describe, expect, it } from 'vitest'
 import type { MenuCommand } from '@shared/types'
-import { deviceKey } from '../renderer/src/device/keys'
+import { deviceKey, simulatorKey } from '../renderer/src/device/keys'
 import { menuTemplate } from './menu'
 
 function items(template: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
@@ -45,6 +45,8 @@ describe('menuTemplate', () => {
         const key = last.length === 1 ? (shiftKey ? last.toUpperCase() : last.toLowerCase()) : last
         const press = { key, shiftKey, ctrlKey: parts.includes('Ctrl'), metaKey: parts.includes('Cmd'), altKey: parts.includes('Alt') }
         expect(deviceKey(press, platform), `${platform} ${accelerator}`).toBeNull()
+        // Simulators run on macOS only, so only darwin's shortcuts matter to simulatorKey.
+        if (platform === 'darwin') expect(simulatorKey(press), `${platform} ${accelerator}`).toBeNull()
       }
     }
   })

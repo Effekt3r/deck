@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import type { DeviceInfo } from '@shared/types'
-import { endedHow, lastLine, stopper } from './process'
+import { asFailure, endedHow, lastLine, stopper } from './process'
 
 /** What idb_companion's notifier says of a simulator. */
 export interface SimTarget {
@@ -18,7 +18,8 @@ export const udidOf = (id: string): string | null => (id.startsWith(PREFIX) ? id
  *  (a real one is upper-hex with dashes; this is generous rather than exact). */
 const UDID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9-]*$/
 
-/** One line of `idb_companion --notify stdout`: a JSON array of targets. Its first line lists every
+/** One line of `idb_companion --notify stdout`: a JSON array of targets, kept to iOS simulators
+ *  (`--only simulator` also lists watchOS, tvOS and visionOS ones). Its first line lists every
  *  simulator, each later one only those whose state changed (idb-companion 1.6.1). null: a line
  *  that isn't a list. */
 export function readNotifyLine(line: string, known: ReadonlyMap<string, SimTarget>, first: boolean): Map<string, SimTarget> | null {
@@ -34,13 +35,13 @@ export function readNotifyLine(line: string, known: ReadonlyMap<string, SimTarge
     if (typeof item !== 'object' || item === null) continue
     const t = item as Record<string, unknown>
     if (t.type !== 'Simulator' || typeof t.udid !== 'string' || !UDID_SHAPE.test(t.udid)) continue
+    // `--only simulator` also lists watchOS, tvOS and visionOS simulators (they're "Simulator" too):
+    // only an iOS one would ever fit an iOS project's tab. iPad simulators report "iOS" as well, so
+    // this keeps them without a separate case.
+    const osVersion = typeof t.os_version === 'string' ? t.os_version : null
+    if (!osVersion?.startsWith('iOS')) continue
     const name = typeof t.name === 'string' && t.name ? t.name : t.udid
-    next.set(t.udid, {
-      udid: t.udid,
-      name,
-      state: typeof t.state === 'string' ? t.state : '',
-      osVersion: typeof t.os_version === 'string' ? t.os_version : '',
-    })
+    next.set(t.udid, { udid: t.udid, name, state: typeof t.state === 'string' ? t.state : '', osVersion })
   }
   return next
 }
@@ -54,8 +55,9 @@ export function simulatorDevices(targets: ReadonlyMap<string, SimTarget>): Devic
 }
 
 export interface SimulatorTrackerDeps {
-  /** `idb_companion --notify stdout --only simulator`. Spawning it can throw synchronously (ENOEXEC:
-   *  a file with the execute bit that isn't a program; -86 for an Intel binary without Rosetta). */
+  /** `idb_companion --notify stdout --only simulator --log-level info`. Spawning it can throw
+   *  synchronously (ENOEXEC: a file with the execute bit that isn't a program; -86 for an Intel
+   *  binary without Rosetta). */
   notify(): ChildProcess
   /** The booted simulators, after each line. */
   publish(devices: DeviceInfo[]): void
@@ -176,9 +178,11 @@ export class SimulatorTracker {
       }
     })
     // 'error' and 'close' can both fire for a failed spawn (e.g. EACCES): whichever comes first
-    // finalizes the run (finish's own guard drops the other), each with its own best reason.
-    child.on('error', (err) => finish(said() || err.message))
-    child.on('close', (code, signal) => finish(said() || endedHow('idb_companion', code, signal)))
+    // finalizes the run (finish's own guard drops the other), each with its own best reason. Its
+    // stderr's last line is only a reason when it reads as a failure (asFailure): at --log-level
+    // info it's mostly idb's own routine chatter, same as sim-video's and a session's companion.
+    child.on('error', (err) => finish(asFailure(said()) || err.message))
+    child.on('close', (code, signal) => finish(asFailure(said()) || endedHow('idb_companion', code, signal)))
   }
 
   /** `listed`: whether the run that just ended had listed anything before it died (not sticky across

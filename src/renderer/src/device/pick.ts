@@ -20,7 +20,7 @@ export interface ChoiceInput {
 }
 
 /** What a device runs: phones and emulators Android, simulators iOS. */
-export const platformOf = (kind: DeviceInfo['kind']): DevicePlatform => (kind === 'simulator' ? 'ios' : 'android')
+const platformOf = (kind: DeviceInfo['kind']): DevicePlatform => (kind === 'simulator' ? 'ios' : 'android')
 
 /** A stored id's platform, from its prefix, connected or not. */
 const platformOfId = (id: string): DevicePlatform => (id.startsWith('simulator:') ? 'ios' : 'android')

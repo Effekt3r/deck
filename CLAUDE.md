@@ -387,8 +387,10 @@ Things that aren't obvious from the code:
       `brew upgrade` deletes the versioned path a running Deck may have resolved. `idb_companion
       --version` prints only a build date, so "too old" means no `sim-video` ("Update it:" with
       `brew upgrade idb-companion`).
-    - **The notifier** (`ios/simulators.ts`): one `idb_companion --notify stdout --only simulator`
-      beside adb's tracker while any tab needs devices. About 2.5 s after it starts it prints one line,
+    - **The notifier** (`ios/simulators.ts`): one `idb_companion --notify stdout --only simulator
+      --log-level info` (idb's default, debug, would drown a real failure's last line in chatter —
+      the same reason a simulator's own companion isn't left at debug either) beside adb's tracker
+      while any tab needs devices. About 2.5 s after it starts it prints one line,
       a JSON array of every simulator (`{"udid","name","model","os_version":"iOS 27.0","state",
       "type":"Simulator"}`); each later line holds only the simulators whose state changed
       (`Booting`, `Booted`, `Shutting Down`, `Shutdown`), and creating or deleting a shut-down
@@ -476,7 +478,9 @@ Things that aren't obvious from the code:
       `DECK_SIMULATOR_SET`); a rotated simulator in a landscape app is unchecked (idb's orientation
       event changed no box size, as iPhone Settings stays portrait); idb-companion uninstalled while
       its notifier runs shows the restarted notifier's ENOENT, not the install hint; a notifier that
-      never lists is started again and again, its 20 s wait doubling.
+      never lists is started again and again, its 20 s wait doubling; a companion or notifier that
+      ignores SIGTERM can outlive Deck when it quits (Deck exits before the 2 s SIGKILL); simulators
+      of other platforms (watchOS, tvOS, visionOS) aren't listed.
   - **Which projects** (`project.ts`): a tab's project is its repository's main work tree (worktrees
     share it), else its folder. Inside git the whole repository is scanned; outside git only a Gradle
     build (`settings.gradle[.kts]` at the root or in `android/`); the home folder never: scanning `~`

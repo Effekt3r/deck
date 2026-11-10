@@ -2,7 +2,7 @@ import type { ChildProcess } from 'node:child_process'
 
 /** SIGTERM, then SIGKILL this long after if the process still runs: idb_companion handles SIGTERM
  *  itself on a dispatch queue, so a hung one may never act on it. */
-export const FORCE_KILL_AFTER = 2000
+const FORCE_KILL_AFTER = 2000
 /** A process's words, as shown, are cut here, as runAdb's are. */
 const MAX_LINE = 500
 /** A line with no end yet is kept to this much, so a run of garbage can't grow memory. */

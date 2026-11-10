@@ -6,8 +6,10 @@ import { anySimulatorBooted, findIdb, idbCandidates } from './tools'
 
 // realpath'd: findIdb resolves the symlink, and on macOS tmpdir() is itself under /var, a symlink
 // to /private/var, so the raw mkdtemp path wouldn't match what realpath resolves to (same fix as
-// install.test.ts's "a cd inside a command line" case).
-const root = realpathSync(mkdtempSync(join(tmpdir(), 'deck-idb-')))
+// install.test.ts's "a cd inside a command line" case). The native binding, not realpathSync's own
+// JS fallback: on Windows the fallback keeps mkdtemp's short "RUNNER~1" form, while findIdb's
+// realpath returns the long one (test-repo.ts, test-log.ts use the same fix).
+const root = realpathSync.native(mkdtempSync(join(tmpdir(), 'deck-idb-')))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
 
 function tool(path: string) {
@@ -24,6 +26,11 @@ describe('idbCandidates', () => {
 
   it('takes DECK_IDB_COMPANION alone, for checks', () => {
     expect(idbCandidates({ PATH: '/usr/bin', DECK_IDB_COMPANION: '/nowhere/idb_companion' })).toEqual(['/nowhere/idb_companion'])
+  })
+
+  it('ignores a relative DECK_IDB_COMPANION, as a relative PATH entry would mean "the current folder"', () => {
+    const env = { PATH: '/usr/bin', DECK_IDB_COMPANION: 'idb_companion' }
+    expect(idbCandidates(env)).toEqual(idbCandidates({ PATH: '/usr/bin' }))
   })
 })
 
@@ -61,7 +68,7 @@ describe('findIdb', () => {
     })
   })
 
-  it('falls back beside the real file when the stable opt link has no sim-video', async () => {
+  it.skipIf(process.platform === 'win32')('falls back beside the real file when the stable opt link has no sim-video', async () => {
     // brew3/bin/idb_companion exists (so a stable path is computed), but brew3/opt/... doesn't, so
     // this must fall back to beside the realpath'd file like the "missing" tree above.
     const prefix = join(root, 'brew3')

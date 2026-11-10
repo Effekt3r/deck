@@ -1622,6 +1622,10 @@ describe('simulatorBooted', () => {
 })
 ```
 
+*(Superseded: Task 7's review replaced `simulatorBooted` with `anySimulatorBooted`, which checks
+`pgrep -x launchd_sim` instead of `xcode-select -p` and `simctl` — see that task's "After review"
+note and CLAUDE.md.)*
+
 Create `src/main/devices/ios/simulators.test.ts`:
 
 ```ts
@@ -1956,6 +1960,9 @@ runs `/usr/bin/xcode-select -p` and then the selected Xcode's own `simctl` (neve
 `findIdb` prefers Homebrew's stable `opt/idb-companion/libexec/sim-video` link. Note for tests with
 real spawns (Tasks 8-10): on Node 22, `kill()` in the same tick as a spawn that fails with ENOENT or
 EACCES signals the caller's whole process group; never kill in that tick.
+
+*(Superseded, same review: `simulatorBooted` was renamed `anySimulatorBooted` and switched to
+`pgrep -x launchd_sim`, dropping `xcode-select`/`simctl` entirely — see Task 8's code and CLAUDE.md.)*
 
 ---
 
@@ -3246,7 +3253,8 @@ In `docs/superpowers/specs/2026-11-03-device-panel-design.md`:
   top of this plan, each with its reason;
 - **Finding devices › Simulators:** the notifier's lines (first all, then changes), one watch for
   both kinds with `pending`, `DECK_SIMULATOR_SET` and `DECK_IDB_COMPANION` for checks, and the
-  no-idb check (`xcode-select -p`, then `simctl`, only when idb-companion is missing);
+  no-idb check (`xcode-select -p`, then `simctl`, only when idb-companion is missing — superseded by
+  `pgrep -x launchd_sim`, in the "Facts from the reviews" bullet below);
 - **How › Simulators:** `--transport fmp4` instead of `annex-b` (and why), the companion's flags
   (`--terminate-offline true`, `--log-level info`), the socket folder (`socketDirFor`, private, under
   104 bytes, removed at quit), describe and hid over `node:http2`, touches as downs and an up,

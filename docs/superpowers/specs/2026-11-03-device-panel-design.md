@@ -326,12 +326,12 @@ kinds are still finding their first devices (`pending`).
     Windows' own USB driver adb lists no `usb:` field;
   - a device new in state `device` is asked once, in one `adb shell` call, for its serial number,
     maker, model, Android version, AVD name and name: up to three tries, 1.5 s apart.
-- **Simulators:** one `idb_companion --notify stdout --only simulator` reports every simulator's state
-  as it changes, so nothing polls. About 2.5 s after it starts it prints one line, a JSON array of
-  every simulator (`udid`, `name`, `os_version`, `state`, …); each later line lists only the
-  simulators whose state changed (`Booting`, `Booted`, `Shutting Down`, `Shutdown`), and creating or
-  deleting a shut-down simulator prints nothing. The booted ones are listed by name, each with its
-  iOS version (`Simulator · iOS 27.0`).
+- **Simulators:** one `idb_companion --notify stdout --only simulator --log-level info` reports every
+  simulator's state as it changes, so nothing polls. About 2.5 s after it starts it prints one line,
+  a JSON array of every simulator (`udid`, `name`, `os_version`, `state`, …); each later line lists
+  only the simulators whose state changed (`Booting`, `Booted`, `Shutting Down`, `Shutdown`), and
+  creating or deleting a shut-down simulator prints nothing. The booted ones are listed by name, each
+  with its iOS version (`Simulator · iOS 27.0`).
   - `idb_companion` is looked for in `PATH`'s absolute folders, then Homebrew's (`/opt/homebrew/bin`,
     `/usr/local/bin`), and `sim-video` through Homebrew's stable link
     (`<prefix>/opt/idb-companion/libexec/sim-video`), else beside `idb_companion`'s real file
@@ -635,7 +635,10 @@ Each step gets its own plan and pull request and works without the next.
   - idb-companion uninstalled while its notifier runs shows the notifier's failed start (`ENOENT`)
     once it's started again, not the install hint;
   - a notifier that never lists anything is started again and again, its 20 s wait doubling up to
-    2 minutes.
+    2 minutes;
+  - a companion or notifier that ignores SIGTERM can outlive Deck when it quits: Deck exits before
+    the 2 s SIGKILL;
+  - simulators of other platforms (watchOS, tvOS, visionOS) aren't listed.
 - **A project's devices:** a device picked once by hand stays among the project's until 8 newer
   picks push it out, so it opens that project's panel whenever the others are unplugged.
 - **A crash while starting:** if Deck crashes in the second a stream takes to start, the adb client

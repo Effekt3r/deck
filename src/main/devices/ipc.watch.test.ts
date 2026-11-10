@@ -135,6 +135,14 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     expect(t.pushes()).toHaveLength(2)
   })
 
+  it("starts the notifier at --log-level info, not idb_companion's default (debug)", async () => {
+    const t = setup()
+    h.findIdb = async () => IDB
+    t.watch()
+    await tick()
+    expect(notifiers()[0].args).toEqual(['--notify', 'stdout', '--only', 'simulator', '--log-level', 'info'])
+  })
+
   it('the mirror case: android settles first, pending says ios is still being looked for', async () => {
     const t = setup()
     const idb = deferred<typeof IDB | null>()
@@ -271,10 +279,12 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     t.watch()
     await tick()
     const first = notifiers()[0].fp
-    first.stderr.write('boom\n')
+    // A line that reads as a failure (asFailure): a routine info line (idb runs at --log-level info
+    // here too) would otherwise outrank the real reason.
+    first.stderr.write('Error: boom\n')
     first.exit(3)
     await tick()
-    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: { error: 'boom' }, pending: [] })
+    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: { error: 'Error: boom' }, pending: [] })
     await vi.waitFor(() => expect(notifiers()).toHaveLength(2), { timeout: 3000 })
     notifiers()[1].fp.stdout.write(LINE)
     await tick()
@@ -343,7 +353,7 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     expect(t.list()).toBeNull()
   })
 
-  it('after dispose, a focus with watchers left starts the sources again (theoretical: only will-quit disposes)', async () => {
+  it('after dispose, a focus with watchers left starts nothing (theoretical: only will-quit disposes, and dispose() is final)', async () => {
     const t = setup()
     h.findIdb = async () => IDB
     t.watch()
@@ -351,7 +361,7 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     t.devices.dispose()
     t.focus()
     await tick()
-    expect(notifiers()).toHaveLength(2)
+    expect(notifiers()).toHaveLength(1) // the one from watch(); dispose() must not be undone by a focus
   })
 
   it("a simulator the tracker no longer reports as booted fails view() with its own message, never falling through to the android id below it", async () => {

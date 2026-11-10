@@ -13,9 +13,11 @@ export interface IdbTools {
 const isFile = (path: string) => stat(path).then((s) => s.isFile(), () => false)
 
 /** Where idb_companion may be: PATH's absolute folders, then Homebrew's (Deck started from Finder
- *  gets a short PATH). `DECK_IDB_COMPANION` replaces them all, so a check can hide idb. */
+ *  gets a short PATH). `DECK_IDB_COMPANION` replaces them all, so a check can hide idb — but only
+ *  when it's absolute: a relative one would mean "the current folder", same as a relative PATH
+ *  entry, which main has no business trusting either. */
 export function idbCandidates(env: NodeJS.ProcessEnv): string[] {
-  if (env.DECK_IDB_COMPANION) return [env.DECK_IDB_COMPANION]
+  if (env.DECK_IDB_COMPANION && isAbsolute(env.DECK_IDB_COMPANION)) return [env.DECK_IDB_COMPANION]
   const dirs = (env.PATH ?? '').split(delimiter).filter((d) => d && isAbsolute(d))
   return [...new Set([...dirs, '/opt/homebrew/bin', '/usr/local/bin'])].map((d) => join(d, 'idb_companion'))
 }
