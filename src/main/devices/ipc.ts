@@ -10,8 +10,10 @@ import { adbIo, startScrcpy } from './android/scrcpy'
 import { scrcpyServer } from './android/server'
 import { androidSession } from './android/session'
 import { AndroidTracker } from './android/tracker'
-import { SimulatorTracker } from './ios/simulators'
-import { anySimulatorBooted, findIdb, idbCandidates, type IdbTools } from './ios/tools'
+import { startSimulator } from './ios/simulator'
+import { removeSocketDir, simulatorIo } from './ios/simulator-io'
+import { SimulatorTracker, udidOf } from './ios/simulators'
+import { anySimulatorBooted, defaultSimulatorSet, findIdb, idbCandidates, type IdbTools } from './ios/tools'
 import { PicksStore } from './picks'
 import { describeProject } from './project'
 import { type AndroidState, combineLists, type IosState } from './registry'
@@ -82,6 +84,13 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
 
   const streams = new DeviceStreams({
     start: async (id, events, signal) => {
+      const udid = udidOf(id)
+      if (udid !== null) {
+        if (!idb?.simVideo || !simulators?.booted(udid)) throw new Error("The simulator isn't booted.")
+        const set = simulatorSet ?? defaultSimulatorSet(opts.home)
+        const io = simulatorIo({ companion: idb.companion, simVideo: idb.simVideo, set, customSet: simulatorSet !== null, dir: opts.socketDir })
+        return startSimulator(udid, events, io, signal)
+      }
       const serial = tracker?.serialFor(id)
       if (!adb || !serial) throw new Error("The device isn't connected.")
       return androidSession(await startScrcpy(serial, await scrcpyServer(opts.resources), events, adbIo(adb), signal))
@@ -297,6 +306,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       tracker = null
       simulators?.stop()
       simulators = null
+      removeSocketDir(opts.socketDir)
     },
   }
 }

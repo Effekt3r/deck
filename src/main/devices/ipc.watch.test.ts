@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/channels'
 import type { DeviceList } from '@shared/types'
 import type { BrowserWindow } from 'electron'
+import { SimulatorTracker } from './ios/simulators'
 import { fakeProcess, type FakeProcess } from './ios/test-process'
 import { type DeviceIpc, registerDeviceIpc } from './ipc'
 
@@ -106,9 +107,14 @@ function setup(platform: 'darwin' | 'linux' = 'darwin') {
     unwatch: () => ipc.listeners.get(IPC.devicesUnwatch)!({}),
     focus: () => win.emit('focus'),
     list: () => ipc.handlers.get(IPC.devicesList)!({}) as DeviceList | null,
+    view: (id: string) => ipc.listeners.get(IPC.devicesView)!({}, id),
+    unview: (id: string) => ipc.listeners.get(IPC.devicesUnview)!({}, id),
+    streamEvents: (id: string) => sent.filter((s) => s[0] === IPC.devicesStream && s[1] === id).map((s) => s[2]),
   }
 }
 afterEach(() => current?.dispose())
+// Only the booted-vs-listed test below turns these on; harmless (a no-op) for every other test.
+afterEach(() => vi.useRealTimers())
 
 describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () => {
   it('nothing until a source answers; then pending says who is left, and finally what both found', async () => {
@@ -344,5 +350,30 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     t.focus()
     await tick()
     expect(notifiers()).toHaveLength(2)
+  })
+
+  it("a simulator the tracker no longer reports as booted fails view() with its own message, never falling through to the android id below it", async () => {
+    const t = setup()
+    h.findIdb = async () => IDB
+    t.watch()
+    await tick()
+    notifiers()[0].fp.stdout.write(LINE)
+    await tick()
+    expect(t.list()?.devices).toEqual([SIM]) // listed: devicesView's own guard lets the start be tried
+
+    // ipc.ts's start() asks booted() again, live, rather than trusting the list it was found in: a
+    // simulator that shut down between a push and the view that follows it must still say so here,
+    // not fall through to the id-isn't-android-either branch below (which would say "isn't connected"
+    // instead — tracker is null in this test, so that branch is one `adb`/`serial` check away).
+    const spy = vi.spyOn(SimulatorTracker.prototype, 'booted').mockReturnValue(false)
+    vi.useFakeTimers()
+    try {
+      t.view('simulator:FAKE-UDID')
+      await vi.advanceTimersByTimeAsync(1000 + 2000 + 5000) // DeviceStreams' own three retries
+      expect(t.streamEvents('simulator:FAKE-UDID').at(-1)).toEqual({ type: 'state', state: 'error', message: "The simulator isn't booted." })
+    } finally {
+      t.unview('simulator:FAKE-UDID')
+      spy.mockRestore()
+    }
   })
 })
