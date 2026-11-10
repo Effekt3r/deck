@@ -1,8 +1,8 @@
 import { type KeyboardEvent, type PointerEvent as ReactPointerEvent, type Ref, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type WheelEvent } from 'react'
-import type { DeviceInput, DeviceStreamEvent } from '@shared/types'
+import type { DeviceInfo, DeviceInput, DeviceStreamEvent } from '@shared/types'
 import { avcCodec, joined } from './codec'
 import { type Box, fitSize, toFrame } from './fit'
-import { deviceKey } from './keys'
+import { deviceKey, simulatorKey } from './keys'
 
 export interface ScreenHandle {
   /** The screen now, as a PNG at the stream's size; null while there's no live picture. */
@@ -12,6 +12,8 @@ export interface ScreenHandle {
 interface DeviceScreenProps {
   deviceId: string
   name: string
+  /** Simulators take HID keys and no wheel. */
+  kind: DeviceInfo['kind']
   /** Stream now: the tab is in front, the panel unfolded, the window visible, the device ready. */
   live: boolean
   /** Why the device can't be shown (gone, not allowed, offline), over the dimmed last picture. */
@@ -49,7 +51,7 @@ function usePixelRatio(): number {
 
 /** One device's screen: its stream decoded with WebCodecs onto a canvas that fits the space, and
  *  the pointer and keyboard sent back as touches, scrolls, keys and text. */
-export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceScreenProps) {
+export function DeviceScreen({ deviceId, name, kind, live, message, handle }: DeviceScreenProps) {
   const platform = window.deck.platform
   const ratio = usePixelRatio()
   const areaRef = useRef<HTMLDivElement>(null)
@@ -311,6 +313,7 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
     touch('up', e)
   }
   const onWheel = (e: WheelEvent<HTMLCanvasElement>) => {
+    if (kind === 'simulator') return // a simulator scrolls by dragging
     const point = at(e)
     // A trackpad pinch arrives as a wheel with Ctrl held: it isn't a scroll.
     if (!interactive || !point || e.ctrlKey) return
@@ -324,10 +327,17 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
     if (!interactive) return
     // Built by hand: a KeyboardEvent says whether AltGr is held only through getModifierState.
     const native = e.nativeEvent
-    const key = deviceKey({
+    const press = {
       key: native.key, shiftKey: native.shiftKey, ctrlKey: native.ctrlKey, metaKey: native.metaKey, altKey: native.altKey,
       altGraph: native.getModifierState('AltGraph'), isComposing: native.isComposing,
-    }, platform)
+    }
+    if (kind === 'simulator') {
+      const key = simulatorKey(press)
+      if (!key) return
+      e.preventDefault()
+      return send('usage' in key ? { type: 'hid', ...key } : { type: 'text', text: key.text })
+    }
+    const key = deviceKey(press, platform)
     if (!key) return
     e.preventDefault()
     send('keycode' in key ? { type: 'key', ...key } : { type: 'text', text: key.text })
