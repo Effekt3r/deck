@@ -26,7 +26,7 @@ export interface DeviceIpcOptions {
   home: string
   env: NodeJS.ProcessEnv
   /** Where simulators' companions put their sockets: short (macOS limits a Unix socket's path) and
-   *  this instance's own (`socketDirFor` in ios/simulator.ts, Task 9). */
+   *  this instance's own; used by simulators' sessions. */
   socketDir: string
   /** Saves a PNG where Claude can read it (the clipboard card's folder); resolves with its path. */
   saveImage(png: Uint8Array): Promise<string>
@@ -45,8 +45,9 @@ const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const isPng = (data: Uint8Array): boolean => PNG_SIGNATURE.every((byte, i) => data[i] === byte)
 
-/** The device panel's main side: Android devices adb sees (looked for only while a tab needs them),
- *  each project's device, scrcpy streams for the devices viewed, and screenshots for Claude. */
+/** The device panel's main side: Android devices adb sees and, on macOS, booted simulators
+ *  idb-companion sees (each looked for only while a tab needs them), each project's device, scrcpy
+ *  streams for the devices viewed, and screenshots for Claude. */
 export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   const picks = new PicksStore(opts.picksFile)
   let win: BrowserWindow | null = null
@@ -59,9 +60,9 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   /** Looked for again at each start of watching, so an SDK installed since is found. */
   let adb: string | null = null
   let idb: IdbTools | null = null
-  /** A look for adb under way: Deck coming to the front doesn't start a second one. */
-  let lookingForAdb = false
-  /** The look for idb under way, if any: a focus waits for it, a new watch's look takes it over. */
+  /** The look under way, if any: a focus waits for it, a new watch's look takes it over (a stale
+   *  look clears only its own token, never a newer one's). */
+  let adbLook: object | null = null
   let idbLook: object | null = null
   let android: AndroidState = { pending: true, devices: [], problem: null }
   let ios: IosState = { pending: false, devices: [], problem: null }
@@ -88,32 +89,37 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     send: (id, event) => send(IPC.devicesStream, id, event),
   })
 
-  /** The list, once some source has answered: until then a tab waits rather than taking "no
-   *  devices" for an answer. */
+  /** The list, once some source has answered (or, with one already shown, once either source's
+   *  pending flag changes): until a first list, a tab waits rather than taking "no devices" for an
+   *  answer. Without `list !== null`, setting a settled source back to pending while the other is
+   *  already pending would leave the old list showing instead of saying so. */
   const update = () => {
-    if (watchers > 0 && (!android.pending || !ios.pending)) publish(combineLists(android, ios))
+    if (watchers > 0 && (list !== null || !android.pending || !ios.pending)) publish(combineLists(android, ios))
   }
 
-  const watchAndroid = async (mine: number) => {
-    lookingForAdb = true
-    const found = await findAdb(adbCandidates(opts.env, opts.platform, opts.home)).finally(() => {
-      lookingForAdb = false
-    })
-    if (mine !== generation || tracker) return
-    adb = found
-    if (!found) {
-      android = { pending: false, devices: [], problem: 'no-adb' }
-      return update()
+  const watchAndroid = async (mine: number, focus = false) => {
+    if (focus && adbLook) return
+    const look = (adbLook = {})
+    try {
+      const found = await findAdb(adbCandidates(opts.env, opts.platform, opts.home))
+      if (mine !== generation || tracker) return
+      adb = found
+      if (!found) {
+        android = { pending: false, devices: [], problem: 'no-adb' }
+        return update()
+      }
+      tracker = new AndroidTracker({
+        track: () => spawn(found, ['track-devices', '-l'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }),
+        identify: async (serial) => parseIdentity(await runAdb(found, ['-s', serial, 'shell', IDENTITY_SCRIPT], 10_000)),
+        publish: (devices, error) => {
+          android = { pending: false, devices, problem: error && devices.length === 0 ? { error } : null }
+          update()
+        },
+      })
+      tracker.start()
+    } finally {
+      if (adbLook === look) adbLook = null
     }
-    tracker = new AndroidTracker({
-      track: () => spawn(found, ['track-devices', '-l'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }),
-      identify: async (serial) => parseIdentity(await runAdb(found, ['-s', serial, 'shell', IDENTITY_SCRIPT], 10_000)),
-      publish: (devices, error) => {
-        android = { pending: false, devices, problem: error && devices.length === 0 ? { error } : null }
-        update()
-      },
-    })
-    tracker.start()
   }
 
   /** Simulators: macOS only, with idb-companion. Without it (or with one too old for sim-video), a
@@ -132,6 +138,10 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
         ios = { pending: false, devices: [], problem: booted ? (found ? 'old-idb' : 'no-idb') : null }
         return update()
       }
+      // Clears a stale hint (no-idb, old-idb, an earlier error) at once: the notifier itself takes
+      // about 2.5 s to list, and ios otherwise wouldn't change until it does.
+      ios = { pending: true, devices: [], problem: null }
+      update()
       startSimulators(found.companion)
     } finally {
       if (idbLook === look) idbLook = null
@@ -261,7 +271,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       // rather than only when a tab starts needing devices.
       w.on('focus', () => {
         if (watchers === 0) return
-        if (!tracker && !lookingForAdb) void watchAndroid(generation)
+        if (!tracker) void watchAndroid(generation, true)
         if (opts.platform === 'darwin' && !simulators) void watchSimulators(generation, true)
       })
       // A locked screen or a sleeping Mac: nobody's watching, and the device may sleep. Waking with

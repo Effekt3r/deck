@@ -135,8 +135,8 @@ async function start(): Promise<void> {
     platform: process.platform as Platform,
     home: homedir(),
     env: process.env,
-    // Short and this instance's own, like the clipboard's image folder above (Task 10 switches this
-    // to socketDirFor, which keeps a simulator's socket path under macOS's sun_path limit).
+    // Short (macOS limits a Unix socket's path) and this instance's own, like the clipboard's image
+    // folder above.
     socketDir: join(app.getPath('temp'), `deck-${instance}`),
     saveImage: (png) => clip.saveImage(png),
   })
