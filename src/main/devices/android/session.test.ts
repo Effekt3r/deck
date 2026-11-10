@@ -18,6 +18,7 @@ describe('androidSession', () => {
     const scrcpy = fakeScrcpy()
     const input = { type: 'key', keycode: 3, meta: 0 }
     androidSession(scrcpy).input(input)
+    expect(scrcpy.send).toHaveBeenCalledTimes(2) // a key is a down and an up
     expect(scrcpy.send.mock.calls).toEqual(controlMessages(input).map((message) => [message]))
   })
 

@@ -202,7 +202,7 @@ export class DeviceStreams {
     this.deps.start(id, events, start.signal).then(
       (session) => {
         clearStartTimer()
-        if (!current()) return session.stop()
+        if (!current()) return this.guard(() => session.stop())
         s.starting = null
         s.session = session
       },
@@ -250,8 +250,8 @@ export class DeviceStreams {
     if (session) this.guard(() => session.stop())
   }
 
-  /** Session methods shouldn't throw (session.ts), but they run in IPC listeners and timers, where
-   *  a throw would show Electron's modal error dialog: guarded anyway. */
+  /** Session methods shouldn't throw (session.ts), but a throw there would leave the caller's work
+   *  half done (halt() among them) and reach only main's last-resort log: guarded anyway. */
   private guard(run: () => void): void {
     try {
       run()

@@ -337,15 +337,21 @@ describe('DeviceStreams, the edges', () => {
     expect(started[1].session.stop).toHaveBeenCalled()
   })
 
-  it('a start that finishes after its stream stopped is stopped at once', async () => {
-    let finish!: (session: DeviceSession) => void
-    const session = { input: vi.fn(), keyframe: vi.fn(), stop: vi.fn() }
-    const streams = new DeviceStreams({ start: () => new Promise((resolve) => { finish = resolve }), send: () => {} })
-    streams.view('android:1')
-    streams.pause()
-    finish(session)
-    await flush()
-    expect(session.stop).toHaveBeenCalled()
+  it('a start that finishes after its stream stopped is stopped at once, guarded even here', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      let finish!: (session: DeviceSession) => void
+      const session = { input: vi.fn(), keyframe: vi.fn(), stop: vi.fn(() => { throw new Error('stop boom') }) }
+      const streams = new DeviceStreams({ start: () => new Promise((resolve) => { finish = resolve }), send: () => {} })
+      streams.view('android:1')
+      streams.pause()
+      finish(session)
+      await flush()
+      expect(session.stop).toHaveBeenCalled()
+      expect(errorSpy).toHaveBeenCalledWith('devices: a session failed', expect.any(Error))
+    } finally {
+      errorSpy.mockRestore()
+    }
   })
 
   it('pause() forgets streams in their grace and starts nothing; resume() starts only the viewed ones', async () => {
