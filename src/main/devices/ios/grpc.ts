@@ -9,6 +9,10 @@ export interface GrpcStream {
   close(): void
 }
 
+/** idb never answered a call: the connection, or the call itself, ended before any grpc-status
+ *  arrived. */
+export class GrpcNoAnswer extends Error {}
+
 const headers = (path: string) => ({ ':method': 'POST', ':path': path, 'content-type': 'application/grpc', te: 'trailers' })
 
 /** gRPC's status message is percent-encoded. */
@@ -20,11 +24,22 @@ function readable(message: string): string {
   }
 }
 
+const noAnswer = (path: string, cause: string) => new GrpcNoAnswer(`The call to ${path} ended without an answer from idb (${cause}).`)
+
+/** Why a stream ended, with nothing more specific known: the request's own error (preferring a
+ *  wrapped cause, where Node puts the real reason for a reset or a dead connection), else a plain
+ *  line — the same wording whichever runtime notices first (Node 22 throws from request() at
+ *  once; Electron 45's Node 24 instead fails the returned stream a tick later). */
+function endReason(path: string, err: Error | null | undefined): string {
+  return (err?.cause as Error | undefined)?.message ?? err?.message ?? `idb ended ${path}.`
+}
+
 /** gRPC to idb_companion over its Unix socket, on Node's own HTTP/2: Deck makes two kinds of call
  *  (describe and hid), which a gRPC library and its protobuf loader would add 12 MB for. */
 export class GrpcClient {
   private readonly session: http2.ClientHttp2Session
-  /** Why the connection failed, for the calls it takes down. */
+  /** Why the connection failed, for the calls it takes down. Can land after a call's own stream
+   *  has already closed, so unary() and stream() also keep that stream's own 'error'. */
   private failure: Error | null = null
 
   /** `onClose`: the connection closed (also after close()). */
@@ -33,7 +48,7 @@ export class GrpcClient {
     this.session.on('error', (err) => {
       this.failure = err
     })
-    this.session.on('close', () => onClose?.())
+    this.session.on('close', () => this.guard(() => onClose?.()))
   }
 
   /** One message there, one back: the answer's message, or the server's own words for a failure. */
@@ -41,14 +56,16 @@ export class GrpcClient {
     return new Promise((resolve, reject) => {
       let req: http2.ClientHttp2Stream
       try {
-        // request() throws at once on a connection that has closed or failed.
+        // request() throws at once on a connection that has closed or failed (Node 22); Electron
+        // 45's Node 24 instead returns a stream that fails on the next tick (the 'close' below).
         req = this.session.request(headers(path))
       } catch (err) {
-        return reject(this.failure ?? err)
+        return reject(noAnswer(path, (this.failure ?? (err as Error)).message))
       }
       const chunks: Buffer[] = []
       let status: string | undefined
       let detail = ''
+      let streamError: Error | undefined
       let timedOut = false
       const timer = setTimeout(() => {
         timedOut = true
@@ -62,12 +79,19 @@ export class GrpcClient {
       req.on('response', read)
       req.on('trailers', read)
       req.on('data', (chunk: Buffer) => chunks.push(chunk))
-      req.on('error', () => {}) // 'close' settles the call
+      // this.failure (the session's own 'error') can land after this same stream's 'close' below,
+      // so keep the stream's own error too.
+      req.on('error', (e) => {
+        streamError ??= e
+      })
       req.on('close', () => {
         clearTimeout(timer)
-        if (timedOut) return reject(new Error(`idb didn't answer ${path} within ${Math.round(timeoutMs / 1000)} s.`))
-        if (status === undefined && this.failure) return reject(this.failure)
-        if (status !== '0') return reject(new Error(detail || `idb answered ${path} with gRPC status ${status ?? 'none'}.`))
+        if (timedOut) return reject(new Error(`idb didn't answer ${path} within ${timeoutMs / 1000} s.`))
+        if (status === undefined) {
+          const cause = this.failure?.message ?? (streamError?.cause as Error | undefined)?.message ?? streamError?.message ?? 'no reason given'
+          return reject(noAnswer(path, cause))
+        }
+        if (status !== '0') return reject(new Error(detail || `idb answered ${path} with gRPC status ${status}.`))
         try {
           const [answer] = grpcMessages(Buffer.concat(chunks))
           if (!answer) throw new Error(`idb sent no answer to ${path}.`)
@@ -80,28 +104,77 @@ export class GrpcClient {
     })
   }
 
-  /** A client stream kept open (idb's hid): idb acts on each message as it comes. */
-  stream(path: string): GrpcStream {
+  /** A client stream kept open (idb's hid): idb acts on each message as it comes. If idb ends the
+   *  call itself — a grpc-status, or the stream or connection failing — rather than close(),
+   *  `onEnd` fires once with why. The connection itself stays open either way, so the caller may
+   *  open a new stream on it (that works). */
+  stream(path: string, onEnd?: (why: string) => void): GrpcStream {
     let req: http2.ClientHttp2Stream
     try {
       req = this.session.request(headers(path))
-    } catch {
-      // A connection that has closed or failed: nothing goes, and the companion's end says why.
+    } catch (err) {
+      // Node 22 throws here at once; Electron 45's Node 24 instead fails the returned stream a
+      // tick later (the 'close' below) — queue this one too, so a caller sees the same thing
+      // either way.
+      if (onEnd) {
+        const why = endReason(path, this.failure ?? (err as Error))
+        queueMicrotask(() => this.guard(() => onEnd(why)))
+      }
       return { write: () => {}, close: () => {} }
     }
-    req.on('error', () => {}) // a call reset with the connection: the session's end says why
+    let closedByCaller = false
+    let status: string | undefined
+    let detail = ''
+    let streamError: Error | undefined
+    const read = (h: http2.IncomingHttpHeaders) => {
+      if (h['grpc-status'] !== undefined) status = String(h['grpc-status'])
+      if (h['grpc-message'] !== undefined) detail = readable(String(h['grpc-message']))
+      // idb ending the call doesn't end our own side (we may still have more to write): finish it
+      // so the stream can close and tell the caller, below. Measured: a call idb ends from only
+      // its side, ours left open, never reaches HTTP/2's fully-closed state, so 'close' never
+      // fires on it at all.
+      if (status !== undefined && !req.writableEnded && !req.destroyed) req.end()
+    }
+    req.on('response', read)
+    req.on('trailers', read)
+    req.on('error', (e) => {
+      streamError ??= e
+    }) // 'close' below settles the call
+    req.on('close', () => {
+      if (closedByCaller || !onEnd) return
+      const why = detail
+        ? detail
+        : status !== undefined
+          ? `idb ended ${path} (gRPC status ${status}).`
+          : endReason(path, streamError)
+      this.guard(() => onEnd(why))
+    })
     req.resume() // the answer isn't read
     return {
       write: (message) => {
         if (!req.destroyed && !req.writableEnded) req.write(grpcFrame(message))
       },
       close: () => {
+        closedByCaller = true
         if (!req.destroyed && !req.writableEnded) req.end()
       },
     }
   }
 
+  /** Drops the connection and every call on it at once: a graceful close() never finished while a
+   *  stream was open, or the server hung. */
   close(): void {
-    this.session.close()
+    this.session.destroy()
+  }
+
+  /** onClose and onEnd run in a session or stream event handler: a throw there is unhandled, and
+   *  in main would show Electron's modal error dialog. Guarded, as DeviceStreams guards a
+   *  session's own calls. */
+  private guard(run: () => void): void {
+    try {
+      run()
+    } catch (err) {
+      console.error('devices: a gRPC callback failed', err)
+    }
   }
 }
