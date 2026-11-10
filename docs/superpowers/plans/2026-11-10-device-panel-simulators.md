@@ -30,6 +30,9 @@ React 19, TypeScript, vitest (node environment). No new dependency.
 - Comments explain why, in the repo's plain style. Tests sit next to their source as `*.test.ts`.
 - Code comments and tests never name other repositories of Franco's (use made-up names); device ids
   and UDIDs in tests are made up.
+- Main runs on Electron 45's own Node (24.22); CI runs Node 22, and `node:http2` differs between them
+  (Task 4). Run the `ios/` tests on both:
+  `ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron ./node_modules/vitest/vitest.mjs run src/main/devices/ios`.
 - Never commit screenshots or session logs. Never boot, shut down or type into Franco's own
   simulators: checks use a throwaway simulator in a private device set (Task 14).
 
@@ -2602,7 +2605,9 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
     let why = err
     // An unanswered describe is often the companion going: its own words, a moment later, say why.
     if (err instanceof GrpcNoAnswer && !signal.aborted) {
-      const words = await Promise.race([companionGone.catch((e: unknown) => e), new Promise((resolve) => setTimeout(resolve, 1000))])
+      const stopped = new Promise((resolve) => signal.addEventListener('abort', resolve, { once: true }))
+      const waited = new Promise((resolve) => setTimeout(resolve, 1000))
+      const words = await Promise.race([companionGone.catch((e: unknown) => e), waited, stopped])
       if (words instanceof Error) why = words
     }
     close()
