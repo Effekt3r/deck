@@ -99,10 +99,10 @@ describe('registerDeviceIpc', () => {
     // Only git repositories are looked into for an app.
     const app = makeRepo()
     commit(app, 'app', { 'app/src/main/AndroidManifest.xml': '<manifest/>' })
-    expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, picks: [] })
+    expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, ios: false, picks: [] })
     await call(IPC.devicesPick, app, 'android:8d2e61a')
     await call(IPC.devicesPick, app, 'emulator:Pixel_9')
-    expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, picks: ['emulator:Pixel_9', 'android:8d2e61a'] })
+    expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, ios: false, picks: ['emulator:Pixel_9', 'android:8d2e61a'] })
     await expect(call(IPC.devicesProject, 42)).rejects.toThrow('No folder given.')
     await expect(call(IPC.devicesProject, 'relative/app')).rejects.toThrow('No folder given.')
   })

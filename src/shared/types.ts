@@ -324,6 +324,8 @@ export interface DeviceProject {
   root: string
   /** It's an Android app, so it takes Android phones and emulators. */
   android: boolean
+  /** It's an iOS app (an Xcode project or workspace), so it takes simulators. */
+  ios: boolean
   /** The devices picked in it, latest first (at most 8). */
   picks: string[]
 }

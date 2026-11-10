@@ -95,7 +95,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
 
   /** A folder's project, for 30 s: asked whenever a tab comes to the front, and each look runs git
    *  and a few dozen stats. The pick is read fresh every time. */
-  const projects = new Map<string, { at: number; value: Promise<{ root: string; android: boolean }> }>()
+  const projects = new Map<string, { at: number; value: Promise<{ root: string; android: boolean; ios: boolean }> }>()
   const describe = (folder: string) => {
     const now = performance.now()
     const cached = projects.get(folder)
@@ -121,13 +121,13 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   ipcMain.handle(IPC.devicesList, () => list)
   ipcMain.handle(IPC.devicesProject, async (_e, folder: unknown): Promise<DeviceProject> => {
     if (typeof folder !== 'string' || !isAbsolute(folder)) throw new Error('No folder given.')
-    const { root, android } = await describe(folder)
+    const { root, android, ios } = await describe(folder)
     // An unreadable devices.json must not hide every tab's panel: no picks, then.
     const picked = await picks.get(root).catch((err: unknown): string[] => {
       console.error('devices: reading devices.json failed', err)
       return []
     })
-    return { root, android, picks: picked }
+    return { root, android, ios, picks: picked }
   })
   ipcMain.handle(IPC.devicesPick, async (_e, root: unknown, id: unknown) => {
     if (typeof root !== 'string' || !isAbsolute(root) || root.length > 4096 || typeof id !== 'string' || !id || id.length > 4096) {
