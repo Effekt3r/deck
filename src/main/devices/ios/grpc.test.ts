@@ -151,20 +151,36 @@ describe.skipIf(process.platform === 'win32')('GrpcClient', () => {
     client.close()
   })
 
-  it('never throws on a closed connection: a call rejects with GrpcNoAnswer, a stream does nothing but still tells onEnd', async () => {
+  it("never throws once Deck itself has closed the connection, and doesn't blame idb for it either", async () => {
     const client = new GrpcClient(socket)
     client.close()
     await expect(client.unary('/test/describe', Buffer.alloc(0))).rejects.toThrow(GrpcNoAnswer)
+    // Deck closed this, not idb: a stream stays quiet (no onEnd) even left open and never closed
+    // by the caller either (closing it would also suppress onEnd via its own queued-microtask
+    // guard, which isn't what this is testing).
     const onEnd = vi.fn()
     const call = client.stream('/test/hid', onEnd)
     expect(() => call.write(Buffer.from('x'))).not.toThrow()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(onEnd).not.toHaveBeenCalled()
     call.close()
-    await vi.waitFor(() => expect(onEnd).toHaveBeenCalled())
   })
 
   it('rejects calls when nothing listens on the socket', async () => {
     const client = new GrpcClient(join(dir, 'missing.sock'))
     await expect(client.unary('/test/describe', Buffer.alloc(0))).rejects.toThrow(/ended without an answer from idb \(.*(ENOENT|connect)/)
+
+    // The connection failed on its own (not Deck's close()): a stream still tells onEnd...
+    const onEnd = vi.fn()
+    const call = client.stream('/test/describe', onEnd)
+    expect(() => call.write(Buffer.from('x'))).not.toThrow()
+    await vi.waitFor(() => expect(onEnd).toHaveBeenCalled())
+    // ...unless the caller closes it first: the no-op stream's own queued onEnd must not leak
+    // through once it has, whichever tick request() actually fails on.
+    const closedAtOnce = vi.fn()
+    client.stream('/test/describe', closedAtOnce).close()
+    await new Promise((r) => setTimeout(r, 50))
+    expect(closedAtOnce).not.toHaveBeenCalled()
     client.close()
   })
 })

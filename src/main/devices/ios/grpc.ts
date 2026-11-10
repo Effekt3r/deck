@@ -41,6 +41,9 @@ export class GrpcClient {
   /** Why the connection failed, for the calls it takes down. Can land after a call's own stream
    *  has already closed, so unary() and stream() also keep that stream's own 'error'. */
   private failure: Error | null = null
+  /** Set by close(): idb isn't the one ending calls after this, Deck is, so stream()'s onEnd stays
+   *  quiet instead of blaming idb for it. */
+  private closing = false
 
   /** `onClose`: the connection closed (also after close()). */
   constructor(socket: string, onClose?: () => void) {
@@ -115,12 +118,16 @@ export class GrpcClient {
     } catch (err) {
       // Node 22 throws here at once; Electron 45's Node 24 instead fails the returned stream a
       // tick later (the 'close' below) — queue this one too, so a caller sees the same thing
-      // either way.
-      if (onEnd) {
+      // either way. Deck's own close() doesn't blame idb: no onEnd at all then (below).
+      let closed = false
+      if (onEnd && !this.closing) {
         const why = endReason(path, this.failure ?? (err as Error))
-        queueMicrotask(() => this.guard(() => onEnd(why)))
+        // The caller may close() this (still a no-op stream) before the microtask runs.
+        queueMicrotask(() => {
+          if (!closed) this.guard(() => onEnd(why))
+        })
       }
-      return { write: () => {}, close: () => {} }
+      return { write: () => {}, close: () => { closed = true } }
     }
     let closedByCaller = false
     let status: string | undefined
@@ -129,19 +136,20 @@ export class GrpcClient {
     const read = (h: http2.IncomingHttpHeaders) => {
       if (h['grpc-status'] !== undefined) status = String(h['grpc-status'])
       if (h['grpc-message'] !== undefined) detail = readable(String(h['grpc-message']))
-      // idb ending the call doesn't end our own side (we may still have more to write): finish it
-      // so the stream can close and tell the caller, below. Measured: a call idb ends from only
-      // its side, ours left open, never reaches HTTP/2's fully-closed state, so 'close' never
-      // fires on it at all.
-      if (status !== undefined && !req.writableEnded && !req.destroyed) req.end()
     }
     req.on('response', read)
     req.on('trailers', read)
+    // idb ending the call (its readable side) doesn't end our own writable side, so the stream
+    // never reaches HTTP/2's fully-closed state and 'close' below never fires: cancel our side too,
+    // whatever idb said or didn't say (a grpc-status, none at all, or one that wasn't even final).
+    req.on('end', () => {
+      if (!req.writableEnded && !req.destroyed) req.close(http2.constants.NGHTTP2_CANCEL)
+    })
     req.on('error', (e) => {
       streamError ??= e
     }) // 'close' below settles the call
     req.on('close', () => {
-      if (closedByCaller || !onEnd) return
+      if (closedByCaller || !onEnd || this.closing) return
       const why = detail
         ? detail
         : status !== undefined
@@ -164,6 +172,7 @@ export class GrpcClient {
   /** Drops the connection and every call on it at once: a graceful close() never finished while a
    *  stream was open, or the server hung. */
   close(): void {
+    this.closing = true
     this.session.destroy()
   }
 
