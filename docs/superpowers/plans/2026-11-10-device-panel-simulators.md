@@ -2822,10 +2822,9 @@ In `ipc.ts`, import `startSimulator` from `./ios/simulator` and `simulatorIo` fr
     },
 ```
 
-(`androidSession` lives in `android/session.ts` since Task 1's review.) In `dispose()`, after stopping the streams, remove the socket folder inside try/catch (a `/tmp`
-folder another user squatted would make `rmSync` throw at quit):
-`try { rmSync(opts.socketDir, { recursive: true, force: true }) } catch {}` (import `rmSync` from
-`node:fs`).
+(`androidSession` lives in `android/session.ts` since Task 1's review.) In `dispose()`, after stopping the streams: `removeSocketDir(opts.socketDir)` (from
+`./ios/simulator-io`: it removes the folder only when it's this user's private one, and never
+throws).
 
 - [ ] **Step 2: Give main the folder**
 
