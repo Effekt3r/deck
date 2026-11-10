@@ -1,16 +1,14 @@
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync } from 'node:fs'
-import net from 'node:net'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { StreamPacket } from '../session'
 import { GrpcNoAnswer, type GrpcStream } from './grpc'
 import { DESCRIBE_PATH, HID_PATH, touchEvent } from './proto'
-import { type IdbConnection, scaleFor, type SimulatorIo, simulatorIo, socketDirFor, startSimulator } from './simulator'
+import { type IdbConnection, scaleFor, type SimulatorIo, startSimulator } from './simulator'
 import { DESCRIBE_ANSWER, fragment, initSegment, nal } from './test-fixtures'
 import { fakeProcess, type FakeProcess, type FakeProcessOptions } from './test-process'
 
-function setup(opts: { describe?: () => Promise<Buffer>; companion?: FakeProcessOptions } = {}) {
+afterEach(() => vi.useRealTimers())
+
+function setup(opts: { describe?: () => Promise<Buffer>; companion?: FakeProcessOptions; video?: FakeProcessOptions } = {}) {
   const companions: FakeProcess[] = []
   const videos: FakeProcess[] = []
   const videoArgs: [string, number][] = []
@@ -52,7 +50,7 @@ function setup(opts: { describe?: () => Promise<Buffer>; companion?: FakeProcess
     video: (udid, scale) => {
       if (fail.video) throw fail.video
       videoArgs.push([udid, scale])
-      const p = fakeProcess()
+      const p = fakeProcess(opts.video)
       videos.push(p)
       return p.proc
     },
@@ -67,6 +65,9 @@ function setup(opts: { describe?: () => Promise<Buffer>; companion?: FakeProcess
 const flush = () => new Promise((r) => setImmediate(r))
 
 const unanswered = () => Promise.reject(new GrpcNoAnswer('The call to describe ended without an answer from idb (ECONNRESET).'))
+
+/** A group of pictures too long to replay: a key frame, then nine more. */
+const longGroup = () => Buffer.concat([initSegment(), fragment([nal(0x65)]), ...Array.from({ length: 9 }, () => fragment([nal(0x41)]))])
 
 describe('startSimulator', () => {
   it('describes the screen, then streams it scaled to 1600 px at most', async () => {
@@ -136,11 +137,15 @@ describe('startSimulator', () => {
   })
 
   it('ends a second after the connection closes while the companion runs on', async () => {
+    vi.useFakeTimers()
     const t = setup()
     await startSimulator('U1', t.events, t.io, new AbortController().signal)
     t.closeConnection()
     expect(t.ends).toEqual([])
-    await vi.waitFor(() => expect(t.ends).toEqual(["The simulator's companion stopped answering."]), { timeout: 2000 })
+    await vi.advanceTimersByTimeAsync(999)
+    expect(t.ends).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.ends).toEqual(["The simulator's companion stopped answering."])
     expect(t.companions[0].killed()).toBe(true)
   })
 
@@ -210,19 +215,50 @@ describe('startSimulator', () => {
   })
 })
 
-describe('startSimulator, when its processes fail or hang', () => {
-  afterEach(() => vi.useRealTimers())
-
-  it("fails the start in spawn's words when the companion can't be started, and stops waiting for its socket", async () => {
-    const t = setup({ describe: () => new Promise(() => {}) })
-    const starting = startSimulator('U1', t.events, t.io, new AbortController().signal)
+describe('startSimulator, its pictures', () => {
+  it('asks nothing of sim-video while a first key frame is on its way, at the start and after a restart', async () => {
+    const t = setup()
+    const session = await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    // The config comes about 250 ms before the first key frame: a key frame asked for between them
+    // is already on its way.
+    t.videos[0].stdout.write(initSegment())
     await flush()
-    // How Node reports a spawn that fails once under way (ENOENT, EACCES): 'error', then 'close'.
-    // Unheard, the 'error' would reach main's uncaught exception handler.
-    t.companions[0].proc.emit('error', new Error('spawn /opt/homebrew/bin/idb_companion ENOENT'))
-    t.companions[0].exit(-2)
+    session.keyframe()
+    expect(t.videos).toHaveLength(1)
+    expect(t.packets).toHaveLength(1) // the config, not replayed
+    t.videos[0].stdout.write(Buffer.concat([fragment([nal(0x65)]), ...Array.from({ length: 9 }, () => fragment([nal(0x41)]))]))
+    await flush()
+    session.keyframe() // a group too long to replay: sim-video starts again
+    expect(t.videos).toHaveLength(2)
+    t.videos[1].stdout.write(initSegment())
+    await flush()
+    session.keyframe()
+    expect(t.videos).toHaveLength(2)
+  })
+
+  it('drops what the old sim-video still sends after a restart', async () => {
+    vi.useFakeTimers()
+    const t = setup({ video: { ignoreSigterm: true } }) // the old one lingers after its SIGTERM
+    const session = await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    t.videos[0].stdout.write(longGroup())
+    await vi.advanceTimersByTimeAsync(0)
+    session.keyframe()
+    expect(t.videos).toHaveLength(2)
+    const before = t.packets.length
+    t.videos[0].stdout.write(fragment([nal(0x41)]))
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.packets).toHaveLength(before)
+  })
+})
+
+describe('startSimulator, when its processes fail or hang', () => {
+  it("fails the start in spawn's words when the companion can't be started, never kills it, and stops waiting for its socket", async () => {
+    const t = setup({ describe: () => new Promise(() => {}), companion: { spawnError: new Error('spawn /opt/homebrew/bin/idb_companion ENOENT') } })
+    const starting = startSimulator('U1', t.events, t.io, new AbortController().signal)
     await expect(starting).rejects.toThrow('spawn /opt/homebrew/bin/idb_companion ENOENT')
     expect(t.connection.closed).toBe(true)
+    // No process to end: a kill() with no pid could signal the whole process group (Node 22).
+    expect(t.companions[0].killed()).toBe(false)
     // The streams never abort a start that failed: the socket's poll needs its own stop.
     expect(t.readySignals[0].aborted).toBe(true)
   })
@@ -238,8 +274,7 @@ describe('startSimulator, when its processes fail or hang', () => {
   it("ends the session, without throwing, when sim-video can't be started again for a key frame", async () => {
     const t = setup()
     const session = await startSimulator('U1', t.events, t.io, new AbortController().signal)
-    const ps = Array.from({ length: 9 }, () => fragment([nal(0x41)]))
-    t.videos[0].stdout.write(Buffer.concat([initSegment(), fragment([nal(0x65)]), ...ps]))
+    t.videos[0].stdout.write(longGroup())
     await flush()
     t.fail.video = new Error('spawn EAGAIN')
     expect(() => session.keyframe()).not.toThrow()
@@ -248,13 +283,12 @@ describe('startSimulator, when its processes fail or hang', () => {
     expect(t.companions[0].killed()).toBe(true)
   })
 
-  it("ends in spawn's words when sim-video fails once under way, and shrugs off its stdin's EPIPE", async () => {
-    const t = setup()
+  it("ends in spawn's words, at once, when sim-video fails once under way, never kills it, and shrugs off its stdin's EPIPE", async () => {
+    const t = setup({ video: { spawnError: new Error('spawn /opt/homebrew/opt/idb-companion/libexec/sim-video ENOENT') } })
     await startSimulator('U1', t.events, t.io, new AbortController().signal)
-    t.videos[0].proc.emit('error', new Error('spawn /opt/homebrew/opt/idb-companion/libexec/sim-video ENOENT'))
-    t.videos[0].exit(-2)
     await flush()
     expect(t.ends).toEqual(['spawn /opt/homebrew/opt/idb-companion/libexec/sim-video ENOENT'])
+    expect(t.videos[0].killed()).toBe(false)
     // Ending the stdin of a sim-video that has gone can fail the write: no uncaught exception.
     expect(() => t.videos[0].stdin.emit('error', new Error('write EPIPE'))).not.toThrow()
   })
@@ -265,6 +299,67 @@ describe('startSimulator, when its processes fail or hang', () => {
     t.videos[0].stderr.write(`Error: ${'x'.repeat(600)}\n`)
     t.videos[0].exit(1)
     await vi.waitFor(() => expect(t.ends[0]).toHaveLength(500))
+  })
+
+  it("ends in sim-video's last line when it gave no error, once the companion has had a second to say why", async () => {
+    vi.useFakeTimers()
+    const t = setup()
+    await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    t.videos[0].stderr.write('Overlay setup: screenInfo=1206x2622@3.0x\nFatal error: Unexpectedly found nil while unwrapping\n')
+    t.videos[0].exit(1)
+    await vi.advanceTimersByTimeAsync(999)
+    expect(t.ends).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.ends).toEqual(['Fatal error: Unexpectedly found nil while unwrapping'])
+
+    const u = setup()
+    await startSimulator('U1', u.events, u.io, new AbortController().signal)
+    u.videos[0].exit(0) // nothing said at all
+    await vi.advanceTimersByTimeAsync(999)
+    expect(u.ends).toEqual([])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(u.ends).toEqual(['sim-video stopped.'])
+  })
+
+  it("takes the companion's words when sim-video ends without an error and the companion follows", async () => {
+    vi.useFakeTimers()
+    const t = setup()
+    const session = await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    t.videos[0].stdout.write(Buffer.concat([initSegment(), fragment([nal(0x65)])]))
+    await vi.advanceTimersByTimeAsync(0)
+    // The simulator shutting down: sim-video ends first, saying nothing; the companion follows.
+    t.videos[0].exit(0)
+    await vi.advanceTimersByTimeAsync(500)
+    expect(t.ends).toEqual([])
+    const before = t.packets.length
+    session.keyframe() // nothing to replay or restart meanwhile
+    expect(t.packets).toHaveLength(before)
+    expect(t.videos).toHaveLength(1)
+    t.companions[0].stderr.write('2026-11-10 14:21:57.805+0200 [U1] Target is no longer booted, companion going offline\n')
+    t.companions[0].exit(0)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.ends).toEqual(['Target is no longer booted, companion going offline'])
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it("gives up on the companion's socket after 10 s, in its words", async () => {
+    vi.useFakeTimers()
+    for (const [said, why] of [
+      ['', "idb_companion didn't open its socket in 10 s."],
+      ['2026-11-10 10:00:00.000+0200 GRPCCore.RuntimeError error 1\n', 'GRPCCore.RuntimeError error 1'],
+    ]) {
+      const t = setup()
+      t.io.socketReady = () => new Promise(() => {}) // the socket never comes
+      const starting = startSimulator('U1', t.events, t.io, new AbortController().signal)
+      const failed = vi.fn()
+      starting.catch(failed)
+      if (said) t.companions[0].stderr.write(said)
+      await vi.advanceTimersByTimeAsync(9999)
+      expect(failed).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(1)
+      expect(failed).toHaveBeenCalledWith(new Error(why))
+      expect(t.companions[0].killed()).toBe(true)
+    }
   })
 
   it("lands a stop at once, while describe is asked and while the start waits for the companion's words", async () => {
@@ -286,14 +381,20 @@ describe('startSimulator, when its processes fail or hang', () => {
     }
   })
 
-  it('leaves no timer behind on stop(), the grace after a lost connection included', async () => {
-    vi.useFakeTimers()
+  it("doesn't start sim-video for a stop that lands just as describe answers", async () => {
     const t = setup()
-    const session = await startSimulator('U1', t.events, t.io, new AbortController().signal)
-    t.closeConnection()
-    session.stop()
-    await vi.advanceTimersByTimeAsync(1) // the processes close
-    expect(vi.getTimerCount()).toBe(0)
+    const abort = new AbortController()
+    // describe's answer, then the stop, both before the start goes on: describe has already won the
+    // race.
+    t.connection.unary = () => {
+      const answer = Promise.resolve(DESCRIBE_ANSWER)
+      queueMicrotask(() => {
+        answer.then(() => abort.abort())
+      })
+      return answer
+    }
+    await expect(startSimulator('U1', t.events, t.io, abort.signal)).rejects.toThrow('Stopped.')
+    expect(t.videos).toEqual([])
   })
 
   it('gives up on an unanswered describe after 1 s, and kills a companion that ignores SIGTERM 2 s later', async () => {
@@ -350,6 +451,16 @@ describe('startSimulator, when its processes fail or hang', () => {
     expect(t.ends).toEqual([])
   })
 
+  it('leaves no timer behind on stop(), the grace after a lost connection included', async () => {
+    vi.useFakeTimers()
+    const t = setup()
+    const session = await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    t.closeConnection()
+    session.stop()
+    await vi.advanceTimersByTimeAsync(1) // the processes close
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('fails the start when the companion ends just as describe answers', async () => {
     const t = setup()
     // describe's answer, then the companion's 'close', both before the start goes on (in Node, two
@@ -384,67 +495,9 @@ describe('startSimulator, when its processes fail or hang', () => {
   })
 })
 
-describe('scaleFor and socketDirFor', () => {
+describe('scaleFor', () => {
   it('keeps the long side within 1600 px, never scaling up', () => {
     expect(scaleFor({ width: 1320, height: 2868, widthPoints: 440, heightPoints: 956 })).toBeCloseTo(0.558, 3)
     expect(scaleFor({ width: 750, height: 1334, widthPoints: 375, heightPoints: 667 })).toBe(1)
-  })
-
-  it("keeps the socket's path under macOS's 104 bytes", () => {
-    expect(socketDirFor('/var/folders/wv/abc/T', 'deadbeef', 501)).toBe('/var/folders/wv/abc/T/deck-deadbeef')
-    expect(socketDirFor(`/${'x'.repeat(90)}`, 'deadbeef', 501)).toBe('/tmp/deck-501-deadbeef')
-  })
-
-  it("counts the path's bytes, not its characters", () => {
-    // 47 characters, but 79 bytes: each é is two.
-    expect(socketDirFor(`/${'é'.repeat(32)}`, 'deadbeef', 501)).toBe('/tmp/deck-501-deadbeef')
-  })
-})
-
-describe('simulatorIo', () => {
-  const made: string[] = []
-  afterEach(() => {
-    for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true })
-  })
-  const tempDir = () => {
-    const dir = mkdtempSync(join(tmpdir(), 'deck-sim-'))
-    made.push(dir)
-    return dir
-  }
-  // Paths that don't exist: nothing here may start a real idb_companion or sim-video.
-  const ioIn = (dir: string) =>
-    simulatorIo({ companion: '/nonexistent/idb_companion', simVideo: '/nonexistent/sim-video', set: '/nonexistent/set', customSet: false, dir })
-
-  it('gives each session its own socket, named after its simulator', () => {
-    const io = ioIn('/private/d')
-    expect(io.socketFor('ABCDEF12-3456-7890')).toBe('/private/d/ABCDEF12-1.sock')
-    expect(io.socketFor('ABCDEF12-3456-7890')).toBe('/private/d/ABCDEF12-2.sock')
-  })
-
-  it("refuses a socket folder that isn't private to this user, or a link to one, before starting anything", () => {
-    const base = tempDir()
-    const shared = join(base, 'shared')
-    mkdirSync(shared)
-    chmodSync(shared, 0o755)
-    expect(() => ioIn(shared).companion('U1', join(shared, 'U1-1.sock'))).toThrow("isn't private to this user")
-    const own = join(base, 'own')
-    mkdirSync(own, { mode: 0o700 })
-    const link = join(base, 'link')
-    symlinkSync(own, link)
-    expect(() => ioIn(link).companion('U1', join(link, 'U1-1.sock'))).toThrow("isn't private to this user")
-  })
-
-  it('waits for the socket, and stops waiting when told', async () => {
-    const dir = tempDir()
-    const io = ioIn(dir)
-    const socket = join(dir, 'a.sock')
-    const ready = io.socketReady(socket, new AbortController().signal)
-    const server = net.createServer().listen(socket)
-    await ready
-    await new Promise((resolve) => server.close(resolve))
-    const abort = new AbortController()
-    const waiting = io.socketReady(join(dir, 'b.sock'), abort.signal)
-    abort.abort()
-    await expect(waiting).rejects.toThrow('Stopped.')
   })
 })

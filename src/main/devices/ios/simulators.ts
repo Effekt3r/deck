@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import type { DeviceInfo } from '@shared/types'
+import { lastLine, stopper } from './process'
 
 /** What idb_companion's notifier says of a simulator. */
 export interface SimTarget {
@@ -65,9 +66,6 @@ export interface SimulatorTrackerDeps {
 
 /** No line is ever this long: a run of garbage with no newline. */
 const MAX_LINE = 4 * 1024 * 1024
-/** Long enough to hold a line that says what went wrong, bounded so a chatty failure can't grow
- *  memory without limit. */
-const STDERR_TAIL = 4096
 /** idb-companion's first line normally comes in about 2.5 s (measured); a run that never lists
  *  anything in this long is treated as hung and killed. Doubles after each such kill (capped at
  *  DEADLINE_MAX), since a notifier that needs longer than this on every cold start would otherwise
@@ -76,16 +74,6 @@ const FIRST_LIST_DEADLINE = 20_000
 const DEADLINE_MAX = 120_000
 const RESTART_MIN = 1000
 const RESTART_MAX = 30_000
-/** SIGTERM, then this long for a hung notifier to act on it before SIGKILL: idb_companion handles
- *  SIGTERM itself on a dispatch queue, so a run hung on it may never act on one. */
-const FORCE_KILL_AFTER = 2000
-
-/** The last complete, trimmed line of a bounded stderr tail, capped at 500 characters (as runAdb
- *  does for adb's own errors). */
-function lastStderrLine(tail: string): string {
-  const lines = tail.split('\n').map((l) => l.trim()).filter(Boolean)
-  return (lines.at(-1) ?? '').slice(0, 500)
-}
 
 /** Follows the simulators with one long-running notifier. If it stops, it's started again after
  *  1 s, then twice the wait each time, up to 30 s; the wait goes back to 1 s after a run of 30 s on
@@ -98,6 +86,9 @@ function lastStderrLine(tail: string): string {
  *  uses, so a hung notifier is never left running past a stop either. */
 export class SimulatorTracker {
   private child: ChildProcess | null = null
+  /** Ends the running notifier (process.ts's stopper): SIGTERM, then SIGKILL if it's still running
+   *  2 s later. */
+  private stopChild: (() => void) | null = null
   private timer: ReturnType<typeof setTimeout> | null = null
   private deadline: ReturnType<typeof setTimeout> | null = null
   private wait = RESTART_MIN
@@ -118,9 +109,10 @@ export class SimulatorTracker {
     if (this.timer) clearTimeout(this.timer)
     this.timer = null
     this.clearDeadline()
-    const child = this.child
+    const stopChild = this.stopChild
     this.child = null
-    if (child) this.kill(child)
+    this.stopChild = null
+    stopChild?.()
   }
 
   /** Whether simulator `udid` was booted at the last line. */
@@ -137,10 +129,12 @@ export class SimulatorTracker {
       return
     }
     this.child = child
+    const stopChild = stopper(child)
+    this.stopChild = stopChild
+    const said = lastLine(child.stderr)
     const startedAt = Date.now()
     let first = true
     let rest = ''
-    let stderrTail = ''
     let listed = false
     let done = false
 
@@ -149,6 +143,7 @@ export class SimulatorTracker {
       done = true
       this.clearDeadline()
       this.child = null
+      this.stopChild = null
       this.ended(why, Date.now() - startedAt, listed, hung)
     }
     // Measured: the first line normally comes in ~2.5 s. A run stuck longer than this (its own
@@ -159,7 +154,7 @@ export class SimulatorTracker {
     this.deadline = setTimeout(() => {
       this.deadlineMs = Math.min(this.deadlineMs * 2, DEADLINE_MAX) // for next time, if this keeps happening
       finish(`idb_companion listed nothing in ${deadlineMs / 1000} s.`, true)
-      this.kill(child)
+      stopChild()
     }, deadlineMs)
 
     child.stdout?.setEncoding('utf8')
@@ -180,16 +175,12 @@ export class SimulatorTracker {
         this.safePublish(simulatorDevices(next))
       }
     })
-    child.stderr?.setEncoding('utf8')
-    child.stderr?.on('data', (text: string) => {
-      stderrTail = (stderrTail + text).slice(-STDERR_TAIL)
-    })
     // 'error' and 'close' can both fire for a failed spawn (e.g. EACCES): whichever comes first
     // finalizes the run (finish's own guard drops the other), each with its own best reason.
-    child.on('error', (err) => finish(lastStderrLine(stderrTail) || err.message))
+    child.on('error', (err) => finish(said() || err.message))
     child.on('close', (code, signal) =>
       finish(
-        lastStderrLine(stderrTail) ||
+        said() ||
           (signal ? `idb_companion was stopped (${signal}).` : code ? `idb_companion stopped (exit code ${code}).` : 'idb_companion stopped.'),
       ),
     )
@@ -221,15 +212,6 @@ export class SimulatorTracker {
       clearTimeout(this.deadline)
       this.deadline = null
     }
-  }
-
-  /** SIGTERM, then SIGKILL after FORCE_KILL_AFTER if the child hasn't closed by then: the notifier
-   *  holds no state worth a graceful exit, and a hung one (idb_companion stuck on its own dispatch
-   *  queue) may never act on SIGTERM at all. */
-  private kill(child: ChildProcess): void {
-    child.kill()
-    const force = setTimeout(() => child.kill('SIGKILL'), FORCE_KILL_AFTER)
-    child.once('close', () => clearTimeout(force))
   }
 
   private safePublish(devices: DeviceInfo[]): void {

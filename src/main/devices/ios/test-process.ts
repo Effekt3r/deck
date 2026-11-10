@@ -18,7 +18,12 @@ export interface FakeProcessOptions {
    *  idb_companion, which handles SIGTERM itself on a dispatch queue, so a run hung on it may never
    *  act on one. */
   ignoreSigterm?: boolean
+  /** A spawn that fails once under way, as Node reports ENOENT or EACCES: no pid, then this 'error'
+   *  on the next tick, and 'close'. */
+  spawnError?: Error
 }
+
+let nextPid = 40_000
 
 export function fakeProcess(options: FakeProcessOptions = {}): FakeProcess {
   const emitter = new EventEmitter()
@@ -38,6 +43,8 @@ export function fakeProcess(options: FakeProcessOptions = {}): FakeProcess {
     })
   }
   const proc = Object.assign(emitter, {
+    // Node leaves a failed spawn's pid undefined.
+    pid: options.spawnError ? undefined : nextPid++,
     stdin,
     stdout,
     stderr,
@@ -48,5 +55,15 @@ export function fakeProcess(options: FakeProcessOptions = {}): FakeProcess {
       return true
     },
   }) as unknown as ChildProcess
+  const spawnError = options.spawnError
+  if (spawnError) {
+    process.nextTick(() => {
+      ended = true
+      stdout.end()
+      stderr.end()
+      emitter.emit('error', spawnError)
+      setImmediate(() => emitter.emit('close', -2, null))
+    })
+  }
   return { proc, stdin, stdout, stderr, killed: () => killed, exit: (code) => exit(code ?? 0) }
 }
