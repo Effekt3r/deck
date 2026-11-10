@@ -2261,7 +2261,7 @@ Create `src/main/devices/ios/simulator.test.ts`:
 ```ts
 import { describe, expect, it, vi } from 'vitest'
 import type { StreamPacket } from '../session'
-import type { GrpcStream } from './grpc'
+import { GrpcNoAnswer, type GrpcStream } from './grpc'
 import { DESCRIBE_PATH, HID_PATH, touchEvent } from './proto'
 import { type IdbConnection, scaleFor, type SimulatorIo, socketDirFor, startSimulator } from './simulator'
 import { DESCRIBE_ANSWER, fragment, initSegment, nal } from './test-fixtures'
@@ -2271,15 +2271,15 @@ function setup(opts: { describe?: () => Promise<Buffer> } = {}) {
   const companions: FakeProcess[] = []
   const videos: FakeProcess[] = []
   const videoArgs: [string, number][] = []
-  const streams: { path: string; written: Buffer[]; closed: boolean }[] = []
+  const streams: { path: string; written: Buffer[]; closed: boolean; end?: (why: string) => void }[] = []
   const connection: IdbConnection & { closed: boolean } = {
     closed: false,
     unary: vi.fn(async (path: string) => {
       expect(path).toBe(DESCRIBE_PATH)
       return opts.describe ? opts.describe() : DESCRIBE_ANSWER
     }),
-    stream: (path: string): GrpcStream => {
-      const s = { path, written: [] as Buffer[], closed: false }
+    stream: (path: string, onEnd?: (why: string) => void): GrpcStream => {
+      const s = { path, written: [] as Buffer[], closed: false, end: onEnd }
       streams.push(s)
       return { write: (m) => s.written.push(m), close: () => { s.closed = true } }
     },
@@ -2383,12 +2383,32 @@ describe('startSimulator', () => {
     expect(u.videos[0].killed()).toBe(true)
   })
 
-  it('ends when the connection closes while the companion runs on', async () => {
+  it('ends a second after the connection closes while the companion runs on', async () => {
     const t = setup()
     await startSimulator('U1', t.events, t.io, new AbortController().signal)
     t.closeConnection()
-    expect(t.ends).toEqual(["The simulator's companion stopped answering."])
+    expect(t.ends).toEqual([])
+    await vi.waitFor(() => expect(t.ends).toEqual(["The simulator's companion stopped answering."]), { timeout: 2000 })
     expect(t.companions[0].killed()).toBe(true)
+  })
+
+  it("prefers the companion's words when it exits as the connection closes", async () => {
+    const t = setup()
+    await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    t.closeConnection()
+    t.companions[0].stderr.write('2026-11-10 14:21:57.805+0200 [U1] Target is no longer booted, companion going offline\n')
+    t.companions[0].exit(0)
+    await vi.waitFor(() => expect(t.ends).toEqual(['Target is no longer booted, companion going offline']))
+  })
+
+  it('opens a new hid stream after idb ends one', async () => {
+    const t = setup()
+    const session = await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    session.input({ type: 'button', button: 'home' })
+    t.streams[0].end?.('Bad event')
+    session.input({ type: 'button', button: 'home' })
+    expect(t.streams).toHaveLength(2)
+    expect(t.streams[1].written).toHaveLength(2)
   })
 
   it('ends on a broken picture stream', async () => {
@@ -2411,7 +2431,7 @@ describe('startSimulator', () => {
     expect(t.ends).toEqual([])
   })
 
-  it('fails a start whose companion stops first, and one that is stopped', async () => {
+  it("fails a start whose companion stops first (in its words, also when describe went unanswered), and one that is stopped", async () => {
     const t = setup({ describe: () => new Promise(() => {}) })
     const starting = startSimulator('U1', t.events, t.io, new AbortController().signal)
     await flush()
@@ -2419,6 +2439,14 @@ describe('startSimulator', () => {
     t.companions[0].exit(1)
     await expect(starting).rejects.toThrow('The operation couldn’t be completed.')
     expect(t.videos).toEqual([])
+
+    const w = setup({ describe: () => Promise.reject(new GrpcNoAnswer('The call to describe ended without an answer from idb (ECONNRESET).')) })
+    const gone = startSimulator('U1', w.events, w.io, new AbortController().signal)
+    setTimeout(() => {
+      w.companions[0].stderr.write('2026-11-10 10:00:00.000+0200 [U1] Target is no longer booted, companion going offline\n')
+      w.companions[0].exit(0)
+    }, 50)
+    await expect(gone).rejects.toThrow('Target is no longer booted, companion going offline')
 
     const u = setup({ describe: () => new Promise(() => {}) })
     const abort = new AbortController()
@@ -2459,14 +2487,15 @@ import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import type { DeviceSession, StreamEvents, StreamPacket } from '../session'
 import { Fmp4Reader } from './fmp4'
-import { GrpcClient, type GrpcStream } from './grpc'
+import { GrpcClient, GrpcNoAnswer, type GrpcStream } from './grpc'
 import { simulatorEvents } from './input'
 import { DESCRIBE_PATH, HID_PATH, parseDescribe, type ScreenSize } from './proto'
 
 /** What a session needs of the gRPC client. */
 export interface IdbConnection {
   unary(path: string, message: Buffer, timeoutMs?: number): Promise<Buffer>
-  stream(path: string): GrpcStream
+  /** `onEnd`: idb ended the call (an event it couldn't perform); a new one may be opened. */
+  stream(path: string, onEnd?: (why: string) => void): GrpcStream
   close(): void
 }
 
@@ -2561,17 +2590,23 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
   let screen: ScreenSize
   try {
     await Promise.race([io.socketReady(socket, signal), companionGone])
-    // The companion running on with its gRPC server gone would take input nowhere: the stream ends,
-    // and the streams start it again.
+    // The companion running on with its gRPC server gone would take input nowhere: the stream ends
+    // (and the streams start it again), a second later, so a companion that's exiting says why first.
     client = io.connect(socket, () => {
-      if (started) end("The simulator's companion stopped answering.")
+      if (started) setTimeout(() => end("The simulator's companion stopped answering."), 1000).unref?.()
     })
     screen = parseDescribe(await Promise.race([client.unary(DESCRIBE_PATH, Buffer.alloc(0)), companionGone]))
     if (signal.aborted) throw new Error('Stopped.')
   } catch (err) {
     signal.removeEventListener('abort', onAbort)
+    let why = err
+    // An unanswered describe is often the companion going: its own words, a moment later, say why.
+    if (err instanceof GrpcNoAnswer && !signal.aborted) {
+      const words = await Promise.race([companionGone.catch((e: unknown) => e), new Promise((resolve) => setTimeout(resolve, 1000))])
+      if (words instanceof Error) why = words
+    }
     close()
-    throw signal.aborted ? new Error('Stopped.') : err
+    throw signal.aborted ? new Error('Stopped.') : why
   }
   signal.removeEventListener('abort', onAbort)
 
@@ -2631,7 +2666,13 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
       if (ended || stopping) return
       const messages = simulatorEvents(input, points)
       if (messages.length === 0) return
-      hid ??= connection.stream(HID_PATH)
+      if (!hid) {
+        const call = connection.stream(HID_PATH, () => {
+          // idb ended the call (an event it couldn't perform): the next input opens another.
+          if (hid === call) hid = null
+        })
+        hid = call
+      }
       for (const m of messages) hid.write(m)
     },
     keyframe() {
@@ -3254,7 +3295,10 @@ throwaway one in the scratchpad is enough), through a second launch with the sam
   group), the picture is back at once from the same `sim-video` (same pid in `pgrep -fl sim-video`);
   after scrolling a while (a long group), a fresh `sim-video` (still exactly one) shows the picture
   within about a second;
-- left idle for two minutes, a tap still works (the companion's connection held);
+- left idle for ten minutes before the first tap, a tap still works (the companion's connection
+  held; the hid stream opens only on the first input);
+- a 1,000-character paste: time it, with Home pressed partway through (Home waits behind it;
+  record how long);
 - quitting leaves no `idb_companion --udid "$U"` and no `sim-video`, and the socket folder is gone;
 - with `DECK_IDB_COMPANION=/nowhere` and a simulator booted in Xcode's own set (Franco's are, but
   look only): an iOS project's panel says "Deck shows simulators with idb-companion:" with Copy.
