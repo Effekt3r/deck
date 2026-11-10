@@ -62,4 +62,13 @@ describe('typeText', () => {
   it(`types at most ${MAX_TEXT} characters`, () => {
     expect(typeText('a'.repeat(MAX_TEXT + 5))).toHaveLength(MAX_TEXT * 2)
   })
+
+  it('cuts a long paste before doing any work on it, so a huge one still types quickly', () => {
+    const start = performance.now()
+    const events = typeText('a'.repeat(5_000_000))
+    const ms = performance.now() - start
+
+    expect(events).toHaveLength(MAX_TEXT * 2)
+    expect(ms).toBeLessThan(200) // generous for CI; the point is no O(paste length) work.
+  })
 })

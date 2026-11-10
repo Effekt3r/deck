@@ -53,8 +53,11 @@ function press(modifiers: number[], usage: number): Buffer[] {
  *  other characters are skipped. A paste goes the same way, not through the simulator's pasteboard,
  *  since iOS would ask "would like to paste from CoreSimulatorBridge" every time. */
 export function typeText(text: string): Buffer[] {
+  // Bound by UTF-16 length (at most 2 units per code point) before the regex and the code-point
+  // spread, so a multi-megabyte paste costs main only what MAX_TEXT does.
+  const bounded = text.length > MAX_TEXT * 2 ? text.slice(0, MAX_TEXT * 2) : text
   const events: Buffer[] = []
-  for (const c of [...text.replace(/\r\n?/g, '\n')].slice(0, MAX_TEXT)) {
+  for (const c of [...bounded.replace(/\r\n?/g, '\n')].slice(0, MAX_TEXT)) {
     const key = US.get(c)
     if (key) events.push(...press(key[1] ? [LEFT_SHIFT] : [], key[0]))
   }
@@ -77,6 +80,7 @@ export function simulatorEvents(input: unknown, points: Points): Buffer[] {
       // The frame is the screen scaled down, so a pixel of it scales to points by the same ratios.
       const x = clamp(i.x, i.width) * (points.width / i.width)
       const y = clamp(i.y, i.height) * (points.height / i.height)
+      // idb has no move: a finger put down somewhere else moves there, so 'move' is a touch down too.
       return [touchEvent(x, y, i.action === 'up')]
     }
     case 'text':
