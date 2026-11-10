@@ -77,8 +77,9 @@ Homebrew, Xcode with iOS 27.0 simulators):
    its pasteboard: iOS would ask every time.
 4. One watch runs both sources (simulators on macOS with idb-companion installed); the list says
    which kinds are still pending, and a tab waits only for the kinds it shows. A view that joins a
-   running simulator stream gets the current group of pictures replayed (sim-video can't be asked
-   for a key frame).
+   running simulator stream gets the current group of pictures replayed when it's short (at most 8
+   pictures), else sim-video is started again (sim-video can't be asked for a key frame; a long
+   replay would trip the view's 10-picture backlog rule).
 
 ---
 
@@ -847,6 +848,15 @@ describe.skipIf(process.platform === 'win32')('GrpcClient', () => {
     client.close()
   })
 
+  it('never throws on a closed connection: a call rejects, a stream does nothing', async () => {
+    const client = new GrpcClient(socket)
+    client.close()
+    await expect(client.unary('/test/describe', Buffer.alloc(0))).rejects.toThrow()
+    const call = client.stream('/test/hid')
+    expect(() => call.write(Buffer.from('x'))).not.toThrow()
+    call.close()
+  })
+
   it('rejects calls when nothing listens on the socket', async () => {
     const client = new GrpcClient(join(dir, 'missing.sock'))
     await expect(client.unary('/test/describe', Buffer.alloc(0))).rejects.toThrow()
@@ -904,7 +914,13 @@ export class GrpcClient {
   /** One message there, one back: the answer's message, or the server's own words for a failure. */
   unary(path: string, message: Buffer, timeoutMs = 10_000): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-      const req = this.session.request(headers(path))
+      let req: http2.ClientHttp2Stream
+      try {
+        // request() throws at once on a connection that has closed or failed.
+        req = this.session.request(headers(path))
+      } catch (err) {
+        return reject(this.failure ?? err)
+      }
       const chunks: Buffer[] = []
       let status: string | undefined
       let detail = ''
@@ -941,7 +957,13 @@ export class GrpcClient {
 
   /** A client stream kept open (idb's hid): idb acts on each message as it comes. */
   stream(path: string): GrpcStream {
-    const req = this.session.request(headers(path))
+    let req: http2.ClientHttp2Stream
+    try {
+      req = this.session.request(headers(path))
+    } catch {
+      // A connection that has closed or failed: nothing goes, and the companion's end says why.
+      return { write: () => {}, close: () => {} }
+    }
     req.on('error', () => {}) // a call reset with the connection: the session's end says why
     req.resume() // the answer isn't read
     return {
@@ -1935,9 +1957,9 @@ const sim: DeviceInfo = { id: 'simulator:U1', kind: 'simulator', name: 'iPhone 1
 describe('combineLists', () => {
   it("lists adb's devices, then the simulators, with each source's problem", () => {
     expect(combineLists({ pending: false, devices: [phone], problem: null }, { pending: false, devices: [sim], problem: null }))
-      .toEqual({ devices: [phone, sim], problem: null, ios: null, pending: [] })
+      .toEqual({ devices: [phone, sim], problem: null, iosProblem: null, pending: [] })
     expect(combineLists({ pending: false, devices: [], problem: 'no-adb' }, { pending: false, devices: [], problem: 'no-idb' }))
-      .toEqual({ devices: [], problem: 'no-adb', ios: 'no-idb', pending: [] })
+      .toEqual({ devices: [], problem: 'no-adb', iosProblem: 'no-idb', pending: [] })
   })
 
   it('says which kinds are still pending', () => {
@@ -2012,7 +2034,7 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc on macOS', () =
       expect(list).toEqual({
         devices: [{ id: 'simulator:FAKE-UDID', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' }],
         problem: 'no-adb',
-        ios: null,
+        iosProblem: null,
         pending: [],
       })
     }, { timeout: 5000 })
@@ -2045,14 +2067,14 @@ export interface SourceState<P> {
 }
 
 export type AndroidState = SourceState<DeviceList['problem']>
-export type IosState = SourceState<DeviceList['ios']>
+export type IosState = SourceState<DeviceList['iosProblem']>
 
 /** One list from both sources: adb's devices as its tracker orders them, then the simulators. */
 export function combineLists(android: AndroidState, ios: IosState): DeviceList {
   const pending: DevicePlatform[] = []
   if (android.pending) pending.push('android')
   if (ios.pending) pending.push('ios')
-  return { devices: [...android.devices, ...ios.devices], problem: android.problem, ios: ios.problem, pending }
+  return { devices: [...android.devices, ...ios.devices], problem: android.problem, iosProblem: ios.problem, pending }
 }
 ```
 
@@ -2299,6 +2321,24 @@ describe('startSimulator', () => {
     expect(t.packets.slice(before).map((p) => [p.config, p.key, p.data.length])).toEqual([[true, false, t.packets[0].data.length], [false, true, 10], [false, false, 13]])
   })
 
+  it('starts sim-video again for a key frame when the group is too long to replay', async () => {
+    const t = setup()
+    const session = await startSimulator('U1', t.events, t.io, new AbortController().signal)
+    const ps = Array.from({ length: 9 }, () => fragment([nal(0x41)]))
+    t.videos[0].stdout.write(Buffer.concat([initSegment(), fragment([nal(0x65)]), ...ps]))
+    await flush()
+    session.keyframe()
+    expect(t.videos).toHaveLength(2)
+    expect(t.videos[0].killed()).toBe(true)
+    session.keyframe() // the new one's first key frame is on its way: no third
+    expect(t.videos).toHaveLength(2)
+    await flush()
+    expect(t.ends).toEqual([]) // the old process's end isn't the session's
+    t.videos[1].stdout.write(Buffer.concat([initSegment(), fragment([nal(0x65)])]))
+    await flush()
+    expect(t.sizes).toEqual([[604, 1312], [604, 1312]])
+  })
+
   it('sends input in points down one hid stream, and drops what a simulator has no use for', async () => {
     const t = setup()
     const session = await startSimulator('U1', t.events, t.io, new AbortController().signal)
@@ -2420,11 +2460,11 @@ export interface SimulatorIo {
 
 /** The picture's long side, as scrcpy's max_size for Android. */
 const MAX_SIDE = 1600
-/** The current group of pictures, replayed for a viewer that joins (sim-video can't be asked for a
- *  key frame): at most this many pictures or bytes. Past that the screen is moving, and its next key
- *  frame is at most 2 s away. */
-const GOP_FRAMES = 120
-const GOP_BYTES = 16 * 1024 * 1024
+/** sim-video can't be asked for a key frame. A group of pictures this short (the last key frame and
+ *  what followed) is replayed instead; a longer one would trip the view's backlog rule (more than 10
+ *  pictures waiting: skip to the next key frame, and ask again), so sim-video is started again, which
+ *  begins with a key frame of the screen as it is. */
+const REPLAY_FRAMES = 8
 
 export const scaleFor = (screen: ScreenSize) => Math.min(1, MAX_SIDE / Math.max(screen.width, screen.height))
 
@@ -2503,46 +2543,52 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
   }
   signal.removeEventListener('abort', onAbort)
 
-  const v = io.video(udid, scaleFor(screen))
-  video = v
-  const videoSaid = lastLine(v.stderr, videoError)
-  const reader = new Fmp4Reader()
+  const scale = scaleFor(screen)
   let config: StreamPacket | null = null
-  /** The last key frame and the pictures since; null past the caps, until the next key frame. */
+  /** The last key frame and the pictures since; null once longer than REPLAY_FRAMES, until the next
+   *  key frame. */
   let gop: StreamPacket[] | null = null
-  let gopBytes = 0
   const remember = (packet: StreamPacket) => {
-    if (packet.key) {
-      gop = [packet]
-      gopBytes = packet.data.length
-    } else if (gop && gop.length < GOP_FRAMES && gopBytes + packet.data.length <= GOP_BYTES) {
-      gop.push(packet)
-      gopBytes += packet.data.length
-    } else gop = null
+    if (packet.key) gop = [packet]
+    else if (gop && gop.length < REPLAY_FRAMES) gop.push(packet)
+    else gop = null
   }
-  v.stdout?.on('data', (chunk: Buffer) => {
-    if (ended || stopping) return
-    let parsed
-    try {
-      parsed = reader.push(chunk)
-    } catch (err) {
-      return end(err instanceof Error ? err.message : String(err))
-    }
-    for (const e of parsed) {
-      if (e.type === 'config') {
-        config = { config: true, key: false, data: e.data }
-        gop = null // a new configuration starts with its own key frame
-        events.size(e.width, e.height)
-        events.packet(config)
-      } else {
-        const packet = { config: false, key: e.key, data: e.data }
-        remember(packet)
-        events.packet(packet)
+  /** sim-video, also started again for a key frame: each process reads its own stream, and only the
+   *  current one's end ends the session. */
+  const startVideo = () => {
+    const v = io.video(udid, scale)
+    video = v
+    config = null
+    gop = null
+    const said = lastLine(v.stderr, videoError)
+    const reader = new Fmp4Reader()
+    v.stdout?.on('data', (chunk: Buffer) => {
+      if (video !== v || ended || stopping) return
+      let parsed
+      try {
+        parsed = reader.push(chunk)
+      } catch (err) {
+        return end(err instanceof Error ? err.message : String(err))
       }
-    }
-  })
-  v.on('error', () => {}) // 'close' follows
-  v.on('close', () => end(videoSaid() || 'sim-video stopped.'))
+      for (const e of parsed) {
+        if (e.type === 'config') {
+          config = { config: true, key: false, data: e.data }
+          gop = null // a new configuration starts with its own key frame
+          events.size(e.width, e.height)
+          events.packet(config)
+        } else {
+          const packet = { config: false, key: e.key, data: e.data }
+          remember(packet)
+          events.packet(packet)
+        }
+      }
+    })
+    v.on('error', () => {}) // 'close' follows
+    v.on('close', () => {
+      if (video === v) end(said() || 'sim-video stopped.')
+    })
+  }
+  startVideo()
   companion.on('close', () => end(companionSaid() || 'idb_companion stopped.'))
 
   const points = { width: screen.widthPoints, height: screen.heightPoints }
@@ -2556,9 +2602,17 @@ export async function startSimulator(udid: string, events: StreamEvents, io: Sim
       for (const m of messages) hid.write(m)
     },
     keyframe() {
-      if (ended || stopping || !config || !gop) return
-      events.packet(config)
-      for (const packet of gop) events.packet(packet)
+      // No configuration yet: the first key frame is on its way (also just after a restart).
+      if (ended || stopping || !config) return
+      if (gop) {
+        events.packet(config)
+        for (const packet of gop) events.packet(packet)
+        return
+      }
+      const old = video
+      startVideo()
+      old?.stdin?.end()
+      old?.kill()
     },
     stop() {
       if (stopping) return
@@ -2648,7 +2702,7 @@ In `ipc.ts`, import `import { simulatorIo, startSimulator } from './ios/simulato
     },
 ```
 
-and in `dispose()`, after stopping the streams: `rmSync(opts.socketDir, { recursive: true, force: true })`
+(`androidSession` lives in `android/session.ts` since Task 1's review.) In `dispose()`, after stopping the streams: `rmSync(opts.socketDir, { recursive: true, force: true })`
 (import `rmSync` from `node:fs`).
 
 - [ ] **Step 2: Give main the folder**
@@ -2715,7 +2769,7 @@ describe('menuOrder', () => {
 })
 
 describe('stillLooking', () => {
-  const list = (pending: ('android' | 'ios')[]): DeviceList => ({ devices: [], problem: null, ios: null, pending })
+  const list = (pending: ('android' | 'ios')[]): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending })
   const android = { android: true, ios: false, picks: [] }
   it('waits for the list, and for the kinds the tab shows', () => {
     expect(stillLooking(null, android, false, undefined)).toBe(true)
@@ -2889,7 +2943,7 @@ from `const deviceNeeded = …` through `const showDevice = …` with:
   const deviceView = useHeldView(choice, devices, deviceRoot, tabDevice ?? project?.picks[0] ?? null)
   // A booted simulator Deck can't show (no idb-companion, or one without sim-video) opens an iOS
   // project's panel to say what to install.
-  const iosHint = apps.ios && (deviceList?.ios === 'no-idb' || deviceList?.ios === 'old-idb')
+  const iosHint = apps.ios && (deviceList?.iosProblem === 'no-idb' || deviceList?.iosProblem === 'old-idb')
   const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand || iosHint)
   // What the panel speaks of when it has nothing: the kinds the tab shows (iOS only on macOS).
   const wants = { android: byHand || apps.android, ios: (byHand && window.deck.platform === 'darwin') || apps.ios }
@@ -2899,7 +2953,7 @@ and the `<DevicePanel …>` element becomes:
 
 ```tsx
               <DevicePanel view={deviceView} devices={menuOrder(devices, apps)} problem={deviceList?.problem ?? null}
-                iosProblem={deviceList?.ios ?? null} wants={wants} looking={deviceLooking}
+                iosProblem={deviceList?.iosProblem ?? null} wants={wants} looking={deviceLooking}
                 open={deviceOpen} onToggle={onDeviceToggle} visible={active && pageVisible && projectFresh} claudeRuns={claudeRuns}
                 onPick={pickDevice} onInsert={insert} onFocusLost={focusTerminal} />
 ```
@@ -2910,7 +2964,7 @@ Add to `DevicePanelProps` (after `problem`):
 
 ```ts
   /** Why simulators can't be listed (macOS). */
-  iosProblem: DeviceList['ios']
+  iosProblem: DeviceList['iosProblem']
   /** The kinds of device the tab shows, for what to say with none. */
   wants: { android: boolean; ios: boolean }
 ```
@@ -2949,7 +3003,7 @@ Replace `Nothing` with:
 
 ```tsx
 /** The panel was asked for (or a simulator can't be shown) and there's nothing to show. */
-function Nothing({ problem, iosProblem, wants, looking }: { problem: DeviceList['problem']; iosProblem: DeviceList['ios']; wants: { android: boolean; ios: boolean }; looking: boolean }) {
+function Nothing({ problem, iosProblem, wants, looking }: { problem: DeviceList['problem']; iosProblem: DeviceList['iosProblem']; wants: { android: boolean; ios: boolean }; looking: boolean }) {
   if (looking) return <State busy title="Looking for devices…" />
   if (wants.ios && iosProblem === 'no-idb') return <Install title="Deck shows simulators with idb-companion:" command="brew install facebook/fb/idb-companion" />
   if (wants.ios && iosProblem === 'old-idb') return <Install title="This idb-companion can't stream a simulator's screen. Update it:" command="brew upgrade idb-companion" />
