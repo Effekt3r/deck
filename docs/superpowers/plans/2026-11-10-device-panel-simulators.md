@@ -2121,7 +2121,7 @@ pass `socketDir: join(app.getPath('temp'), `deck-${instance}`)` for now (Task 10
 `socketDirFor`, which keeps the path short enough).
 
 In `src/main/devices/ipc.ts`, import
-`import { defaultSimulatorSet, findIdb, idbCandidates, type IdbTools, simulatorBooted } from './ios/tools'`,
+`import { anySimulatorBooted, defaultSimulatorSet, findIdb, idbCandidates, type IdbTools } from './ios/tools'`,
 `import { SimulatorTracker } from './ios/simulators'` and
 `import { type AndroidState, combineLists, type IosState } from './registry'`.
 
@@ -2134,9 +2134,10 @@ Replace the watch state and `startWatching`/`stopWatching` with:
   /** Looked for again at each start of watching, so an SDK installed since is found. */
   let adb: string | null = null
   let idb: IdbTools | null = null
-  /** A look for adb or idb under way: Deck coming to the front doesn't start a second one. */
+  /** A look for adb under way: Deck coming to the front doesn't start a second one. */
   let lookingForAdb = false
-  let lookingForIdb = false
+  /** The look for idb under way, if any: a focus waits for it, a new watch's look takes it over. */
+  let idbLook: object | null = null
   let android: AndroidState = { pending: true, devices: [], problem: null }
   let ios: IosState = { pending: false, devices: [], problem: null }
   /** Bumped by every start and stop, so a slow look can't start watching late. */
@@ -2175,25 +2176,24 @@ Replace the watch state and `startWatching`/`stopWatching` with:
   }
 
   /** Simulators: macOS only, with idb-companion. Without it (or with one too old for sim-video), a
-   *  booted simulator gets the panel to say what to install. `again`: Deck came to the front, so only
-   *  idb is looked for again: asking simctl starts CoreSimulator, not something for every focus. */
-  const watchSimulators = async (mine: number, again = false) => {
-    if (opts.platform !== 'darwin' || lookingForIdb) return
-    lookingForIdb = true
+   *  booted simulator gets the panel to say what to install (asked with pgrep: cheap and starting
+   *  nothing, so a focus may ask too, and an idb-companion installed meanwhile changes the hint). */
+  const watchSimulators = async (mine: number, focus = false) => {
+    if (opts.platform !== 'darwin' || (focus && idbLook)) return
+    const look = (idbLook = {})
     try {
       const found = await findIdb(idbCandidates(opts.env))
       if (mine !== generation || simulators) return
       idb = found
       if (!found?.simVideo) {
-        if (again) return // the hint stands as it was
-        const booted = await simulatorBooted()
+        const booted = await anySimulatorBooted()
         if (mine !== generation) return
         ios = { pending: false, devices: [], problem: booted ? (found ? 'old-idb' : 'no-idb') : null }
         return update()
       }
       startSimulators(found.companion)
     } finally {
-      lookingForIdb = false
+      if (idbLook === look) idbLook = null
     }
   }
 
