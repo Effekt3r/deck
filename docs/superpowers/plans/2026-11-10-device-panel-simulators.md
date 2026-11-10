@@ -1948,6 +1948,17 @@ Claude-Session: https://claude.ai/code/session_012TidnBvRYbxhSYqPzFZuph"
 
 ---
 
+**After review** (built in `5a05e29`, `b780109`): the notifier survives a `spawn` that throws
+(ENOEXEC), `listed` is per run (a run that never listed clears the list), failures say the spawn
+error or exit code, stderr's last complete line is capped at 500 characters, `publish` and `failed`
+are guarded, a run with no list in 20 s is restarted, UDIDs must look like UDIDs, `simulatorBooted`
+runs `/usr/bin/xcode-select -p` and then the selected Xcode's own `simctl` (never `xcrun`), and
+`findIdb` prefers Homebrew's stable `opt/idb-companion/libexec/sim-video` link. Note for tests with
+real spawns (Tasks 8-10): on Node 22, `kill()` in the same tick as a spawn that fails with ENOENT or
+EACCES signals the caller's whole process group; never kill in that tick.
+
+---
+
 ### Task 8: One list from both sources
 
 Main runs the simulator notifier beside adb's tracker while devices are watched (macOS, with
@@ -2164,29 +2175,37 @@ Replace the watch state and `startWatching`/`stopWatching` with:
   }
 
   /** Simulators: macOS only, with idb-companion. Without it (or with one too old for sim-video), a
-   *  booted simulator gets the panel to say what to install. */
-  const watchSimulators = async (mine: number) => {
-    if (opts.platform !== 'darwin') return
+   *  booted simulator gets the panel to say what to install. `again`: Deck came to the front, so only
+   *  idb is looked for again: asking simctl starts CoreSimulator, not something for every focus. */
+  const watchSimulators = async (mine: number, again = false) => {
+    if (opts.platform !== 'darwin' || lookingForIdb) return
     lookingForIdb = true
-    const found = await findIdb(idbCandidates(opts.env)).finally(() => {
+    try {
+      const found = await findIdb(idbCandidates(opts.env))
+      if (mine !== generation || simulators) return
+      idb = found
+      if (!found?.simVideo) {
+        if (again) return // the hint stands as it was
+        const booted = await simulatorBooted()
+        if (mine !== generation) return
+        ios = { pending: false, devices: [], problem: booted ? (found ? 'old-idb' : 'no-idb') : null }
+        return update()
+      }
+      startSimulators(found.companion)
+    } finally {
       lookingForIdb = false
-    })
-    if (mine !== generation || simulators) return
-    idb = found
-    if (!found?.simVideo) {
-      const booted = await simulatorBooted()
-      if (mine !== generation) return
-      ios = { pending: false, devices: [], problem: booted ? (found ? 'old-idb' : 'no-idb') : null }
-      return update()
     }
+  }
+
+  const startSimulators = (companion: string) => {
     simulators = new SimulatorTracker({
-      notify: () => spawn(found.companion, ['--notify', 'stdout', '--only', 'simulator', ...(simulatorSet ? ['--device-set-path', simulatorSet] : [])], { stdio: ['ignore', 'pipe', 'pipe'] }),
+      notify: () => spawn(companion, ['--notify', 'stdout', '--only', 'simulator', ...(simulatorSet ? ['--device-set-path', simulatorSet] : [])], { stdio: ['ignore', 'pipe', 'pipe'] }),
       publish: (devices) => {
         ios = { pending: false, devices, problem: null }
         update()
       },
       failed: (why, listed) => {
-        if (listed) return // the last list stands until the notifier is back
+        if (listed) return // this run had listed: its list stands until the notifier is back
         ios = { pending: false, devices: [], problem: { error: why } }
         update()
       },
@@ -2221,7 +2240,7 @@ focus handler becomes:
       w.on('focus', () => {
         if (watchers === 0) return
         if (!tracker && !lookingForAdb) void watchAndroid(generation)
-        if (opts.platform === 'darwin' && !simulators && !lookingForIdb) void watchSimulators(generation)
+        if (opts.platform === 'darwin' && !simulators) void watchSimulators(generation, true)
       })
 ```
 
@@ -3304,7 +3323,9 @@ throwaway one in the scratchpad is enough), through a second launch with the sam
   held; the hid stream opens only on the first input);
 - a 1,000-character paste: time it, with Home pressed partway through (Home waits behind it;
   record how long);
-- quitting leaves no `idb_companion --udid "$U"` and no `sim-video`, and the socket folder is gone;
+- quitting leaves no `idb_companion --udid "$U"`, no `idb_companion --notify` and no `sim-video`
+  (`pgrep -fl idb_companion`, `pgrep -fl sim-video`), and the socket folder is gone (whether
+  idb_companion exits on SIGTERM, or when its parent dies, is unverified: check);
 - with `DECK_IDB_COMPANION=/nowhere` and a simulator booted in Xcode's own set (Franco's are, but
   look only): an iOS project's panel says "Deck shows simulators with idb-companion:" with Copy.
 
