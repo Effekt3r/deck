@@ -18,6 +18,10 @@ describe("idb's HID events", () => {
     expect(hex(keyEvent(4, false))).toBe('0a080a041a0208041000')
     expect(hex(keyEvent(225, true))).toBe('0a090a051a0308e1011001')
   })
+
+  it("refuses a value a varint can't hold", () => {
+    expect(() => keyEvent(-1, false)).toThrow('A varint for -1.')
+  })
 })
 
 describe('parseDescribe', () => {
@@ -29,6 +33,12 @@ describe('parseDescribe', () => {
     expect(() => parseDescribe(Buffer.from('0a040a025531', 'hex'))).toThrow("didn't say its screen size")
     expect(() => parseDescribe(Buffer.from('0a2e0a02', 'hex'))).toThrow('truncated')
     expect(() => parseDescribe(Buffer.from('0f', 'hex'))).toThrow("isn't protobuf's")
+  })
+
+  it('refuses a screen size that makes no sense', () => {
+    // Built by hand: target_description(1).screen_dimensions(3) with width(1) 0, height(2) 2622,
+    // width_points(4) 402, height_points(5) 874.
+    expect(() => parseDescribe(Buffer.from('0a0d1a0b080010be1420920328ea06', 'hex'))).toThrow('makes no sense')
   })
 })
 

@@ -9,6 +9,7 @@ export const HID_PATH = '/idb.CompanionService/hid'
 export const HOME_BUTTON = 1
 
 function varint(n: number): number[] {
+  if (!Number.isSafeInteger(n) || n < 0) throw new Error(`A varint for ${n}.`)
   const out: number[] = []
   let v = n
   do {
