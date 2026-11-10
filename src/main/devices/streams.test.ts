@@ -449,4 +449,42 @@ describe('DeviceStreams, the edges', () => {
     await vi.advanceTimersByTimeAsync(1)
     expect(started[0].session.stop).toHaveBeenCalled()
   })
+
+  it('a session whose input, keyframe and stop all throw is guarded: nothing throws, and a stale session’s end() after stopAll() is ignored', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const sent: [string, DeviceStreamEvent][] = []
+      const session = {
+        input: vi.fn(() => { throw new Error('input boom') }),
+        keyframe: vi.fn(() => { throw new Error('keyframe boom') }),
+        stop: vi.fn(() => { throw new Error('stop boom') }),
+      }
+      let events!: StreamEvents
+      const streams = new DeviceStreams({
+        start: async (_id, ev) => {
+          events = ev
+          return session
+        },
+        send: (id, event) => sent.push([id, event]),
+      })
+      streams.view('android:1')
+      await flush()
+      events.packet(frame) // live, with a session: a second view() below asks it for a key frame
+
+      expect(() => streams.input('android:1', { type: 'text', text: 'a' })).not.toThrow()
+      expect(() => streams.keyframe('android:1')).not.toThrow()
+      expect(() => streams.view('android:1')).not.toThrow() // a second viewer: asks for a key frame too
+      expect(() => streams.stopAll()).not.toThrow()
+      expect(session.stop).toHaveBeenCalledTimes(1)
+
+      expect(errorSpy).toHaveBeenCalledTimes(4) // input, keyframe, the second view's keyframe, stop
+      for (const call of errorSpy.mock.calls) expect(call).toEqual(['devices: a session failed', expect.any(Error)])
+
+      const before = sent.length
+      expect(() => events.end('gone')).not.toThrow() // the stopped session's own news, ignored
+      expect(sent).toHaveLength(before)
+    } finally {
+      errorSpy.mockRestore()
+    }
+  })
 })

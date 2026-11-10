@@ -286,7 +286,7 @@ export interface UsageState {
 /** Connect's or Disconnect's outcome: the new state, or what went wrong. */
 export type UsageChange = { state: UsageState } | { error: string }
 
-/** An Android phone or emulator that adb sees. */
+/** A device Deck can show: an Android phone or emulator adb sees, or a booted simulator. */
 export interface DeviceInfo {
   /** The same across reconnects and connections: `android:<serial number>`,
    *  `emulator:<AVD name>` (an emulator's adb name changes with its port), or `simulator:<UDID>`. */
@@ -313,8 +313,8 @@ export interface DeviceList {
   problem: 'no-adb' | { error: string } | null
   /** Simulators (macOS): 'no-idb': one is booted but idb-companion isn't installed; 'old-idb': the
    *  idb-companion found has no sim-video; { error }: its notifier failed; null otherwise. */
-  ios: 'no-idb' | 'old-idb' | { error: string } | null
-  /** The kinds still finding their first devices: a tab waits only for the ones it shows. */
+  iosProblem: 'no-idb' | 'old-idb' | { error: string } | null
+  /** The platforms still finding their first devices: a tab waits only for the ones it shows. */
   pending: DevicePlatform[]
 }
 

@@ -7,7 +7,9 @@ import type { DeviceSession, StreamEvents } from './session'
 const STEADY_MS = 5000
 
 export interface StreamsDeps {
-  /** Starts device `id`'s stream; `signal` stops a start still under way. */
+  /** Starts device `id`'s stream; `signal` stops a start still under way. `events`' `size` and
+   *  `packet` may arrive before this resolves; a failure before then rejects it instead of calling
+   *  `events.end()`. */
   start(id: string, events: StreamEvents, signal: AbortSignal): Promise<DeviceSession>
   /** News for the renderer. */
   send(id: string, event: DeviceStreamEvent): void
@@ -78,10 +80,11 @@ export class DeviceStreams {
     if (this.paused) return this.deps.send(id, { type: 'state', state: 'connecting' }) // resume() starts it
     if (s.error) return this.deps.send(id, { type: 'state', state: 'error', message: s.error })
     if (s.session) {
+      const session = s.session
       if (s.size) this.deps.send(id, { type: 'size', ...s.size })
       if (!s.live) return this.deps.send(id, { type: 'state', state: s.failures > 0 ? 'reconnecting' : 'connecting' })
       this.deps.send(id, { type: 'state', state: 'live' })
-      s.session.keyframe() // the new viewer's decoder starts from a key frame
+      this.guard(() => session.keyframe()) // the new viewer's decoder starts from a key frame
       return
     }
     if (s.starting || s.retryTimer) return this.deps.send(id, { type: 'state', state: s.failures > 0 ? 'reconnecting' : 'connecting' })
@@ -102,12 +105,14 @@ export class DeviceStreams {
 
   /** A fresh key frame: a decoder fell behind or failed. */
   keyframe(id: string): void {
-    this.streams.get(id)?.session?.keyframe()
+    const session = this.streams.get(id)?.session
+    if (session) this.guard(() => session.keyframe())
   }
 
   /** The renderer's input for the device, while its stream runs: its session checks it. */
   input(id: string, input: unknown): void {
-    this.streams.get(id)?.session?.input(input)
+    const session = this.streams.get(id)?.session
+    if (session) this.guard(() => session.input(input))
   }
 
   retry(id: string): void {
@@ -235,11 +240,24 @@ export class DeviceStreams {
     s.retryTimer = null
     s.startTimer = null
     s.generation++
-    s.session?.stop()
+    // Taken out of the stream first: a throwing stop() (guarded below, but belt and braces) must
+    // still leave the pending start aborted and the stream's own state fully reset.
+    const session = s.session
     s.session = null
     s.starting?.abort()
     s.starting = null
     s.live = false
+    if (session) this.guard(() => session.stop())
+  }
+
+  /** Session methods shouldn't throw (session.ts), but they run in IPC listeners and timers, where
+   *  a throw would show Electron's modal error dialog: guarded anyway. */
+  private guard(run: () => void): void {
+    try {
+      run()
+    } catch (err) {
+      console.error('devices: a session failed', err)
+    }
   }
 
   private drop(id: string, s: Stream): void {

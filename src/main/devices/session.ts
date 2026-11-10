@@ -12,7 +12,9 @@ export interface StreamEvents {
   end(why: string): void
 }
 
-/** A running stream: scrcpy's server on an Android device, idb on a simulator. */
+/** A running stream: scrcpy's server on an Android device, idb on a simulator. None of its methods
+ *  throws: they run in IPC listeners and timers, where a throw would show Electron's modal error
+ *  dialog. DeviceStreams guards them anyway. */
 export interface DeviceSession {
   /** The renderer's input, unchecked: the session checks it and drops what it can't use. */
   input(input: unknown): void

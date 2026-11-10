@@ -4,5 +4,6 @@ export const HID_KEY = {
   PAGE_DOWN: 78, RIGHT: 79, LEFT: 80, DOWN: 81, UP: 82,
 } as const
 
-/** The modifiers sent with a simulator's key, as bits; main presses their keys around it. */
+/** Deck's own bits for the modifiers sent with a simulator's key, not HID's modifier byte (whose
+ *  bit order differs): main presses these keys around it. */
 export const HID_MOD = { SHIFT: 1, CTRL: 2, ALT: 4, CMD: 8 } as const
