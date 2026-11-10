@@ -600,7 +600,9 @@ Each step gets its own plan and pull request and works without the next.
 - **Typing:**
   - on Android, characters the device's key map can't make are skipped; simulators get what a US
     keyboard types, and characters it can't are skipped;
-  - a paste of more than 1,000 characters on a simulator is cut to its first 1,000, without a word;
+  - a paste of more than 1,000 characters on a simulator is cut to its first 1,000, without a word,
+    and a long one is slow in a field that works on every key: Settings' search settled about 89 s
+    after 1,000 characters (2026-11-10);
   - no input methods (Chinese, Japanese, Korean): composed text doesn't reach the device;
   - dead keys: macOS should compose them (Option+E, then E, types "é"); not yet checked on a device,
     and unverified on Windows.
@@ -697,6 +699,11 @@ Each step gets its own plan and pull request and works without the next.
 - **Simulators:** a throwaway simulator in a private device set (`DECK_SIMULATOR_SET`), never
   Franco's own, booted without the Simulator app: video, taps, typing, a paste, Home, a tab switch
   within 10 s, and nothing left running after a quit. Then with idb-companion out of reach
-  (`DECK_IDB_COMPANION=/nowhere`): the install hint.
+  (`DECK_IDB_COMPANION=/nowhere`): the install hint. Checked 2026-11-10 on a throwaway "Deck probe"
+  (iPhone 17, iOS 27.0) through the DevTools protocol: all of these, plus a still screen's group
+  replayed and a moving one's `sim-video` started again on tab switches, a 1,000-character paste
+  that arrived whole, and a tap after ten minutes idle (details in CLAUDE.md). Not yet: the camera
+  with Claude running, a landscape app, the "old-idb" hint, the notifier failing for real, two Decks
+  at once.
 - **iPhone:** the Camera prompt, the stream, unplugging and locking.
 - **Windows:** the Android steps, in `docs/TESTING.md`.

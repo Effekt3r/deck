@@ -52,7 +52,8 @@ emulator a tab's project runs on, live at the top of the right pane. Checked wit
 (2026-11-04); the hands-on checks and Windows are still to do. Step 2 (simulators: plan
 `docs/superpowers/plans/2026-11-10-device-panel-simulators.md`, the spec updated; built 2026-11-10):
 a booted iOS simulator in an iOS project's tabs, on macOS with idb-companion from Homebrew, with taps,
-drags, typing, pastes and Home. iPhones are step 3.
+drags, typing, pastes and Home. Checked on a throwaway simulator (2026-11-10); the camera with Claude
+running and a landscape app are still to do. iPhones are step 3.
 
 | Path | Role |
 |---|---|
@@ -606,6 +607,30 @@ Things that aren't obvious from the code:
     the device panel had its 60 % (518 px) and the Claude panel 168 px. With real mouse clicks, a
     pick from the ▾ menu gave the keyboard back to the terminal, a click on the screen took it, and
     a fold while the screen had it gave it to the terminal.
+  - **Checked on a simulator** (2026-11-10, macOS: a dev build with its own userData,
+    `DECK_SIMULATOR_SET` at a throwaway device set with a throwaway "Deck probe" iPhone 17 on iOS 27.0,
+    and a throwaway git repository with an `App.xcodeproj`; through the DevTools protocol with trusted
+    mouse and key events, and `simctl io screenshot`; Franco's own simulators untouched):
+    - the iOS project's tab opened its panel by itself, "Deck probe · Simulator · iOS 27.0", with only
+      Home in the header; one `idb_companion --udid … --grpc-domain-sock <temp>/deck-<instance>/…` and
+      one `sim-video` from Homebrew's `opt/idb-companion/libexec`. The canvas's picture matched the
+      simulator's screenshot (Settings, Dynamic Island included);
+    - a tap on Settings' General opened it, a drag scrolled the list, the header's Home went to the
+      home screen, and typing "Ab1!" then pasting " xyz" made the search field read "Ab1! xyz". A tap
+      during an app's launch lands on its blank launch screen, as on a device;
+    - tab switches within the 10 s grace: with the screen moving (a blinking caret) each one started
+      `sim-video` again (a new pid, exactly one running); with the screen still since a fresh key
+      frame, two switches kept the same `sim-video` (the group replayed);
+    - a 1,000-character paste arrived whole, and Settings' search, searching again at every key,
+      settled about 89 s later. Home pressed 1 s in took effect 2.2 s after the paste began: the home
+      screen responds while Settings is busy;
+    - ten minutes idle (22:33–22:43), then a tap still worked: the same companion and `sim-video`
+      served the whole session;
+    - quitting left no dev build, companion, notifier or `sim-video`, and removed Deck's socket folder;
+    - with `DECK_IDB_COMPANION=/nowhere` and simulators booted (4 `launchd_sim`), the iOS project's
+      panel opened with "Deck shows simulators with idb-companion:",
+      `brew install facebook/fb/idb-companion` and Copy ("Copy the command"). Copy wasn't clicked: it
+      would overwrite Franco's clipboard.
   - **Not yet checked:**
     - by hand: taps, swipes, typing and pasting; rotating while a touch is held; the Option and Cmd
       editing keys; a paste after selecting text in Claude's reply, and after Cmd+A; the wheel's
@@ -617,7 +642,9 @@ Things that aren't obvious from the code:
       Shift-flagged key in Shift down/up;
     - dead keys: macOS should compose them (Option+E, E types "é"); unverified on Windows. Input
       methods (Chinese, Japanese, Korean) don't reach the device;
-    - Windows, all of it: `docs/TESTING.md` 18p–18y.
+    - on a simulator: the camera's `[Image #N]` with Claude running, a landscape app, the "old-idb"
+      hint (an idb-companion without `sim-video`), the notifier failing for real, two Decks at once;
+    - Windows, all of it: `docs/TESTING.md` 18p–18y (simulators don't apply there).
   - **Known limits, devices:** two devices sharing an id look like one (cheap boards' `0123456789ABCDEF`
     serial; two copies of one AVD with `-read-only`); Linux's `no permissions` shows as offline, or
     not at all when adb gives no reason; recovery and sideload devices are told to unplug; devices

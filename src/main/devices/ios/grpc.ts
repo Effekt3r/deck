@@ -176,9 +176,9 @@ export class GrpcClient {
     this.session.destroy()
   }
 
-  /** onClose and onEnd run in a session or stream event handler: a throw there is unhandled, and
-   *  in main would show Electron's modal error dialog. Guarded, as DeviceStreams guards a
-   *  session's own calls. */
+  /** onClose and onEnd run in a session or stream event handler: a throw there would leave the
+   *  handler's work half done and reach only main's uncaught exception handler, which logs it
+   *  (index.ts). Guarded, as DeviceStreams guards a session's own calls. */
   private guard(run: () => void): void {
     try {
       run()
