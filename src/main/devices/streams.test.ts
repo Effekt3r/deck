@@ -1,12 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { DeviceStreamEvent } from '@shared/types'
-import type { ScrcpyEvents, ScrcpySession } from './android/scrcpy'
+import type { DeviceSession, StreamEvents } from './session'
 import { DeviceStreams } from './streams'
 
 interface Started {
   id: string
-  events: ScrcpyEvents
-  session: { send: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }
+  events: StreamEvents
+  session: { input: ReturnType<typeof vi.fn>; keyframe: ReturnType<typeof vi.fn>; stop: ReturnType<typeof vi.fn> }
 }
 
 /** `attempts()` counts every call to start(), the failed ones included, for tests that care how many
@@ -19,7 +19,7 @@ function setup(failing: () => boolean = () => false) {
     start: async (id, events) => {
       attempts++
       if (failing()) throw new Error('device offline')
-      const session = { send: vi.fn(), stop: vi.fn() }
+      const session = { input: vi.fn(), keyframe: vi.fn(), stop: vi.fn() }
       started.push({ id, events, session })
       return session
     },
@@ -55,7 +55,7 @@ describe('DeviceStreams', () => {
     await vi.advanceTimersByTimeAsync(9_000)
     streams.view('android:1')
     expect(started).toHaveLength(1)
-    expect(started[0].session.send).toHaveBeenCalledWith(Buffer.from([17]))
+    expect(started[0].session.keyframe).toHaveBeenCalledTimes(1)
     expect(sent.slice(-2)).toEqual([['android:1', { type: 'size', width: 720, height: 1440 }], ['android:1', { type: 'state', state: 'live' }]])
 
     streams.unview('android:1')
@@ -75,7 +75,7 @@ describe('DeviceStreams', () => {
     started[0].events.packet(frame)
     expect(packets()).toBe(1)
     streams.view('android:1')
-    expect(started[0].session.send).toHaveBeenCalledWith(Buffer.from([17]))
+    expect(started[0].session.keyframe).toHaveBeenCalledTimes(1)
     started[0].events.packet(frame)
     expect(packets()).toBe(2)
   })
@@ -104,7 +104,7 @@ describe('DeviceStreams', () => {
     const joined = sent.length
     streams.view('android:1') // the session exists but hasn't gone live: no stale state, no reset
     expect(sent.slice(joined)).toEqual([['android:1', { type: 'state', state: 'connecting' }]])
-    expect(started[0].session.send).not.toHaveBeenCalled()
+    expect(started[0].session.keyframe).not.toHaveBeenCalled()
 
     streams.pause()
     const before = sent.length
@@ -162,12 +162,13 @@ describe('DeviceStreams', () => {
 
   it('passes input and key frame requests to a running session only', async () => {
     const { streams, started } = setup()
-    streams.input('android:1', Buffer.from([1]))
+    streams.input('android:1', { type: 'text', text: 'a' })
     streams.view('android:1')
     await flush()
-    streams.input('android:1', Buffer.from([2]))
+    streams.input('android:1', { type: 'text', text: 'b' })
     streams.keyframe('android:1')
-    expect(started[0].session.send.mock.calls).toEqual([[Buffer.from([2])], [Buffer.from([17])]])
+    expect(started[0].session.input.mock.calls).toEqual([[{ type: 'text', text: 'b' }]])
+    expect(started[0].session.keyframe).toHaveBeenCalledTimes(1)
   })
 
   it('stopping a stream that is still starting stops the start', async () => {
@@ -278,7 +279,7 @@ describe('DeviceStreams, the edges', () => {
     const before = sent.length
     streams.view('android:1')
     expect(sent.slice(before)).toEqual([['android:1', { type: 'state', state: 'reconnecting' }]])
-    expect(started[1].session.send).not.toHaveBeenCalled()
+    expect(started[1].session.keyframe).not.toHaveBeenCalled()
   })
 
   it('a stream live for exactly STEADY_MS (5000 ms) gets a fresh try; one ms short still counts towards the error', async () => {
@@ -337,8 +338,8 @@ describe('DeviceStreams, the edges', () => {
   })
 
   it('a start that finishes after its stream stopped is stopped at once', async () => {
-    let finish!: (session: ScrcpySession) => void
-    const session = { send: vi.fn(), stop: vi.fn() }
+    let finish!: (session: DeviceSession) => void
+    const session = { input: vi.fn(), keyframe: vi.fn(), stop: vi.fn() }
     const streams = new DeviceStreams({ start: () => new Promise((resolve) => { finish = resolve }), send: () => {} })
     streams.view('android:1')
     streams.pause()
@@ -398,9 +399,10 @@ describe('DeviceStreams, the edges', () => {
     await flush()
     failing = true
     started[0].events.end('gone')
-    streams.input('android:1', Buffer.from([2]))
+    streams.input('android:1', { type: 'text', text: 'b' })
     streams.keyframe('android:1')
-    expect(started[0].session.send).not.toHaveBeenCalled()
+    expect(started[0].session.input).not.toHaveBeenCalled()
+    expect(started[0].session.keyframe).not.toHaveBeenCalled()
     await vi.advanceTimersByTimeAsync(1000 + 2000 + 5000)
     const before = sent.length
     streams.view('android:1')

@@ -1,6 +1,5 @@
 import type { DeviceStreamEvent } from '@shared/types'
-import { resetVideoMessage } from './android/protocol'
-import type { ScrcpyEvents, ScrcpySession } from './android/scrcpy'
+import type { DeviceSession, StreamEvents } from './session'
 
 /** How long a stream must stay live before a break counts as recovered rather than a continuation
  *  of the same problem: without this, a device that drops the stream right after every reconnect
@@ -9,7 +8,7 @@ const STEADY_MS = 5000
 
 export interface StreamsDeps {
   /** Starts device `id`'s stream; `signal` stops a start still under way. */
-  start(id: string, events: ScrcpyEvents, signal: AbortSignal): Promise<ScrcpySession>
+  start(id: string, events: StreamEvents, signal: AbortSignal): Promise<DeviceSession>
   /** News for the renderer. */
   send(id: string, event: DeviceStreamEvent): void
   /** How long a stream nobody views keeps running. */
@@ -22,7 +21,7 @@ export interface StreamsDeps {
 
 interface Stream {
   viewers: number
-  session: ScrcpySession | null
+  session: DeviceSession | null
   /** The start under way; aborting it stops it. */
   starting: AbortController | null
   /** Breaks in a row; reset once a live stream has stayed up for STEADY_MS before breaking again. */
@@ -82,7 +81,7 @@ export class DeviceStreams {
       if (s.size) this.deps.send(id, { type: 'size', ...s.size })
       if (!s.live) return this.deps.send(id, { type: 'state', state: s.failures > 0 ? 'reconnecting' : 'connecting' })
       this.deps.send(id, { type: 'state', state: 'live' })
-      s.session.send(resetVideoMessage()) // the new viewer's decoder starts from a key frame
+      s.session.keyframe() // the new viewer's decoder starts from a key frame
       return
     }
     if (s.starting || s.retryTimer) return this.deps.send(id, { type: 'state', state: s.failures > 0 ? 'reconnecting' : 'connecting' })
@@ -103,12 +102,12 @@ export class DeviceStreams {
 
   /** A fresh key frame: a decoder fell behind or failed. */
   keyframe(id: string): void {
-    this.streams.get(id)?.session?.send(resetVideoMessage())
+    this.streams.get(id)?.session?.keyframe()
   }
 
-  /** A control message for the device, while its stream runs. */
-  input(id: string, message: Buffer): void {
-    this.streams.get(id)?.session?.send(message)
+  /** The renderer's input for the device, while its stream runs: its session checks it. */
+  input(id: string, input: unknown): void {
+    this.streams.get(id)?.session?.input(input)
   }
 
   retry(id: string): void {
@@ -167,7 +166,7 @@ export class DeviceStreams {
       clearTimeout(deadline)
       if (s.startTimer === deadline) s.startTimer = null
     }
-    const events: ScrcpyEvents = {
+    const events: StreamEvents = {
       size: (width, height) => {
         if (!current()) return
         s.size = { width, height }

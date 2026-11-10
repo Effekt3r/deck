@@ -7,11 +7,13 @@ import type { DeviceList, DeviceProject, InsertResult, Platform } from '@shared/
 import { adbCandidates, findAdb, runAdb } from './android/adb'
 import { IDENTITY_SCRIPT, parseIdentity } from './android/devices'
 import { controlMessages } from './android/input'
-import { adbIo, startScrcpy } from './android/scrcpy'
+import { resetVideoMessage } from './android/protocol'
+import { adbIo, type ScrcpySession, startScrcpy } from './android/scrcpy'
 import { scrcpyServer } from './android/server'
 import { AndroidTracker } from './android/tracker'
 import { PicksStore } from './picks'
 import { describeProject } from './project'
+import type { DeviceSession } from './session'
 import { DeviceStreams } from './streams'
 
 export interface DeviceIpcOptions {
@@ -38,6 +40,18 @@ export interface DeviceIpc {
 const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const isPng = (data: Uint8Array): boolean => PNG_SIGNATURE.every((byte, i) => data[i] === byte)
+
+/** scrcpy's session as a stream's: input becomes scrcpy's control messages, a key frame its reset
+ *  video. */
+function androidSession(scrcpy: ScrcpySession): DeviceSession {
+  return {
+    input: (input) => {
+      for (const message of controlMessages(input)) scrcpy.send(message)
+    },
+    keyframe: () => scrcpy.send(resetVideoMessage()),
+    stop: () => scrcpy.stop(),
+  }
+}
 
 /** The device panel's main side: Android devices adb sees (looked for only while a tab needs them),
  *  each project's device, scrcpy streams for the devices viewed, and screenshots for Claude. */
@@ -67,7 +81,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     start: async (id, events, signal) => {
       const serial = tracker?.serialFor(id)
       if (!adb || !serial) throw new Error("The device isn't connected.")
-      return startScrcpy(serial, await scrcpyServer(opts.resources), events, adbIo(adb), signal)
+      return androidSession(await startScrcpy(serial, await scrcpyServer(opts.resources), events, adbIo(adb), signal))
     },
     send: (id, event) => send(IPC.devicesStream, id, event),
   })
@@ -77,11 +91,11 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     const found = await findAdb(adbCandidates(opts.env, opts.platform, opts.home))
     if (mine !== generation) return
     adb = found
-    if (!found) return publish({ devices: [], problem: 'no-adb' })
+    if (!found) return publish({ devices: [], problem: 'no-adb', ios: null, pending: [] })
     tracker = new AndroidTracker({
       track: () => spawn(found, ['track-devices', '-l'], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true }),
       identify: async (serial) => parseIdentity(await runAdb(found, ['-s', serial, 'shell', IDENTITY_SCRIPT], 10_000)),
-      publish: (devices, error) => publish({ devices, problem: error && devices.length === 0 ? { error } : null }),
+      publish: (devices, error) => publish({ devices, problem: error && devices.length === 0 ? { error } : null, ios: null, pending: [] }),
     })
     tracker.start()
   }
@@ -150,8 +164,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     if (typeof id === 'string') streams.retry(id)
   })
   ipcMain.on(IPC.devicesInput, (_e, id: unknown, input: unknown) => {
-    if (typeof id !== 'string') return
-    for (const message of controlMessages(input)) streams.input(id, message)
+    if (typeof id === 'string') streams.input(id, input)
   })
   ipcMain.handle(IPC.devicesScreenshot, async (_e, png: unknown): Promise<InsertResult> => {
     if (!(png instanceof Uint8Array) || png.length === 0 || png.length > MAX_SCREENSHOT_BYTES || !isPng(png)) {
