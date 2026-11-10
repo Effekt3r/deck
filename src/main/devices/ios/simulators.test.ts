@@ -22,6 +22,17 @@ describe('readNotifyLine', () => {
     expect([...read.values()]).toEqual([{ udid: 'A', name: 'A', state: 'Booted', osVersion: 'iOS 27.0' }])
     expect(readNotifyLine('2026-11-10 starting', new Map(), true)).toBeNull()
   })
+
+  it('ignores a udid shaped wrong for a socket path or argv', () => {
+    // udids go into a gRPC socket's filename and sim-video's argv: only plain, shell-safe ones are
+    // trusted. A real UDID is upper-hex with dashes (e.g. "5A2F...-...-..."), so this is generous.
+    const read = readNotifyLine(
+      line(sim('A1-B2', 'ok', 'Booted'), sim('', 'empty', 'Booted'), sim('../../etc', 'traversal', 'Booted'), sim('A; rm -rf', 'shell', 'Booted'), sim('A B', 'space', 'Booted')),
+      new Map(),
+      true,
+    )!
+    expect([...read.keys()]).toEqual(['A1-B2'])
+  })
 })
 
 describe('simulatorDevices', () => {
@@ -48,8 +59,16 @@ describe('SimulatorTracker', () => {
     const spawned: FakeProcess[] = []
     const published: string[][] = []
     const failures: [string, boolean][] = []
+    let throwOn = new Set<number>()
+    let calls = 0
     const tracker = new SimulatorTracker({
       notify: () => {
+        calls++
+        if (throwOn.has(calls)) {
+          const err = new Error('spawn ENOEXEC') as NodeJS.ErrnoException
+          err.code = 'ENOEXEC'
+          throw err
+        }
         const p = fakeProcess()
         spawned.push(p)
         return p.proc
@@ -57,7 +76,7 @@ describe('SimulatorTracker', () => {
       publish: (devices) => published.push(devices.map((d) => d.id)),
       failed: (why, listed) => failures.push([why, listed]),
     })
-    return { tracker, spawned, published, failures }
+    return { tracker, spawned, published, failures, calls: () => calls, throwOnCall: (...n: number[]) => (throwOn = new Set(n)) }
   }
 
   it('publishes after each line, read across chunks', async () => {
@@ -85,12 +104,271 @@ describe('SimulatorTracker', () => {
     spawned[1].stdout.write(line(sim('A', 'iPhone 17', 'Booted')))
     spawned[1].exit(1)
     await vi.advanceTimersByTimeAsync(0)
-    expect(failures[1]).toEqual(['idb_companion stopped.', true])
+    expect(failures[1]).toEqual(['idb_companion stopped (exit code 1).', true])
     await vi.advanceTimersByTimeAsync(2000)
     expect(spawned).toHaveLength(3)
     tracker.stop()
     expect(spawned[2].killed()).toBe(true)
     await vi.advanceTimersByTimeAsync(60_000)
     expect(spawned).toHaveLength(3)
+  })
+
+  describe('a notify() that throws', () => {
+    it('is caught at start(): reports a failure and retries after 1 s', async () => {
+      const { tracker, spawned, failures, calls, throwOnCall } = setup()
+      throwOnCall(1)
+      expect(() => tracker.start()).not.toThrow()
+      expect(failures).toEqual([['spawn ENOEXEC', false]])
+      expect(spawned).toHaveLength(0)
+      await vi.advanceTimersByTimeAsync(999)
+      expect(calls()).toBe(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(calls()).toBe(2)
+      expect(spawned).toHaveLength(1) // the retry spawned fine
+      tracker.stop()
+    })
+
+    it('a second start() while wedged on a throw is still a no-op', async () => {
+      const { tracker, failures, throwOnCall } = setup()
+      throwOnCall(1)
+      tracker.start()
+      expect(() => tracker.start()).not.toThrow()
+      expect(failures).toHaveLength(1) // not called twice
+      tracker.stop()
+    })
+
+    it('is caught on a restart too, and keeps retrying', async () => {
+      const { tracker, spawned, failures, throwOnCall } = setup()
+      tracker.start()
+      expect(spawned).toHaveLength(1)
+      throwOnCall(2, 3)
+      spawned[0].exit(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1000) // call 2: throws
+      expect(failures).toHaveLength(2)
+      expect(failures[1]).toEqual(['spawn ENOEXEC', false])
+      await vi.advanceTimersByTimeAsync(2000) // call 3: throws
+      expect(failures).toHaveLength(3)
+      await vi.advanceTimersByTimeAsync(4000) // call 4: spawns fine
+      expect(spawned).toHaveLength(2)
+      tracker.stop()
+    })
+  })
+
+  describe('listed is per run', () => {
+    it('a run that lists keeps booted() true after it dies; a run that never lists clears it', async () => {
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      spawned[0].stdout.write(line(sim('A', 'iPhone 17', 'Booted')))
+      expect(tracker.booted('A')).toBe(true)
+      spawned[0].exit(1) // run 0 listed before dying
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[0]).toEqual(['idb_companion stopped (exit code 1).', true])
+      expect(tracker.booted('A')).toBe(true) // still known: run 0 did list
+
+      await vi.advanceTimersByTimeAsync(1000) // restart: run 1
+      spawned[1].exit(1) // run 1 never lists before dying
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[1]).toEqual(['idb_companion stopped (exit code 1).', false])
+      expect(tracker.booted('A')).toBe(false) // cleared: run 1 never listed
+
+      await vi.advanceTimersByTimeAsync(2000) // restart: run 2
+      spawned[2].exit(1) // also never lists
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[2]).toEqual(['idb_companion stopped (exit code 1).', false])
+      expect(tracker.booted('A')).toBe(false)
+      tracker.stop()
+    })
+  })
+
+  describe('restart timing', () => {
+    it('doubles the wait up to a 30 s cap: 1, 2, 4, 8, 16, 30, 30', async () => {
+      const { tracker, spawned } = setup()
+      tracker.start()
+      const gaps = [1000, 2000, 4000, 8000, 16_000, 30_000, 30_000]
+      for (let i = 0; i < gaps.length; i++) {
+        spawned[i].exit(1)
+        await vi.advanceTimersByTimeAsync(0)
+        expect(spawned).toHaveLength(i + 1)
+        await vi.advanceTimersByTimeAsync(gaps[i] - 1)
+        expect(spawned).toHaveLength(i + 1) // not yet, one ms early
+        await vi.advanceTimersByTimeAsync(1)
+        expect(spawned).toHaveLength(i + 2) // right on time
+      }
+      tracker.stop()
+    })
+
+    it('goes back to 1 s after a run survives 30 s', async () => {
+      const { tracker, spawned } = setup()
+      tracker.start()
+      spawned[0].exit(1) // wait: 1000 used, becomes 2000
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(1000) // run 1 starts
+      expect(spawned).toHaveLength(2)
+      spawned[1].stdout.write(line(sim('A', 'iPhone 17', 'Booted'))) // clears its own 20 s deadline
+      await vi.advanceTimersByTimeAsync(30_000) // run 1 survives 30 s
+      spawned[1].exit(1)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(999)
+      expect(spawned).toHaveLength(2) // not yet
+      await vi.advanceTimersByTimeAsync(1)
+      expect(spawned).toHaveLength(3) // back to a 1 s wait, not 4 s
+      tracker.stop()
+    })
+
+    it('stop() during the restart wait leaves nothing scheduled', async () => {
+      const { tracker, spawned } = setup()
+      tracker.start()
+      spawned[0].exit(1)
+      await vi.advanceTimersByTimeAsync(500)
+      tracker.stop()
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(spawned).toHaveLength(1)
+    })
+  })
+
+  it("a restarted notifier's first line replaces the old list entirely", async () => {
+    const { tracker, spawned, published } = setup()
+    tracker.start()
+    spawned[0].stdout.write(line(sim('A', 'iPhone 17', 'Booted'), sim('B', 'iPad', 'Booted')))
+    expect(tracker.booted('A')).toBe(true)
+    expect(tracker.booted('B')).toBe(true)
+    spawned[0].exit(1)
+    await vi.advanceTimersByTimeAsync(0)
+    await vi.advanceTimersByTimeAsync(1000) // restart: run 1
+    spawned[1].stdout.write(line(sim('C', 'iPhone Air', 'Booted')))
+    expect(tracker.booted('A')).toBe(false)
+    expect(tracker.booted('B')).toBe(false)
+    expect(tracker.booted('C')).toBe(true)
+    expect(published.at(-1)).toEqual(['simulator:C'])
+    tracker.stop()
+  })
+
+  describe('failure reasons', () => {
+    it("uses the spawn error's message (the 'error' event) when there are no last words", async () => {
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      const err = Object.assign(new Error('spawn /opt/homebrew/bin/idb_companion EACCES'), { code: 'EACCES' })
+      spawned[0].proc.emit('error', err)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[0]).toEqual(['spawn /opt/homebrew/bin/idb_companion EACCES', false])
+      tracker.stop()
+    })
+
+    it('falls back to the exit code when there are no last words and no spawn error', async () => {
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      spawned[0].exit(7)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[0]).toEqual(['idb_companion stopped (exit code 7).', false])
+      tracker.stop()
+    })
+
+    it('falls back to the signal when stopped by one', async () => {
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      spawned[0].proc.emit('exit', null, 'SIGSEGV')
+      spawned[0].proc.emit('close', null, 'SIGSEGV')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[0]).toEqual(['idb_companion was stopped (SIGSEGV).', false])
+      tracker.stop()
+    })
+
+    it('falls back to a generic message for a clean exit with no last words', async () => {
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      spawned[0].exit(0)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[0]).toEqual(['idb_companion stopped.', false])
+      tracker.stop()
+    })
+
+    it('joins stderr written across chunks before taking its last line', async () => {
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      spawned[0].stderr.write('Error: CoreSimul')
+      spawned[0].stderr.write('ator is out of date\n')
+      spawned[0].exit(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[0][0]).toBe('Error: CoreSimulator is out of date')
+      tracker.stop()
+    })
+
+    it('caps the reported stderr line at 500 characters', async () => {
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      spawned[0].stderr.write(`${'E'.repeat(600)}\n`)
+      spawned[0].exit(1)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(failures[0][0]).toHaveLength(500)
+      tracker.stop()
+    })
+  })
+
+  describe('the first-list deadline', () => {
+    it('reports a failure and restarts when no list comes within 20 s', async () => {
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      await vi.advanceTimersByTimeAsync(19_999)
+      expect(failures).toHaveLength(0)
+      expect(spawned[0].killed()).toBe(false)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(failures).toEqual([['idb_companion listed nothing in 20 s.', false]])
+      expect(spawned[0].killed()).toBe(true)
+      await vi.advanceTimersByTimeAsync(999)
+      expect(spawned).toHaveLength(1)
+      await vi.advanceTimersByTimeAsync(1)
+      expect(spawned).toHaveLength(2) // restarted
+      tracker.stop()
+    })
+
+    it('is cleared once a line arrives, however late', async () => {
+      const { tracker, spawned, failures } = setup()
+      tracker.start()
+      await vi.advanceTimersByTimeAsync(19_000)
+      spawned[0].stdout.write(line(sim('A', 'iPhone 17', 'Booted')))
+      await vi.advanceTimersByTimeAsync(5000) // past the original 20 s mark
+      expect(failures).toHaveLength(0)
+      expect(spawned[0].killed()).toBe(false)
+      tracker.stop()
+    })
+  })
+
+  describe('guards', () => {
+    it('a throwing publish or failed is console.error-ed, and tracking goes on', async () => {
+      const errors: unknown[] = []
+      const originalError = console.error
+      console.error = ((...args: unknown[]) => {
+        errors.push(args)
+      }) as typeof console.error
+      try {
+        const spawned: FakeProcess[] = []
+        const tracker = new SimulatorTracker({
+          notify: () => {
+            const p = fakeProcess()
+            spawned.push(p)
+            return p.proc
+          },
+          publish: () => {
+            throw new Error('boom publish')
+          },
+          failed: () => {
+            throw new Error('boom failed')
+          },
+        })
+        tracker.start()
+        spawned[0].stdout.write(line(sim('A', 'iPhone 17', 'Booted')))
+        expect(tracker.booted('A')).toBe(true) // internal state still updates despite publish throwing
+        spawned[0].exit(1) // failed() throws here, but the restart must still be scheduled
+        await vi.advanceTimersByTimeAsync(0)
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(spawned).toHaveLength(2)
+        expect(errors.length).toBeGreaterThanOrEqual(2)
+        tracker.stop()
+      } finally {
+        console.error = originalError
+      }
+    })
   })
 })

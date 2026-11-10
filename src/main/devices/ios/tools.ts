@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
 import { realpath, stat } from 'node:fs/promises'
-import { delimiter, dirname, isAbsolute, join } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join } from 'node:path'
 
 /** idb-companion as Homebrew installs it. */
 export interface IdbTools {
@@ -20,11 +20,23 @@ export function idbCandidates(env: NodeJS.ProcessEnv): string[] {
   return [...new Set([...dirs, '/opt/homebrew/bin', '/usr/local/bin'])].map((d) => join(d, 'idb_companion'))
 }
 
-/** The first idb_companion found, and the sim-video Homebrew puts beside its real file
- *  (`…/Cellar/idb-companion/<version>/libexec/`). */
+/** Homebrew's stable "opt" link for sim-video, beside a companion found as `<prefix>/bin/idb_companion`
+ *  (`<prefix>/opt/idb-companion/libexec/sim-video`): `brew link`/`brew upgrade` keep it pointing at
+ *  the current version, unlike the versioned Cellar path a running Deck may have realpath'd before an
+ *  upgrade deletes it. null when `companion` wasn't found under a `bin` folder. */
+function stableSimVideo(companion: string): string | null {
+  const bin = dirname(companion)
+  if (basename(bin) !== 'bin') return null
+  return join(dirname(bin), 'opt', 'idb-companion', 'libexec', 'sim-video')
+}
+
+/** The first idb_companion found, and its sim-video: Homebrew's stable opt link when there is one,
+ *  else beside the real file (`…/Cellar/idb-companion/<version>/libexec/`). */
 export async function findIdb(candidates: readonly string[]): Promise<IdbTools | null> {
   for (const companion of candidates) {
     if (!(await isFile(companion))) continue
+    const stable = stableSimVideo(companion)
+    if (stable && (await isFile(stable))) return { companion, simVideo: stable }
     const real = await realpath(companion).catch(() => companion)
     const simVideo = join(dirname(real), 'sim-video')
     return { companion, simVideo: (await isFile(simVideo)) ? simVideo : null }
@@ -41,12 +53,23 @@ function runTool(cmd: string, args: string[]): Promise<string> {
   })
 }
 
-/** Whether any simulator is booted, asked without idb (to say idb-companion is missing). Only with a
- *  developer folder selected: without one, `xcrun` offers to install the command line tools. */
-export async function simulatorBooted(run: (cmd: string, args: string[]) => Promise<string> = runTool): Promise<boolean> {
+export interface SimulatorBootedDeps {
+  run(cmd: string, args: string[]): Promise<string>
+  exists(path: string): Promise<boolean>
+}
+
+/** Whether any simulator is booted, asked without idb (to say idb-companion is missing). Runs
+ *  `/usr/bin/xcode-select -p` by absolute path for the developer folder, then runs `simctl` directly
+ *  at `<developer dir>/usr/bin/simctl` if it's there. Never `xcrun`: with no developer folder
+ *  selected, it offers to install the command line tools instead of just failing. */
+export async function simulatorBooted(
+  deps: SimulatorBootedDeps = { run: runTool, exists: (path) => stat(path).then(() => true, () => false) },
+): Promise<boolean> {
   try {
-    await run('xcode-select', ['-p'])
-    const out = await run('xcrun', ['simctl', 'list', 'devices', 'booted', '-j'])
+    const developerDir = (await deps.run('/usr/bin/xcode-select', ['-p'])).trim()
+    const simctl = join(developerDir, 'usr', 'bin', 'simctl')
+    if (!(await deps.exists(simctl))) return false
+    const out = await deps.run(simctl, ['list', 'devices', 'booted', '-j'])
     const devices = (JSON.parse(out) as { devices?: Record<string, { state?: string }[]> }).devices ?? {}
     return Object.values(devices).some((list) => Array.isArray(list) && list.some((d) => d?.state === 'Booted'))
   } catch {

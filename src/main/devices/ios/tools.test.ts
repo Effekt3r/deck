@@ -43,20 +43,81 @@ describe('findIdb', () => {
     expect(await findIdb([join(root, 'old', 'idb_companion')])).toEqual({ companion: join(root, 'old', 'idb_companion'), simVideo: null })
     expect(await findIdb([join(root, 'none', 'idb_companion')])).toBeNull()
   })
+
+  it.skipIf(process.platform === 'win32')("prefers Homebrew's stable opt link over the versioned Cellar path", async () => {
+    // brew2/bin/idb_companion -> brew2/Cellar/idb-companion/2.0.0/libexec/idb_companion, with a
+    // DIFFERENT sim-video beside the real file: the stable opt link must still win, since a
+    // `brew upgrade` can delete the versioned Cellar path a running Deck had realpath'd.
+    const prefix = join(root, 'brew2')
+    const cellarLibexec = join(prefix, 'Cellar', 'idb-companion', '2.0.0', 'libexec')
+    tool(join(cellarLibexec, 'idb_companion'))
+    tool(join(cellarLibexec, 'sim-video'))
+    tool(join(prefix, 'opt', 'idb-companion', 'libexec', 'sim-video'))
+    mkdirSync(join(prefix, 'bin'), { recursive: true })
+    symlinkSync(join(cellarLibexec, 'idb_companion'), join(prefix, 'bin', 'idb_companion'))
+    expect(await findIdb([join(prefix, 'bin', 'idb_companion')])).toEqual({
+      companion: join(prefix, 'bin', 'idb_companion'),
+      simVideo: join(prefix, 'opt', 'idb-companion', 'libexec', 'sim-video'),
+    })
+  })
+
+  it('falls back beside the real file when the stable opt link has no sim-video', async () => {
+    // brew3/bin/idb_companion exists (so a stable path is computed), but brew3/opt/... doesn't, so
+    // this must fall back to beside the realpath'd file like the "missing" tree above.
+    const prefix = join(root, 'brew3')
+    const cellarLibexec = join(prefix, 'Cellar', 'idb-companion', '3.0.0', 'libexec')
+    tool(join(cellarLibexec, 'idb_companion'))
+    tool(join(cellarLibexec, 'sim-video'))
+    mkdirSync(join(prefix, 'bin'), { recursive: true })
+    symlinkSync(join(cellarLibexec, 'idb_companion'), join(prefix, 'bin', 'idb_companion'))
+    expect(await findIdb([join(prefix, 'bin', 'idb_companion')])).toEqual({
+      companion: join(prefix, 'bin', 'idb_companion'),
+      simVideo: join(cellarLibexec, 'sim-video'),
+    })
+  })
 })
 
 describe('simulatorBooted', () => {
-  const run = (answers: Record<string, string | Error>) => async (cmd: string) => {
-    const answer = answers[cmd]
-    if (answer instanceof Error) throw answer
-    return answer ?? ''
+  function deps(opts: { xcodeSelect?: string | Error; exists?: boolean; simctl?: string | Error }) {
+    const calls: string[] = []
+    return {
+      calls,
+      run: async (cmd: string) => {
+        calls.push(cmd)
+        if (cmd === '/usr/bin/xcode-select') {
+          if (opts.xcodeSelect instanceof Error) throw opts.xcodeSelect
+          return opts.xcodeSelect ?? '/Applications/Xcode.app\n'
+        }
+        if (opts.simctl instanceof Error) throw opts.simctl
+        return opts.simctl ?? ''
+      },
+      exists: async () => opts.exists ?? true,
+    }
   }
 
-  it('asks simctl only with a developer folder selected', async () => {
-    expect(await simulatorBooted(run({ 'xcode-select': new Error('no developer folder') }))).toBe(false)
+  it('says false with no developer folder, even though simctl would say booted (no xcrun to fall back to)', async () => {
     const booted = JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ state: 'Booted' }] } })
-    expect(await simulatorBooted(run({ 'xcode-select': '/Applications/Xcode.app\n', xcrun: booted }))).toBe(true)
-    expect(await simulatorBooted(run({ 'xcode-select': '/x\n', xcrun: JSON.stringify({ devices: {} }) }))).toBe(false)
-    expect(await simulatorBooted(run({ 'xcode-select': '/x\n', xcrun: 'not json' }))).toBe(false)
+    const d = deps({ xcodeSelect: new Error('no developer folder'), simctl: booted })
+    expect(await simulatorBooted(d)).toBe(false)
+    expect(d.calls).toEqual(['/usr/bin/xcode-select']) // never reaches simctl
+  })
+
+  it('says false when simctl is missing at the developer folder, never running xcrun', async () => {
+    const d = deps({ exists: false })
+    expect(await simulatorBooted(d)).toBe(false)
+    expect(d.calls).toEqual(['/usr/bin/xcode-select'])
+    expect(d.calls).not.toContain('xcrun')
+  })
+
+  it('runs simctl directly at <developer dir>/usr/bin/simctl', async () => {
+    const booted = JSON.stringify({ devices: { 'com.apple.CoreSimulator.SimRuntime.iOS-27-0': [{ state: 'Booted' }] } })
+    const d = deps({ xcodeSelect: '/Applications/Xcode.app\n', simctl: booted })
+    expect(await simulatorBooted(d)).toBe(true)
+    expect(d.calls).toEqual(['/usr/bin/xcode-select', join('/Applications/Xcode.app', 'usr', 'bin', 'simctl')])
+  })
+
+  it('says false for no booted devices, or unparseable JSON', async () => {
+    expect(await simulatorBooted(deps({ xcodeSelect: '/x\n', simctl: JSON.stringify({ devices: {} }) }))).toBe(false)
+    expect(await simulatorBooted(deps({ xcodeSelect: '/x\n', simctl: 'not json' }))).toBe(false)
   })
 })
