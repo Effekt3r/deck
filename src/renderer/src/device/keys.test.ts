@@ -98,25 +98,29 @@ describe('deviceKey', () => {
 })
 
 describe('simulatorKey', () => {
-  const press = (key: string, mods: Partial<KeyPress> = {}): KeyPress => ({ key, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, ...mods })
-
   it('sends named keys with Shift and Option as they are: iOS edits like a Mac', () => {
-    expect(simulatorKey(press('Enter'))).toEqual({ usage: HID_KEY.ENTER, modifiers: 0 })
-    expect(simulatorKey(press('Backspace', { altKey: true }))).toEqual({ usage: HID_KEY.BACKSPACE, modifiers: HID_MOD.ALT })
-    expect(simulatorKey(press('ArrowLeft', { altKey: true, shiftKey: true }))).toEqual({ usage: HID_KEY.LEFT, modifiers: HID_MOD.ALT | HID_MOD.SHIFT })
+    expect(simulatorKey(k('Enter'))).toEqual({ usage: HID_KEY.ENTER, modifiers: 0 })
+    expect(simulatorKey(k('Backspace', { altKey: true }))).toEqual({ usage: HID_KEY.BACKSPACE, modifiers: HID_MOD.ALT })
+    expect(simulatorKey(k('ArrowLeft', { altKey: true, shiftKey: true }))).toEqual({ usage: HID_KEY.LEFT, modifiers: HID_MOD.ALT | HID_MOD.SHIFT })
   })
 
   it('sends ⌘ with the arrows only; every other ⌘ key and Ctrl ones stay Deck’s', () => {
-    expect(simulatorKey(press('ArrowRight', { metaKey: true }))).toEqual({ usage: HID_KEY.RIGHT, modifiers: HID_MOD.CMD })
-    expect(simulatorKey(press('ArrowUp', { metaKey: true, shiftKey: true }))).toEqual({ usage: HID_KEY.UP, modifiers: HID_MOD.CMD | HID_MOD.SHIFT })
-    expect(simulatorKey(press('t', { metaKey: true }))).toBeNull()
-    expect(simulatorKey(press('Tab', { ctrlKey: true }))).toBeNull()
+    expect(simulatorKey(k('ArrowRight', { metaKey: true }))).toEqual({ usage: HID_KEY.RIGHT, modifiers: HID_MOD.CMD })
+    expect(simulatorKey(k('ArrowUp', { metaKey: true, shiftKey: true }))).toEqual({ usage: HID_KEY.UP, modifiers: HID_MOD.CMD | HID_MOD.SHIFT })
+    expect(simulatorKey(k('t', { metaKey: true }))).toBeNull()
+    expect(simulatorKey(k('Tab', { ctrlKey: true }))).toBeNull()
   })
 
   it('types characters as text; leaves composing and other named keys alone', () => {
-    expect(simulatorKey(press('a'))).toEqual({ text: 'a' })
-    expect(simulatorKey(press('A', { shiftKey: true }))).toEqual({ text: 'A' })
-    expect(simulatorKey(press('e', { isComposing: true }))).toBeNull()
-    expect(simulatorKey(press('F5'))).toBeNull()
+    expect(simulatorKey(k('a'))).toEqual({ text: 'a' })
+    expect(simulatorKey(k('A', { shiftKey: true }))).toEqual({ text: 'A' })
+    expect(simulatorKey(k('e', { isComposing: true }))).toBeNull()
+    expect(simulatorKey(k('F5'))).toBeNull()
+  })
+
+  it('Tab and Escape go to the simulator, as they do on Android', () => {
+    expect(simulatorKey(k('Escape'))).toEqual({ usage: HID_KEY.ESCAPE, modifiers: 0 })
+    expect(simulatorKey(k('Tab'))).toEqual({ usage: HID_KEY.TAB, modifiers: 0 })
+    expect(simulatorKey(k('Tab', { shiftKey: true }))).toEqual({ usage: HID_KEY.TAB, modifiers: HID_MOD.SHIFT })
   })
 })

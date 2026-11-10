@@ -21,6 +21,8 @@ export interface ChoiceInput {
 
 /** What a device runs: phones and emulators Android, simulators iOS. */
 export const platformOf = (kind: DeviceInfo['kind']): DevicePlatform => (kind === 'simulator' ? 'ios' : 'android')
+
+/** A stored id's platform, from its prefix, connected or not. */
 const platformOfId = (id: string): DevicePlatform => (id.startsWith('simulator:') ? 'ios' : 'android')
 
 /** The project is an app for the device's platform. */
@@ -35,7 +37,9 @@ export function choosePanel({ tab, project, android, ios, byHand, devices }: Cho
   const find = (id: string | undefined) => (id ? devices.find((d) => d.id === id) : undefined)
   const picked = find(tab) ?? project.map(find).find((d) => d !== undefined)
   if (picked) return { kind: 'device', device: picked }
-  const fitting = byHand ? devices : android || ios ? (!tab && project.length === 0 ? devices.filter((d) => fits(d, { android, ios })) : []) : []
+  let fitting: DeviceInfo[] = []
+  if (byHand) fitting = devices
+  else if ((android || ios) && !tab && project.length === 0) fitting = devices.filter((d) => fits(d, { android, ios }))
   if (fitting.length === 1) return { kind: 'device', device: fitting[0] }
   if (fitting.length > 1) return { kind: 'choose', devices: fitting }
   return { kind: 'none' }
