@@ -322,7 +322,7 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const devices = deviceList?.devices ?? NO_DEVICES
   // Not needed any more, the list is the old one until its effect lets it go: nothing to choose from.
   const choice = deviceNeeded && deviceList && (project || byHand)
-    ? choosePanel({ tab: tabDevice, project: project?.picks ?? [], android: project?.android ?? false, byHand, devices })
+    ? choosePanel({ tab: tabDevice, project: project?.picks ?? [], android: project?.android ?? false, ios: project?.ios ?? false, byHand, devices })
     : null
   const deviceView = useHeldView(choice, devices, deviceRoot, tabDevice ?? project?.picks[0] ?? null)
   const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand)

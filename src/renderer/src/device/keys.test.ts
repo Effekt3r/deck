@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { deviceKey, KEYCODE, type KeyPress } from './keys'
+import { HID_KEY, HID_MOD } from '@shared/hid'
+import { deviceKey, KEYCODE, simulatorKey, type KeyPress } from './keys'
 
 const k = (key: string, mods: Partial<KeyPress> = {}): KeyPress => ({ key, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, ...mods })
 
@@ -93,5 +94,29 @@ describe('deviceKey', () => {
     expect(deviceKey(k('@', { ctrlKey: true, altKey: true }), 'win32')).toEqual({ text: '@' })
     expect(deviceKey(k('ArrowLeft', { altKey: true, altGraph: true }), 'win32')).toEqual({ keycode: KEYCODE.DPAD_LEFT, meta: 0 })
     expect(deviceKey(k('@', { altGraph: true }), 'win32')).toEqual({ text: '@' })
+  })
+})
+
+describe('simulatorKey', () => {
+  const press = (key: string, mods: Partial<KeyPress> = {}): KeyPress => ({ key, shiftKey: false, ctrlKey: false, metaKey: false, altKey: false, ...mods })
+
+  it('sends named keys with Shift and Option as they are: iOS edits like a Mac', () => {
+    expect(simulatorKey(press('Enter'))).toEqual({ usage: HID_KEY.ENTER, modifiers: 0 })
+    expect(simulatorKey(press('Backspace', { altKey: true }))).toEqual({ usage: HID_KEY.BACKSPACE, modifiers: HID_MOD.ALT })
+    expect(simulatorKey(press('ArrowLeft', { altKey: true, shiftKey: true }))).toEqual({ usage: HID_KEY.LEFT, modifiers: HID_MOD.ALT | HID_MOD.SHIFT })
+  })
+
+  it('sends ⌘ with the arrows only; every other ⌘ key and Ctrl ones stay Deck’s', () => {
+    expect(simulatorKey(press('ArrowRight', { metaKey: true }))).toEqual({ usage: HID_KEY.RIGHT, modifiers: HID_MOD.CMD })
+    expect(simulatorKey(press('ArrowUp', { metaKey: true, shiftKey: true }))).toEqual({ usage: HID_KEY.UP, modifiers: HID_MOD.CMD | HID_MOD.SHIFT })
+    expect(simulatorKey(press('t', { metaKey: true }))).toBeNull()
+    expect(simulatorKey(press('Tab', { ctrlKey: true }))).toBeNull()
+  })
+
+  it('types characters as text; leaves composing and other named keys alone', () => {
+    expect(simulatorKey(press('a'))).toEqual({ text: 'a' })
+    expect(simulatorKey(press('A', { shiftKey: true }))).toEqual({ text: 'A' })
+    expect(simulatorKey(press('e', { isComposing: true }))).toBeNull()
+    expect(simulatorKey(press('F5'))).toBeNull()
   })
 })

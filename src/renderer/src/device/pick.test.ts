@@ -1,14 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import type { DeviceInfo } from '@shared/types'
-import { choosePanel, GONE_MS, panelView } from './pick'
+import type { DeviceInfo, DeviceList } from '@shared/types'
+import { choosePanel, GONE_MS, menuOrder, panelView, stillLooking } from './pick'
 
 const device = (id: string, name: string): DeviceInfo => ({ id, kind: id.startsWith('emulator:') ? 'emulator' : 'android', name, detail: '', state: 'ready' })
 const c66 = device('android:8d2e61a', 'C66')
 const s25 = device('android:R5CW20XY7QZ', "Franco's S25 FE")
 const emu = device('emulator:Pixel_9', 'Pixel 9')
+const sim: DeviceInfo = { id: 'simulator:U1', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' }
 
 describe('choosePanel', () => {
-  const base = { tab: undefined, project: [] as string[], android: true, byHand: false }
+  const base = { tab: undefined, project: [] as string[], android: true, ios: false, byHand: false }
 
   it("shows the tab's pick, else the latest of the project's that's connected", () => {
     expect(choosePanel({ ...base, tab: s25.id, project: [c66.id], devices: [c66, s25] })).toEqual({ kind: 'device', device: s25 })
@@ -44,6 +45,35 @@ describe('choosePanel', () => {
   it('an unauthorized device counts as the only one that fits', () => {
     const unauth = { ...c66, state: 'unauthorized' as const }
     expect(choosePanel({ ...base, devices: [unauth] })).toEqual({ kind: 'device', device: unauth })
+  })
+
+  it('fits devices by platform: phones and emulators to an Android app, simulators to an iOS one', () => {
+    expect(choosePanel({ ...base, devices: [c66, sim] })).toEqual({ kind: 'device', device: c66 })
+    expect(choosePanel({ ...base, android: false, ios: true, devices: [c66, sim] })).toEqual({ kind: 'device', device: sim })
+    expect(choosePanel({ ...base, ios: true, devices: [c66, sim] })).toEqual({ kind: 'choose', devices: [c66, sim] })
+    expect(choosePanel({ ...base, byHand: true, android: false, devices: [c66, sim] })).toEqual({ kind: 'choose', devices: [c66, sim] })
+    expect(choosePanel({ ...base, project: [sim.id], devices: [c66, sim] })).toEqual({ kind: 'device', device: sim })
+  })
+})
+
+describe('menuOrder', () => {
+  it('lists the devices that fit first, each group as listed', () => {
+    expect(menuOrder([c66, sim, emu], { android: false, ios: true })).toEqual([sim, c66, emu])
+    expect(menuOrder([c66, sim, emu], { android: true, ios: false })).toEqual([c66, emu, sim])
+  })
+})
+
+describe('stillLooking', () => {
+  const list = (pending: ('android' | 'ios')[]): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending })
+  const android = { android: true, ios: false, picks: [] }
+  it('waits for the list, and for the kinds the tab shows', () => {
+    expect(stillLooking(null, android, false, undefined)).toBe(true)
+    expect(stillLooking(list(['ios']), android, false, undefined)).toBe(false)
+    expect(stillLooking(list(['android']), android, false, undefined)).toBe(true)
+    expect(stillLooking(list(['ios']), android, true, undefined)).toBe(true)
+    expect(stillLooking(list(['ios']), android, false, sim.id)).toBe(true)
+    expect(stillLooking(list(['ios']), { ...android, picks: [sim.id] }, false, undefined)).toBe(true)
+    expect(stillLooking(list([]), null, true, undefined)).toBe(false)
   })
 })
 
