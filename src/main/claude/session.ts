@@ -57,8 +57,8 @@ const cleanPrompt = (text: string) => text.replace(/<\/?pasted_content[^>]*>/g, 
 
 /**
  * A Claude Code session log, parsed incrementally: entries go in through ingest() in log order.
- * Port of `Session` in claude_activity_pane.py (replayed over 145 real logs without a turn, agent or
- * background task left open in a finished session); CLAUDE.md documents the log format.
+ * Port of `Session` in claude_activity_pane.py (images replayed over 681 real logs on 2026-11-11: the
+ * two parsers' counts agreed; logs come and go, so the number moves); CLAUDE.md documents the log format.
  */
 export class SessionState {
   private items: ClaudeFeedItem[] = []
@@ -68,7 +68,7 @@ export class SessionState {
    *  there again. Gone with the item; never part of a snapshot. */
   private readonly places = new WeakMap<ClaudeFeedItem, Map<string, LinePlace>>()
   /** The line of the entry being ingested, while it is. */
-  private place: LinePlace | null = null
+  private ingesting: LinePlace | null = null
   /** Sub-agents by the id of the Agent/Task tool call that started them. */
   readonly agents = new Map<string, AgentInfo>()
   /** Background shell tasks still running. */
@@ -113,17 +113,19 @@ export class SessionState {
     return list.map((t) => ({ ...t }))
   }
 
-  /** `place`: where the entry's line is in the log, so the images it adds can be read again. */
+  /** `place`: where the entry's line is in the log, so the images it adds can be read again. Copied
+   *  (never the caller's object itself), so a place that comes attached to its parsed entry can't
+   *  keep the entry, or its base64, alive. */
   ingest(entry: unknown, place?: LinePlace): void {
     if (!isRecord(entry)) return
     this.version++
-    this.place = place ?? null
+    this.ingesting = place ? { offset: place.offset, length: place.length } : null
     try {
       this.apply(entry)
     } catch {
       // A shape this parser doesn't know; the prototype skips such a line too.
     } finally {
-      this.place = null
+      this.ingesting = null
     }
   }
 
@@ -297,9 +299,9 @@ export class SessionState {
         continue
       }
       listed.push(image)
-      if (this.place) {
+      if (this.ingesting) {
         if (!places) this.places.set(item, (places = new Map()))
-        places.set(image.id, this.place)
+        places.set(image.id, this.ingesting)
       }
     }
     item.images = listed

@@ -571,10 +571,51 @@ describe('SessionState: images', () => {
     const log = newLog().prompt('old', { images: [a] })
     const s = new SessionState(FOLDER, FOLDER, 2)
     const lines = () => readLines(log.path)
-    for (const line of lines()) s.ingest(line.entry, line)
+    for (const line of lines()) s.ingest(line.entry, { offset: line.offset, length: line.length })
     expect(s.imagePlace(id(a))).not.toBeNull()
     log.reply('x', { stopReason: 'tool_use' }).reply('y', { stopReason: 'tool_use' })
-    for (const line of lines().slice(1)) s.ingest(line.entry, line)
+    for (const line of lines().slice(1)) s.ingest(line.entry, { offset: line.offset, length: line.length })
     expect(s.imagePlace(id(a))).toBeNull()
+  })
+
+  it('an image beside several tool_results in one entry goes with the last of them', () => {
+    const s = parsePlaced(newLog()
+      .toolUse('t1', 'Bash', { command: 'one' })
+      .toolUse('t2', 'Bash', { command: 'two' })
+      .userBlocks([
+        { type: 'tool_result', tool_use_id: 't1', content: 'first done' },
+        { type: 'tool_result', tool_use_id: 't2', content: 'second done' },
+        imageBlock(a),
+      ]))
+    expect(s.feed).toEqual([
+      { kind: 'tool', id: 't1', name: 'Bash', summary: 'one', state: 'done' },
+      { kind: 'tool', id: 't2', name: 'Bash', summary: 'two', state: 'done', images: [ref(a, 64, 48)] },
+    ])
+  })
+
+  it("an answer's image is dropped once its AskUserQuestion has left the feed: no stray [image] prompt", () => {
+    const log = newLog().toolUse('t1', 'AskUserQuestion', { questions: [{ question: 'Which?' }] })
+    for (let i = 0; i < 4; i++) log.reply(`r${i}`, { stopReason: 'tool_use' })
+    log.userBlocks([{ type: 'tool_result', tool_use_id: 't1', content: 'like this' }, imageBlock(a)], { imagePasteIds: [1] })
+    const s = parsePlaced(log, 2)
+    expect(s.feed).toEqual([{ kind: 'reply', text: 'r2' }, { kind: 'reply', text: 'r3' }])
+  })
+
+  it("a queued prompt with images from another origin (a peer) isn't shown", () => {
+    const s = parsePlaced(newLog().queuedBlocks([{ type: 'text', text: 'from elsewhere' }, imageBlock(a)], { origin: 'peer' }))
+    expect(s.feed).toEqual([])
+  })
+
+  it("an entry with a tool_result, prompt text and an image puts the image on the tool (today's rule, pinned)", () => {
+    const s = parsePlaced(newLog().toolUse('t1', 'Bash', { command: 'ls' })
+      .userBlocks([
+        { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+        { type: 'text', text: 'here is a screenshot' },
+        imageBlock(a),
+      ]))
+    expect(s.feed).toEqual([
+      { kind: 'tool', id: 't1', name: 'Bash', summary: 'ls', state: 'done', images: [ref(a, 64, 48)] },
+      { kind: 'prompt', text: 'here is a screenshot' },
+    ])
   })
 })
