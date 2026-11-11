@@ -57,31 +57,66 @@ async function isGradleProject(root: string): Promise<boolean> {
   return (await Promise.all(android.map(isGradleBuild))).some(Boolean)
 }
 
+const anyManifest = async (modules: string[]): Promise<boolean> => (await Promise.all(modules.map(hasManifest))).some(Boolean)
+
 /** An Android app has an AndroidManifest.xml in `src/main/` or `src/androidMain/` of a module one
  *  level down (`app/src/main/`, `composeApp/src/androidMain/`), or two levels down inside a
  *  first-level folder named `android` in any case (Flutter, React Native), or one that is a Gradle
- *  build of its own (`settings.gradle`/`.kts`: an SDK's `android-demo/` or `sdk/`). */
+ *  build of its own (`settings.gradle`/`.kts`: an SDK's `android-demo/` or `sdk/`), or three levels
+ *  down inside a Gradle build two levels down (a monorepo's `apps/<build>/`, an app's
+ *  `mobile/android/`). */
 export async function isAndroidApp(root: string): Promise<boolean> {
   const first = await subfolders(root)
-  if ((await Promise.all(first.map(hasManifest))).some(Boolean)) return true
+  if (await anyManifest(first)) return true
   const look = await Promise.all(
     first.map(async (dir) => basename(dir).toLowerCase() === 'android' || (await isGradleBuild(dir))),
   )
   // Capped again, flattened: otherwise up to MAX_FOLDERS nested builds could each contribute up to
   // MAX_FOLDERS modules, and every one of those would get stat'd for a manifest.
   const second = (await Promise.all(first.filter((_, i) => look[i]).map(subfolders))).flat().slice(0, MAX_FOLDERS)
-  return (await Promise.all(second.map(hasManifest))).some(Boolean)
+  if (await anyManifest(second)) return true
+  // Only now are the other first-level folders listed, for Gradle builds of their own two levels
+  // down: an app found above costs no extra reads. Capped like the second level.
+  const plain = (await Promise.all(first.filter((_, i) => !look[i]).map(subfolders))).flat().slice(0, MAX_FOLDERS)
+  const nested = [...second, ...plain]
+  const builds = await Promise.all(nested.map(isGradleBuild))
+  const third = (await Promise.all(nested.filter((_, i) => builds[i]).map(subfolders))).flat().slice(0, MAX_FOLDERS)
+  return anyManifest(third)
+}
+
+/** An Xcode project or workspace: a folder Xcode opens. */
+const isXcode = (name: string) => name.endsWith('.xcodeproj') || name.endsWith('.xcworkspace')
+
+async function hasXcode(dir: string): Promise<boolean> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+  return entries.some((e) => e.isDirectory() && isXcode(e.name))
+}
+
+/** An iOS app has an Xcode project or workspace at the project's root (`App.xcodeproj`) or in a
+ *  first-level folder (`ios/Runner.xcworkspace`: Flutter, React Native). A Mac-only one counts too. */
+export async function isIosApp(root: string): Promise<boolean> {
+  if (await hasXcode(root)) return true
+  return (await Promise.all((await subfolders(root)).map(hasXcode))).some(Boolean)
 }
 
 /** `android` is never scanned for the home folder — resolved with `realpath` first, so a `$HOME`
  *  given in another case or through a symlink still matches (some people keep `~` as a dotfiles
  *  repo: scanning would stat into `~/Desktop`, `~/Documents` and `~/Downloads`, which can raise a
  *  macOS privacy prompt for Deck). Inside git the whole project is scanned; outside it (a copied or
- *  unpacked project, no `.git`), only when the folder is itself a Gradle build. */
-export async function describeProject(folder: string, home: string): Promise<{ root: string; android: boolean }> {
+ *  unpacked project, no `.git`), only when the folder is itself a Gradle build. Outside git, an
+ *  Xcode project counts only in the folder itself. `wantIos` false (ipc.ts, off macOS: simulators
+ *  never show there) skips the Xcode scan too, not just its result: always `ios: false`. */
+export async function describeProject(folder: string, home: string, wantIos: boolean): Promise<{ root: string; android: boolean; ios: boolean }> {
   const { root, git } = await findRoot(folder)
   const realHome = await realpath(home).catch(() => resolve(home))
-  if (pathKey(resolve(root)) === pathKey(realHome)) return { root, android: false }
-  if (!git && !(await isGradleProject(root))) return { root, android: false }
-  return { root, android: await isAndroidApp(root) }
+  if (pathKey(resolve(root)) === pathKey(realHome)) return { root, android: false, ios: false }
+  if (!git) {
+    const [android, ios] = await Promise.all([
+      isGradleProject(root).then((gradle) => gradle && isAndroidApp(root)),
+      wantIos ? hasXcode(root) : Promise.resolve(false),
+    ])
+    return { root, android, ios }
+  }
+  const [android, ios] = await Promise.all([isAndroidApp(root), wantIos ? isIosApp(root) : Promise.resolve(false)])
+  return { root, android, ios }
 }

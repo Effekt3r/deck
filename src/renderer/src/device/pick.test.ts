@@ -1,18 +1,33 @@
 import { describe, expect, it } from 'vitest'
-import type { DeviceInfo } from '@shared/types'
-import { choosePanel, GONE_MS, panelView } from './pick'
+import type { DeviceInfo, DeviceList, DeviceProject } from '@shared/types'
+import { choosePanel, GONE_MS, menuOrder, panelRules, panelView, stillLooking } from './pick'
 
 const device = (id: string, name: string): DeviceInfo => ({ id, kind: id.startsWith('emulator:') ? 'emulator' : 'android', name, detail: '', state: 'ready' })
 const c66 = device('android:8d2e61a', 'C66')
 const s25 = device('android:R5CW20XY7QZ', "Franco's S25 FE")
 const emu = device('emulator:Pixel_9', 'Pixel 9')
+const sim: DeviceInfo = { id: 'simulator:U1', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' }
 
 describe('choosePanel', () => {
-  const base = { tab: undefined, project: null, android: true, byHand: false }
+  const base = { tab: undefined, project: [] as string[], android: true, ios: false, byHand: false }
 
-  it("shows the tab's pick, else the project's, while connected", () => {
-    expect(choosePanel({ ...base, tab: s25.id, project: c66.id, devices: [c66, s25] })).toEqual({ kind: 'device', device: s25 })
-    expect(choosePanel({ ...base, tab: s25.id, project: c66.id, devices: [c66] })).toEqual({ kind: 'device', device: c66 })
+  it("shows the tab's pick, else the latest of the project's that's connected", () => {
+    expect(choosePanel({ ...base, tab: s25.id, project: [c66.id], devices: [c66, s25] })).toEqual({ kind: 'device', device: s25 })
+    expect(choosePanel({ ...base, tab: s25.id, project: [c66.id], devices: [c66] })).toEqual({ kind: 'device', device: c66 })
+    expect(choosePanel({ ...base, project: [emu.id, s25.id], devices: [c66, s25, emu] })).toEqual({ kind: 'device', device: emu })
+    expect(choosePanel({ ...base, project: [emu.id, s25.id], devices: [c66, s25] })).toEqual({ kind: 'device', device: s25 })
+  })
+
+  it("once a project has picked, none of its own connected means no panel: another project's device never opens it", () => {
+    expect(choosePanel({ ...base, project: [c66.id], devices: [s25] })).toEqual({ kind: 'none' })
+    expect(choosePanel({ ...base, project: [c66.id], devices: [s25, emu] })).toEqual({ kind: 'none' })
+    expect(choosePanel({ ...base, tab: c66.id, devices: [s25] })).toEqual({ kind: 'none' })
+  })
+
+  it('shown by hand, every device fits, whatever the project picked', () => {
+    expect(choosePanel({ ...base, project: [c66.id], byHand: true, devices: [s25] })).toEqual({ kind: 'device', device: s25 })
+    expect(choosePanel({ ...base, project: [c66.id], byHand: true, devices: [s25, emu] })).toEqual({ kind: 'choose', devices: [s25, emu] })
+    expect(choosePanel({ ...base, project: [c66.id], byHand: true, devices: [s25, c66] })).toEqual({ kind: 'device', device: c66 })
   })
 
   it('shows the only device that fits, asks among several, and shows nothing without one', () => {
@@ -24,12 +39,41 @@ describe('choosePanel', () => {
   it('outside an Android app: only when asked for, or when the project picked a device', () => {
     expect(choosePanel({ ...base, android: false, devices: [c66] })).toEqual({ kind: 'none' })
     expect(choosePanel({ ...base, android: false, byHand: true, devices: [c66] })).toEqual({ kind: 'device', device: c66 })
-    expect(choosePanel({ ...base, android: false, project: c66.id, devices: [c66, s25] })).toEqual({ kind: 'device', device: c66 })
+    expect(choosePanel({ ...base, android: false, project: [c66.id], devices: [c66, s25] })).toEqual({ kind: 'device', device: c66 })
   })
 
   it('an unauthorized device counts as the only one that fits', () => {
     const unauth = { ...c66, state: 'unauthorized' as const }
     expect(choosePanel({ ...base, devices: [unauth] })).toEqual({ kind: 'device', device: unauth })
+  })
+
+  it('fits devices by platform: phones and emulators to an Android app, simulators to an iOS one', () => {
+    expect(choosePanel({ ...base, devices: [c66, sim] })).toEqual({ kind: 'device', device: c66 })
+    expect(choosePanel({ ...base, android: false, ios: true, devices: [c66, sim] })).toEqual({ kind: 'device', device: sim })
+    expect(choosePanel({ ...base, ios: true, devices: [c66, sim] })).toEqual({ kind: 'choose', devices: [c66, sim] })
+    expect(choosePanel({ ...base, byHand: true, android: false, devices: [c66, sim] })).toEqual({ kind: 'choose', devices: [c66, sim] })
+    expect(choosePanel({ ...base, project: [sim.id], devices: [c66, sim] })).toEqual({ kind: 'device', device: sim })
+  })
+})
+
+describe('menuOrder', () => {
+  it('lists the devices that fit first, each group as listed', () => {
+    expect(menuOrder([c66, sim, emu], { android: false, ios: true })).toEqual([sim, c66, emu])
+    expect(menuOrder([c66, sim, emu], { android: true, ios: false })).toEqual([c66, emu, sim])
+  })
+})
+
+describe('stillLooking', () => {
+  const list = (pending: ('android' | 'ios')[]): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending })
+  const android = { android: true, ios: false, picks: [] }
+  it('waits for the list, and for the kinds the tab shows', () => {
+    expect(stillLooking(null, android, false, undefined)).toBe(true)
+    expect(stillLooking(list(['ios']), android, false, undefined)).toBe(false)
+    expect(stillLooking(list(['android']), android, false, undefined)).toBe(true)
+    expect(stillLooking(list(['ios']), android, true, undefined)).toBe(true)
+    expect(stillLooking(list(['ios']), android, false, sim.id)).toBe(true)
+    expect(stillLooking(list(['ios']), { ...android, picks: [sim.id] }, false, undefined)).toBe(true)
+    expect(stillLooking(list([]), null, true, undefined)).toBe(false)
   })
 })
 
@@ -102,5 +146,63 @@ describe('panelView', () => {
     expect(at9_9s.view).toEqual({ kind: 'device', device: s25, gone: true })
     const at10s = panelView({ kind: 'device', device: c66 }, [c66], at9_9s.held, 1000 + GONE_MS, pick)
     expect(at10s.view).toEqual({ kind: 'device', device: c66, gone: false })
+  })
+})
+
+describe('panelRules', () => {
+  const list = (over: Partial<DeviceList> = {}): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending: [], ...over })
+  const iosApp: DeviceProject = { root: '/ios-app', android: false, ios: true, picks: [] }
+  const androidApp: DeviceProject = { root: '/android-app', android: true, ios: false, picks: [] }
+  const base = { tabDevice: undefined, tabHidden: undefined, list: null }
+
+  it('nothing to watch for: no apps, no pick, not asked for by hand', () => {
+    const plain: DeviceProject = { root: '/plain', android: false, ios: false, picks: [] }
+    const rules = panelRules({ ...base, project: plain, platform: 'win32' })
+    expect(rules.needed).toBe(false)
+    expect(rules.choice).toBeNull()
+  })
+
+  it('Windows, by hand (tabHidden === false): wants Android only, never iOS (iOS only counts on macOS)', () => {
+    const rules = panelRules({ ...base, project: null, tabHidden: false, platform: 'win32' })
+    expect(rules.byHand).toBe(true)
+    expect(rules.wants).toEqual({ android: true, ios: false })
+  })
+
+  it('macOS, by hand (tabHidden === false): wants both', () => {
+    const rules = panelRules({ ...base, project: null, tabHidden: false, platform: 'darwin' })
+    expect(rules.byHand).toBe(true)
+    expect(rules.wants).toEqual({ android: true, ios: true })
+  })
+
+  it('a pending iOS source: looking only for a tab that may show iOS', () => {
+    const pendingIos = list({ pending: ['ios'] })
+    expect(panelRules({ ...base, project: androidApp, list: pendingIos, platform: 'darwin' }).looking).toBe(false)
+    expect(panelRules({ ...base, project: iosApp, list: pendingIos, platform: 'darwin' }).looking).toBe(true)
+  })
+
+  it('choice stays null while a kind the tab may show is still pending, even with a device already listed', () => {
+    const rules = panelRules({ ...base, project: androidApp, list: list({ devices: [c66], pending: ['android'] }), platform: 'darwin' })
+    expect(rules.looking).toBe(true)
+    expect(rules.choice).toBeNull()
+  })
+
+  it('the hint opens only for an iOS project, and only for no-idb/old-idb', () => {
+    expect(panelRules({ ...base, project: iosApp, list: list({ iosProblem: 'no-idb' }), platform: 'darwin' }).iosHint).toBe(true)
+    expect(panelRules({ ...base, project: iosApp, list: list({ iosProblem: 'old-idb' }), platform: 'darwin' }).iosHint).toBe(true)
+    expect(panelRules({ ...base, project: iosApp, list: list({ iosProblem: { error: 'boom' } }), platform: 'darwin' }).iosHint).toBe(false)
+    expect(panelRules({ ...base, project: iosApp, list: list(), platform: 'darwin' }).iosHint).toBe(false)
+    expect(panelRules({ ...base, project: androidApp, list: list({ iosProblem: 'no-idb' }), platform: 'darwin' }).iosHint).toBe(false)
+  })
+
+  it('once needed, not looking, and the project is known: the choice is choosePanel\'s', () => {
+    const rules = panelRules({ ...base, project: androidApp, list: list({ devices: [c66] }), platform: 'darwin' })
+    expect(rules.choice).toEqual({ kind: 'device', device: c66 })
+  })
+
+  it('View → Device Panel hidden (tabHidden === true) wins: no watch, no byHand, nothing to choose, whatever else is true', () => {
+    const rules = panelRules({ project: iosApp, tabDevice: emu.id, tabHidden: true, list: list({ devices: [emu] }), platform: 'darwin' })
+    expect(rules.needed).toBe(false)
+    expect(rules.byHand).toBe(false)
+    expect(rules.choice).toBeNull()
   })
 })

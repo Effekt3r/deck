@@ -1,20 +1,13 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { randomInt } from 'node:crypto'
 import { connect, type Socket } from 'node:net'
+import type { StreamEvents } from '../session'
 import { runAdb } from './adb'
 import { CODEC_H264, VideoReader } from './protocol'
 import type { ScrcpyServer } from './server'
 
 /** Where the server is copied on the device. It deletes itself once started (scrcpy's cleanup). */
 export const REMOTE_PATH = '/data/local/tmp/deck-scrcpy-server.jar'
-
-export interface ScrcpyEvents {
-  /** A capture session started: the frames that follow have this size. */
-  size(width: number, height: number): void
-  packet(packet: { config: boolean; key: boolean; data: Uint8Array }): void
-  /** The stream ended by itself: why. Not called after stop(). */
-  end(why: string): void
-}
 
 export interface ScrcpySession {
   /** A control message (protocol.ts). */
@@ -136,7 +129,7 @@ async function firstAnswer(io: ScrcpyIo, port: number, gaveUp: () => boolean, on
 /** Streams one device: copies the server, opens a tunnel, starts the server and connects to its
  *  video and control sockets. Resolves once both sockets are connected (the server answered),
  *  before any frame; rejects, cleaning up, when a step fails or `signal` stops it first. */
-export async function startScrcpy(serial: string, server: ScrcpyServer, events: ScrcpyEvents, io: ScrcpyIo, signal?: AbortSignal): Promise<ScrcpySession> {
+export async function startScrcpy(serial: string, server: ScrcpyServer, events: StreamEvents, io: ScrcpyIo, signal?: AbortSignal): Promise<ScrcpySession> {
   const scid = randomInt(0, 0x7fffffff).toString(16).padStart(8, '0')
   // sig is passed only for the push, so a stop ends it at once; the forward isn't cancelled, or its
   // port (needed to remove it) would stay unknown.

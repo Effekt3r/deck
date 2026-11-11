@@ -1,6 +1,5 @@
 import type { DeviceStreamEvent } from '@shared/types'
-import { resetVideoMessage } from './android/protocol'
-import type { ScrcpyEvents, ScrcpySession } from './android/scrcpy'
+import type { DeviceSession, StreamEvents } from './session'
 
 /** How long a stream must stay live before a break counts as recovered rather than a continuation
  *  of the same problem: without this, a device that drops the stream right after every reconnect
@@ -8,8 +7,10 @@ import type { ScrcpyEvents, ScrcpySession } from './android/scrcpy'
 const STEADY_MS = 5000
 
 export interface StreamsDeps {
-  /** Starts device `id`'s stream; `signal` stops a start still under way. */
-  start(id: string, events: ScrcpyEvents, signal: AbortSignal): Promise<ScrcpySession>
+  /** Starts device `id`'s stream; `signal` stops a start still under way. `events`' `size` and
+   *  `packet` may arrive before this resolves; a failure before then rejects it instead of calling
+   *  `events.end()`. */
+  start(id: string, events: StreamEvents, signal: AbortSignal): Promise<DeviceSession>
   /** News for the renderer. */
   send(id: string, event: DeviceStreamEvent): void
   /** How long a stream nobody views keeps running. */
@@ -22,7 +23,7 @@ export interface StreamsDeps {
 
 interface Stream {
   viewers: number
-  session: ScrcpySession | null
+  session: DeviceSession | null
   /** The start under way; aborting it stops it. */
   starting: AbortController | null
   /** Breaks in a row; reset once a live stream has stayed up for STEADY_MS before breaking again. */
@@ -79,10 +80,11 @@ export class DeviceStreams {
     if (this.paused) return this.deps.send(id, { type: 'state', state: 'connecting' }) // resume() starts it
     if (s.error) return this.deps.send(id, { type: 'state', state: 'error', message: s.error })
     if (s.session) {
+      const session = s.session
       if (s.size) this.deps.send(id, { type: 'size', ...s.size })
       if (!s.live) return this.deps.send(id, { type: 'state', state: s.failures > 0 ? 'reconnecting' : 'connecting' })
       this.deps.send(id, { type: 'state', state: 'live' })
-      s.session.send(resetVideoMessage()) // the new viewer's decoder starts from a key frame
+      this.guard(() => session.keyframe()) // the new viewer's decoder starts from a key frame
       return
     }
     if (s.starting || s.retryTimer) return this.deps.send(id, { type: 'state', state: s.failures > 0 ? 'reconnecting' : 'connecting' })
@@ -103,12 +105,14 @@ export class DeviceStreams {
 
   /** A fresh key frame: a decoder fell behind or failed. */
   keyframe(id: string): void {
-    this.streams.get(id)?.session?.send(resetVideoMessage())
+    const session = this.streams.get(id)?.session
+    if (session) this.guard(() => session.keyframe())
   }
 
-  /** A control message for the device, while its stream runs. */
-  input(id: string, message: Buffer): void {
-    this.streams.get(id)?.session?.send(message)
+  /** The renderer's input for the device, while its stream runs: its session checks it. */
+  input(id: string, input: unknown): void {
+    const session = this.streams.get(id)?.session
+    if (session) this.guard(() => session.input(input))
   }
 
   retry(id: string): void {
@@ -167,7 +171,7 @@ export class DeviceStreams {
       clearTimeout(deadline)
       if (s.startTimer === deadline) s.startTimer = null
     }
-    const events: ScrcpyEvents = {
+    const events: StreamEvents = {
       size: (width, height) => {
         if (!current()) return
         s.size = { width, height }
@@ -198,7 +202,7 @@ export class DeviceStreams {
     this.deps.start(id, events, start.signal).then(
       (session) => {
         clearStartTimer()
-        if (!current()) return session.stop()
+        if (!current()) return this.guard(() => session.stop())
         s.starting = null
         s.session = session
       },
@@ -236,11 +240,24 @@ export class DeviceStreams {
     s.retryTimer = null
     s.startTimer = null
     s.generation++
-    s.session?.stop()
+    // Taken out of the stream first: a throwing stop() (guarded below, but belt and braces) must
+    // still leave the pending start aborted and the stream's own state fully reset.
+    const session = s.session
     s.session = null
     s.starting?.abort()
     s.starting = null
     s.live = false
+    if (session) this.guard(() => session.stop())
+  }
+
+  /** Session methods shouldn't throw (session.ts), but a throw there would leave the caller's work
+   *  half done (halt() among them) and reach only main's last-resort log: guarded anyway. */
+  private guard(run: () => void): void {
+    try {
+      run()
+    } catch (err) {
+      console.error('devices: a session failed', err)
+    }
   }
 
   private drop(id: string, s: Stream): void {

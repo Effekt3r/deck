@@ -80,15 +80,18 @@ Windows installer; publish it once it looks right.
     numbers: it adds a `statusLine` to `~/.claude/settings.json`, and Claude Code then
     hides its footer hints. **Disconnect** puts back what was there and forgets the
     numbers.
-- **Device panel** (top of the right pane in an Android app's tabs; Cmd/Ctrl+Shift+D hides it, or
-  shows it in any other tab): the phone or emulator the app runs on, live. Click to tap, drag to
-  swipe, scroll with the wheel, and type and paste with the screen selected (Option and Cmd editing
-  keys work as on a Mac); Back, Home, Recent apps and Power in its header and, while Claude runs, a
-  camera that adds a screenshot to Claude's prompt. Each project remembers its device (the ▾ menu
-  picks another, per tab). It streams only while you can see it. Needs adb (Android Studio or
-  Android's platform tools). Deck runs scrcpy's server on the device over adb; the server deletes
-  itself, and the screen setting it changes while shown is put back. A paste goes through the
-  device's clipboard and stays there.
+- **Device panel** (top of the right pane in an Android or iOS app's tabs; Cmd/Ctrl+Shift+D hides it,
+  or shows it in any other tab): the phone, emulator or (on macOS, with idb-companion from Homebrew)
+  simulator the app runs on, live. Click to tap, drag to swipe, scroll with the wheel (drag on a
+  simulator), and type and paste with the screen selected (Option and Cmd editing keys work as on a
+  Mac); Back, Home, Recent apps and Power in its header (Home for a simulator) and, while Claude
+  runs, a camera that adds a screenshot to Claude's prompt. Each project remembers the devices picked
+  in it and opens only on those (the ▾ menu picks another, per tab). It streams only while you can
+  see it. Android devices need adb (Android Studio or Android's platform tools): Deck runs scrcpy's
+  server on the device over adb; the server deletes itself, and the screen setting it changes while
+  shown is put back. A paste goes through the device's clipboard and stays there. Simulators need
+  `brew install facebook/fb/idb-companion`, which the panel offers to copy when a simulator is
+  booted without it; a paste there is typed, as a US keyboard would, up to 1,000 characters.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 

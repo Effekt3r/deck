@@ -12,6 +12,7 @@ import { registerClipboardIpc } from './clipboard/ipc'
 import { TempImages } from './clipboard/temp'
 import { externalUrl } from './external'
 import { registerDeviceIpc } from './devices/ipc'
+import { socketDirFor } from './devices/ios/simulator-io'
 import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
 import { registerProjectsIpc } from './projects/ipc'
@@ -136,6 +137,8 @@ async function start(): Promise<void> {
     platform: process.platform as Platform,
     home: homedir(),
     env: process.env,
+    // Keyed by this instance like the clipboard's folder, so a dev build has its own.
+    socketDir: socketDirFor(app.getPath('temp'), instance, process.getuid?.() ?? 0),
     saveImage: (png) => clip.saveImage(png),
   })
 
