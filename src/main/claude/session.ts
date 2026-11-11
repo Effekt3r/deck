@@ -1,8 +1,12 @@
-import type { ClaudeFeedItem, ClaudeTodo } from '@shared/types'
+import type { ClaudeFeedItem, ClaudeImage, ClaudeTodo } from '@shared/types'
 import { AGENT_TOOLS, asText, describeTool, firstLine, head, isRecord, own, tag, toolLabel } from './describe'
+import { imagesOf } from './images'
+import type { LinePlace } from './tail'
 
 /** Feed items kept (oldest dropped), as the prototype's MAX_EVENTS. */
 export const MAX_FEED = 600
+/** Images listed per item; more are only counted (3 was the most seen in one item). */
+export const MAX_IMAGES = 10
 // Longest text kept per item. The snapshot cuts shorter (prompts 2,000, replies 8,000), so this only
 // bounds memory, and only because what is kept is copied (own()): a cut string would keep its whole
 // original alive. 600 items of at most 10,000 characters.
@@ -24,6 +28,7 @@ export interface AgentInfo {
 }
 
 type ToolItem = Extract<ClaudeFeedItem, { kind: 'tool' }>
+type PromptItem = Extract<ClaudeFeedItem, { kind: 'prompt' }>
 
 const str = (x: unknown): string => (typeof x === 'string' ? x : '')
 const clip = (s: string) => own(head(s, MAX_TEXT))
@@ -59,6 +64,11 @@ export class SessionState {
   private items: ClaudeFeedItem[] = []
   /** Each tool call's feed item, by tool_use id, so its result updates it in place. */
   private readonly tools = new Map<string, ToolItem>()
+  /** Where each listed image's line is in the log, by item and image id: its pixels are read from
+   *  there again. Gone with the item; never part of a snapshot. */
+  private readonly places = new WeakMap<ClaudeFeedItem, Map<string, LinePlace>>()
+  /** The line of the entry being ingested, while it is. */
+  private place: LinePlace | null = null
   /** Sub-agents by the id of the Agent/Task tool call that started them. */
   readonly agents = new Map<string, AgentInfo>()
   /** Background shell tasks still running. */
@@ -87,10 +97,11 @@ export class SessionState {
   /** Bumped by every entry: a snapshot built at the same version is the same. */
   version = 0
 
-  /** `realProject`: the project's real path, which tool paths in the log start with (describeTool). */
-  constructor(readonly project: string, readonly realProject = project) {}
+  /** `realProject`: the project's real path, which tool paths in the log start with (describeTool).
+   *  `maxFeed`: items kept (MAX_FEED; the replay check over all logs keeps them all). */
+  constructor(readonly project: string, readonly realProject = project, private readonly maxFeed = MAX_FEED) {}
 
-  /** Oldest first, at most MAX_FEED items. */
+  /** Oldest first, at most `maxFeed` items. */
   get feed(): ClaudeFeedItem[] {
     this.trim()
     return this.items
@@ -102,14 +113,29 @@ export class SessionState {
     return list.map((t) => ({ ...t }))
   }
 
-  ingest(entry: unknown): void {
+  /** `place`: where the entry's line is in the log, so the images it adds can be read again. */
+  ingest(entry: unknown, place?: LinePlace): void {
     if (!isRecord(entry)) return
     this.version++
+    this.place = place ?? null
     try {
       this.apply(entry)
     } catch {
       // A shape this parser doesn't know; the prototype skips such a line too.
+    } finally {
+      this.place = null
     }
+  }
+
+  /** Where the line holding image `id` is, for an item still in the feed that lists it; null when
+   *  no item does (it left the feed) or its line's place wasn't given. */
+  imagePlace(id: string): LinePlace | null {
+    const feed = this.feed
+    for (let i = feed.length - 1; i >= 0; i--) {
+      const place = this.places.get(feed[i])?.get(id)
+      if (place) return place
+    }
+    return null
   }
 
   private apply(e: Record<string, unknown>): void {
@@ -144,12 +170,12 @@ export class SessionState {
 
   private add(item: ClaudeFeedItem): void {
     this.items.push(item)
-    if (this.items.length >= 2 * MAX_FEED) this.trim()
+    if (this.items.length >= 2 * this.maxFeed) this.trim()
   }
 
   private trim(): void {
-    if (this.items.length <= MAX_FEED) return
-    for (const item of this.items.splice(0, this.items.length - MAX_FEED)) {
+    if (this.items.length <= this.maxFeed) return
+    for (const item of this.items.splice(0, this.items.length - this.maxFeed)) {
       if (item.kind === 'tool' && this.tools.get(item.id) === item) this.tools.delete(item.id)
     }
   }
@@ -176,10 +202,12 @@ export class SessionState {
       if (typeof a.prompt === 'string') {
         this.prompt(cleanPrompt(a.prompt))
       } else if (Array.isArray(a.prompt)) {
-        // A prompt with a pasted image comes as content blocks.
+        // A prompt with a pasted image comes as content blocks; its numbers are the attachment's.
         const blocks = a.prompt.filter(isRecord)
         const text = blocks.filter((b) => b.type === 'text').map((b) => str(b.text)).join('\n')
-        this.prompt(cleanPrompt(text) || (blocks.some((b) => b.type === 'image') ? '[image]' : ''))
+        const hasImage = blocks.some((b) => b.type === 'image')
+        const item = this.prompt(cleanPrompt(text) || (hasImage ? '[image]' : ''))
+        if (item && hasImage) this.attach(item, imagesOf(blocks, a.imagePasteIds))
       }
     }
   }
@@ -193,10 +221,13 @@ export class SessionState {
     const human = originKind(e.origin) === 'human' && !e.isMeta
     const texts: string[] = []
     let images = 0
+    /** The last tool_result's tool_use id: an image beside it was pasted into that answer. */
+    let answered: string | null = null
     for (const b of blocks) {
       if (!isRecord(b)) continue
       if (b.type === 'tool_result') {
         this.result(b, e.toolUseResult)
+        answered = str(b.tool_use_id)
       } else if (b.type === 'text') {
         const text = str(b.text)
         if (text.slice(0, 40).includes('<task-notification>')) this.notification(text)
@@ -206,33 +237,73 @@ export class SessionState {
       }
     }
     const legacy = e.origin === undefined || e.origin === null
-    for (const text of texts) this.userText(text, legacy)
-    if (images && !texts.length) this.prompt('[image]')
+    let last: PromptItem | null = null
+    for (const text of texts) last = this.userText(text, legacy) ?? last
+    if (!images) return
+    if (answered !== null) {
+      // Pasted into an answer (AskUserQuestion): the images go with that tool call, not a prompt.
+      const tool = this.tools.get(answered)
+      if (tool) this.attach(tool, imagesOf(blocks, e.imagePasteIds))
+      return
+    }
+    // With the last prompt the entry added; an entry with no text is "[image]". Text that added no
+    // prompt (a slash command) drops them.
+    if (!texts.length) last = this.prompt('[image]')
+    if (last) this.attach(last, imagesOf(blocks, e.imagePasteIds))
   }
 
-  private userText(raw: string, legacy: boolean): void {
+  /** The prompt item the text added, if it added one. */
+  private userText(raw: string, legacy: boolean): PromptItem | null {
     const text = raw.trim()
-    if (!text || NOT_PROMPTS.some((p) => text.startsWith(p))) return
+    if (!text || NOT_PROMPTS.some((p) => text.startsWith(p))) return null
     if (text.startsWith('<command-name>')) {
       this.notice(tag(text, 'command-name') || head(text, 60), 'info')
     } else if (text.startsWith('<bash-input>')) {
-      this.add({ kind: 'prompt', text: clip(`! ${tag(text, 'bash-input')}`) }) // runs in the shell, no turn
+      const item: PromptItem = { kind: 'prompt', text: clip(`! ${tag(text, 'bash-input')}`) } // runs in the shell, no turn
+      this.add(item)
+      return item
     } else if (text.startsWith('[Request interrupted')) {
       this.notice('interrupted', 'error')
       this.endTurn(true)
     } else if (legacy && text.startsWith('<') && text.slice(0, 40).includes('>') && !text.startsWith('<pasted')) {
       // Older logs: hook output and reminders arrived as user text.
     } else {
-      this.prompt(cleanPrompt(text))
+      return this.prompt(cleanPrompt(text))
     }
+    return null
   }
 
-  private prompt(text: string): void {
-    if (!text) return
-    this.add({ kind: 'prompt', text: clip(text) })
+  /** The prompt item added; null for no text. */
+  private prompt(text: string): PromptItem | null {
+    if (!text) return null
+    const item: PromptItem = { kind: 'prompt', text: clip(text) }
+    this.add(item)
     if (!this.firstPrompt && text !== '[image]') this.firstPrompt = own(firstLine(text, 80))
     this.inTurn = true
     this.error = ''
+    return item
+  }
+
+  /** Lists `images` on `item`: at most MAX_IMAGES, the rest counted. Each one listed remembers the
+   *  line being ingested, where its pixels are read from again. */
+  private attach(item: PromptItem | ToolItem, images: ClaudeImage[]): void {
+    if (!images.length) return
+    const listed = item.images ?? []
+    let more = item.moreImages ?? 0
+    let places = this.places.get(item)
+    for (const image of images) {
+      if (listed.length >= MAX_IMAGES) {
+        more++
+        continue
+      }
+      listed.push(image)
+      if (this.place) {
+        if (!places) this.places.set(item, (places = new Map()))
+        places.set(image.id, this.place)
+      }
+    }
+    item.images = listed
+    if (more) item.moreImages = more
   }
 
   /**
@@ -283,6 +354,9 @@ export class SessionState {
       item.state = 'done'
       delete item.error // 'interrupted' by a turn end that came before this result
     }
+    // What the result held: an image file Claude read, a screenshot, an MCP tool's images. A result
+    // whose item has left the feed adds nothing.
+    if (item && Array.isArray(b.content)) this.attach(item, imagesOf(b.content))
   }
 
   /** <task-notification>: a background agent or shell command finished. */
