@@ -279,5 +279,14 @@ describe('VideoReader', () => {
       { type: 'codec', codec: CODEC_H264 },
       { type: 'error', message: "Deck's iPhone helper sent a 0×1600 screen." },
     ])
+    expect(new VideoReader(helper).feed(Buffer.concat([codecBuf(CODEC_H264), sessionBuf(736, 1600), packetHeader(0n, 0)]))).toEqual([
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'size', width: 736, height: 1600 },
+      { type: 'error', message: "Deck's iPhone helper sent a 0-byte packet." },
+    ])
+    expect(new VideoReader(helper).feed(Buffer.concat([codecBuf(CODEC_H264), packetBuf(33_333n, [0, 0, 0, 1, 0x41, 0xbb])]))).toEqual([
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'error', message: "Deck's iPhone helper sent a frame before the screen's size." },
+    ])
   })
 })
