@@ -69,12 +69,14 @@ describe("the feed's images", () => {
 
 describe('the viewer', () => {
   it('closes on a single click that both started and ended on the backdrop', () => {
-    expect(backdropCloses({ detail: 1, pressedOnBackdrop: true, onBackdrop: true })).toBe(true)
+    expect(backdropCloses({ detail: 1, pressedOnBackdrop: true, releasedOnBackdrop: true })).toBe(true)
     // A double-click on a thumbnail: the viewer opens under the first click, and the second lands on it.
-    expect(backdropCloses({ detail: 2, pressedOnBackdrop: true, onBackdrop: true })).toBe(false)
-    // A drag from the caption or the image onto the backdrop, and one off it.
-    expect(backdropCloses({ detail: 1, pressedOnBackdrop: false, onBackdrop: true })).toBe(false)
-    expect(backdropCloses({ detail: 1, pressedOnBackdrop: true, onBackdrop: false })).toBe(false)
+    expect(backdropCloses({ detail: 2, pressedOnBackdrop: true, releasedOnBackdrop: true })).toBe(false)
+    // A drag from the caption or the image onto the backdrop.
+    expect(backdropCloses({ detail: 1, pressedOnBackdrop: false, releasedOnBackdrop: true })).toBe(false)
+    // One from the backdrop onto the image: the click itself goes to the backdrop (the nearest common
+    // ancestor of where it started and ended), so where it ended is pointerup's to say (seen in the app).
+    expect(backdropCloses({ detail: 1, pressedOnBackdrop: true, releasedOnBackdrop: false })).toBe(false)
   })
 
   it('closes when the keyboard goes elsewhere in Deck, takes it back from a button that went disabled, else stays', () => {

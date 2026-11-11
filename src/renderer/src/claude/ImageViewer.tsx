@@ -42,8 +42,8 @@ export function ImageViewer({ folder, list, entry, onStep, onClose, onLeave }: I
   const rootRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const captionId = useId()
-  /** Where the last press started: a click on the backdrop closes the viewer only if it did there too. */
-  const pressedOn = useRef<EventTarget | null>(null)
+  /** Where the last press started and ended: a click closes the viewer only if both were on the backdrop. */
+  const press = useRef<{ down: EventTarget | null; up: EventTarget | null }>({ down: null, up: null })
   const [top] = useState(tabBarBottom)
   const [area, setArea] = useState<Size>({ width: 0, height: 0 })
   const [full, setFull] = useState<{ id: string; data: ClaudeImageData } | null>(null)
@@ -118,12 +118,13 @@ export function ImageViewer({ folder, list, entry, onStep, onClose, onLeave }: I
   }
 
   // Not a double-click's second click (a double-click on a thumbnail opens the viewer under the first),
-  // nor a drag from the caption or the image that ends on the backdrop.
+  // nor a drag between the backdrop and the caption or the image, either way. The click's own target
+  // can't tell: it's the nearest common ancestor of the press's two ends, the backdrop whenever either is.
   const isBackdrop = (target: EventTarget | null) => target !== null && (target === rootRef.current || target === stageRef.current)
   const onBackdrop = (e: MouseEvent) => {
-    const pressed = pressedOn.current
-    pressedOn.current = null
-    if (backdropCloses({ detail: e.detail, pressedOnBackdrop: isBackdrop(pressed), onBackdrop: isBackdrop(e.target) })) onClose()
+    const { down, up } = press.current
+    press.current = { down: null, up: null }
+    if (backdropCloses({ detail: e.detail, pressedOnBackdrop: isBackdrop(down), releasedOnBackdrop: isBackdrop(up) })) onClose()
   }
 
   // The keyboard never leaves an open viewer. Gone elsewhere in Deck (Cmd+F's search), the viewer
@@ -142,7 +143,10 @@ export function ImageViewer({ folder, list, entry, onStep, onClose, onLeave }: I
     <div className="iv" ref={rootRef} style={{ top }} role="dialog" aria-modal="true" aria-labelledby={captionId} tabIndex={-1}
       onKeyDown={onKeyDown} onBlur={onBlur} onClick={onBackdrop}
       onPointerDown={(e) => {
-        pressedOn.current = e.target
+        press.current = { down: e.target, up: null }
+      }}
+      onPointerUp={(e) => {
+        press.current.up = e.target
       }}>
       <div className="iv-stage" ref={stageRef}>
         <div className={box ? 'iv-frame' : 'iv-frame auto'} style={box ?? undefined}>

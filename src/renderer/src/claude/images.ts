@@ -100,9 +100,11 @@ export function stepImage(list: readonly FeedImage[], key: string, delta: -1 | 1
 
 /** A click closes the viewer only when it's a single click that both started and ended on the
  *  backdrop: a double-click on a thumbnail opens the viewer under its first click, and its second lands
- *  on the backdrop; a drag from the caption or the image ends there. */
-export function backdropCloses(click: { detail: number; pressedOnBackdrop: boolean; onBackdrop: boolean }): boolean {
-  return click.detail <= 1 && click.pressedOnBackdrop && click.onBackdrop
+ *  on the backdrop; a drag from the caption or the image ends there, and one from the backdrop may end
+ *  on the image. Where it started and ended are pointerdown's and pointerup's targets: the click itself
+ *  goes to their nearest common ancestor, which is the backdrop whenever either end is on it. */
+export function backdropCloses(click: { detail: number; pressedOnBackdrop: boolean; releasedOnBackdrop: boolean }): boolean {
+  return click.detail <= 1 && click.pressedOnBackdrop && click.releasedOnBackdrop
 }
 
 /** Where the keyboard went when it left one of the viewer's elements: still inside it, somewhere else
