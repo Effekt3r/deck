@@ -89,7 +89,36 @@ describe('watchRepo', () => {
     if (!dirs) throw new Error('not a repo')
     const { counter, stop } = await watching(repo, { debounceMs: 50, pollMs: 400, probe: () => repoProbe(dirs) })
     commit(repo, 'c2')
-    await sleep(1300) // the event, then three polls
+    await vi.waitFor(() => expect(counter.calls).toBeGreaterThan(0), { timeout: 2000, interval: 10 })
+    // The first poll is due as the commit starts. Where starting git is slow (Windows CI), its probe
+    // can see the commit and rebuild as well as the event: allowed. Once the event's rebuild has
+    // run, no poll rebuilds for the change again.
+    await sleep(200)
+    const seen = counter.calls
+    await sleep(1300) // three polls
+    expect(counter.calls).toBe(seen)
+    stop()
+  })
+
+  it("a poll still probing when a file event fires keeps the event's newer baseline", async () => {
+    const repo = makeRepo()
+    const c1 = commit(repo, 'c1')
+    let value = 'before'
+    let holdNext = false
+    let release: ((value: string) => void) | undefined
+    const probe = (): Promise<string> => {
+      if (!holdNext) return Promise.resolve(value)
+      holdNext = false
+      return new Promise((resolve) => (release = resolve))
+    }
+    const { counter, stop } = await watching(repo, { debounceMs: 50, pollMs: 500, probe })
+    holdNext = true
+    await vi.waitFor(() => expect(release).toBeDefined(), { timeout: 2000, interval: 10 }) // a poll is probing
+    value = 'after'
+    run(repo, 'update-ref', 'refs/heads/b', c1) // the event rebuilds, and its probe sees 'after'
+    await vi.waitFor(() => expect(counter.calls).toBe(1), { timeout: 2000, interval: 10 })
+    release?.('before') // the poll's probe ends with what it saw before the change
+    await sleep(1100) // two more polls
     expect(counter.calls).toBe(1)
     stop()
   })
