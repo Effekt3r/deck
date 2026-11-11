@@ -1,12 +1,14 @@
 import { basename, resolve } from 'node:path'
-import type { ClaudeResume, ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
+import type { ClaudeFeedItem, ClaudeImage, ClaudeResume, ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
 import { pathKey } from '../projects/config'
 import { cut } from './describe'
 import type { SessionFile } from './locator'
+import type { ImageSource } from './pixels'
 import { SessionState } from './session'
 import { buildSnapshot, sessionTitle } from './snapshot'
 import { claudeStatus } from './status'
 import { StepCache, subagentsDir } from './subagents'
+import type { LinePlace } from './tail'
 
 /** A subscriber, i.e. a renderer (webContents). */
 export interface Client {
@@ -16,7 +18,8 @@ export interface Client {
 
 /** Reads a log incrementally (JsonlTail). */
 export interface LogReader {
-  read(maxBytes?: number): Promise<{ entries: unknown[]; reset: boolean; more?: boolean }>
+  /** `places`: each entry's line in the log, at the same index (without them, images can't be shown). */
+  read(maxBytes?: number): Promise<{ entries: unknown[]; places?: LinePlace[]; reset: boolean; more?: boolean }>
   /** The log's modification time (ms) at the last read; 0 before. */
   readonly modified: number
 }
@@ -146,6 +149,16 @@ const unref = (t: NodeJS.Timeout) => {
 }
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve))
 
+/** Image `id` as the newest item listing it has it: its size is what the line is searched for. */
+function listedImage(feed: readonly ClaudeFeedItem[], id: string): ClaudeImage | undefined {
+  for (let i = feed.length - 1; i >= 0; i--) {
+    const item = feed[i]
+    const image = item.kind === 'prompt' || item.kind === 'tool' ? item.images?.find((im) => im.id === id) : undefined
+    if (image) return image
+  }
+  return undefined
+}
+
 /**
  * Who follows which folder's Claude session: one watcher per folder however many clients
  * subscribe; snapshots are pushed only when they changed. Follows the newest session (switching
@@ -218,6 +231,18 @@ export class ClaudeSubscriptions {
       const title = parsed?.loaded ? sessionTitle(parsed.state) : await this.deps.title(s.path).catch(() => '')
       return { id: s.id, path: s.path, title: cut(title, 300), modified: s.modified }
     }))
+  }
+
+  /** Where image `id` of the session `folder` follows is in its log: the line to read it from again,
+   *  and the size it was listed with. Only an image an item of that session's feed lists; null
+   *  otherwise, or when nobody follows the folder. */
+  imageSource(folder: string, id: string): ImageSource | null {
+    const w = this.folders.get(folderKey(folder))
+    const log = w && !w.closed ? w.log : null
+    if (!log) return null
+    const place = log.state.imagePlace(id)
+    const image = place ? listedImage(log.state.feed, id) : undefined
+    return place && image ? { path: log.path, offset: place.offset, length: place.length, bytes: image.bytes } : null
   }
 
   /** Follow one session of a subscribed folder (an id from sessions()), or the newest again (null).
@@ -429,12 +454,12 @@ export class ClaudeSubscriptions {
   private catchUp(p: Parsed): Promise<void> {
     p.reading = p.reading.then(async () => {
       for (;;) {
-        const { entries, reset, more } = await p.reader.read(this.timing.chunkBytes)
+        const { entries, places, reset, more } = await p.reader.read(this.timing.chunkBytes)
         if (reset) {
           p.state = new SessionState(p.project, p.real)
           p.stepCache = new StepCache()
         }
-        for (const e of entries) p.state.ingest(e)
+        entries.forEach((e, i) => p.state.ingest(e, places?.[i]))
         if (!more) break
         await nextTurn()
       }
