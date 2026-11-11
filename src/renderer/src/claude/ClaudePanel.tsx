@@ -30,7 +30,7 @@ interface ClaudePanelProps {
   onImagesToggle(): void
   /** Counts the subscribe's answers (useClaudeSession's): a thumbnail that couldn't be shown asks again
    *  at the next. */
-  shown: number
+  showings: number
 }
 
 const THINKING_KEY = 'deck.claudeThinking'
@@ -59,13 +59,14 @@ export const ClaudePanel = memo(function ClaudePanel(props: ClaudePanelProps) {
 })
 
 function PanelBody(props: ClaudePanelProps) {
-  const { folder, imageFolder, snapshot, phase, error, claudeRuns, active, home, onRetry, showImages, onImagesToggle, shown } = props
+  const { folder, imageFolder, snapshot, phase, error, claudeRuns, active, home, onRetry, showImages, onImagesToggle, showings } = props
   const platform = window.deck.platform
   const [showThinking, toggleThinking] = useStoredFlag(THINKING_KEY, true)
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
   const panelRef = useRef<HTMLDivElement>(null)
 
   // The rows' keys, kept from snapshot to snapshot: the feed's, and the viewer's way to an image.
+  // Kept across a session switch too, which is harmless: the Feed remounts and the viewer closes.
   const keysRef = useRef(NO_KEYS)
   const feed = snapshot?.feed ?? NO_FEED
   const keys = useMemo(() => (keysRef.current = feedKeys(keysRef.current, feed)).keys, [feed])
@@ -89,6 +90,8 @@ function PanelBody(props: ClaudePanelProps) {
     if (restore instanceof HTMLElement && restore !== document.body && restore.isConnected) restore.focus()
     else panelRef.current?.closest('.workspace')?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
   }, [])
+  /** The keyboard went elsewhere in Deck (Cmd+F's search): the viewer closes and leaves it there. */
+  const leaveViewer = useCallback(() => setViewing(null), [])
   // It lives in <body>: it goes when the tab leaves the front (the keyboard goes with the tab), or the
   // panel shows another session.
   useEffect(() => {
@@ -180,13 +183,13 @@ function PanelBody(props: ClaudePanelProps) {
       {snapshot.agents.length > 0 && <Agents agents={snapshot.agents} />}
       {phase === 'error' && error && <div className="cp-banner" role="alert">{error}</div>}
       <Feed key={session.id} items={snapshot.feed} keys={keys} showThinking={showThinking} live={LIVE.has(status.state)}
-        folder={imageFolder} showImages={showImages} shown={shown} onOpenImage={openImage} />
+        folder={imageFolder} showImages={showImages} showings={showings} onOpenImage={openImage} />
       {menuAnchor && (
         <SessionPicker folder={folder} current={session.id} following={snapshot.following} anchor={menuAnchor} onClose={closeMenu} />
       )}
       {viewing && active && viewing.session === session.id && (
         <ImageViewer folder={imageFolder} list={images} entry={viewing.entry}
-          onStep={(entry) => setViewing((v) => (v ? { ...v, entry } : v))} onClose={closeViewer} />
+          onStep={(entry) => setViewing((v) => (v ? { ...v, entry } : v))} onClose={closeViewer} onLeave={leaveViewer} />
       )}
     </div>
   )

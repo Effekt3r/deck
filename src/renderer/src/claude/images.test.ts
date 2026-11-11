@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { NO_PREVIEW, TOO_LARGE } from '@shared/claude-images'
 import type { ClaudeFeedItem, ClaudeImage } from '@shared/types'
-import { COULD_NOT_LOAD, feedImages, formatBytes, imageCaption, imageCount, isImageData, itemImages, stepImage, ThumbCache, thumbSize, viewerSize } from './images'
+import { backdropCloses, COULD_NOT_LOAD, feedImages, formatBytes, imageCaption, imageCount, isImageData, itemImages, stepImage, ThumbCache, thumbSize, viewerBlur, viewerSize } from './images'
 
 const image = (over: Partial<ClaudeImage> = {}): ClaudeImage => ({ id: 'a1b2c3d4e5f60718', format: 'png', width: 1440, height: 900, bytes: 212_000, ...over })
 
@@ -64,6 +64,25 @@ describe("the feed's images", () => {
     expect(stepImage(list, '3:0', 1)?.key).toBe('7:0')
     expect(stepImage(list, '3:0', -1)).toBeNull()
     expect(stepImage([], '3:0', 1)).toBeNull()
+  })
+})
+
+describe('the viewer', () => {
+  it('closes on a single click that both started and ended on the backdrop', () => {
+    expect(backdropCloses({ detail: 1, pressedOnBackdrop: true, onBackdrop: true })).toBe(true)
+    // A double-click on a thumbnail: the viewer opens under the first click, and the second lands on it.
+    expect(backdropCloses({ detail: 2, pressedOnBackdrop: true, onBackdrop: true })).toBe(false)
+    // A drag from the caption or the image onto the backdrop, and one off it.
+    expect(backdropCloses({ detail: 1, pressedOnBackdrop: false, onBackdrop: true })).toBe(false)
+    expect(backdropCloses({ detail: 1, pressedOnBackdrop: true, onBackdrop: false })).toBe(false)
+  })
+
+  it('closes when the keyboard goes elsewhere in Deck, takes it back from a button that went disabled, else stays', () => {
+    expect(viewerBlur('outside', false)).toBe('close') // Cmd+F: the terminal's search took it
+    expect(viewerBlur('outside', true)).toBe('close')
+    expect(viewerBlur('nowhere', true)).toBe('take') // › onto the last image, Open while it works
+    expect(viewerBlur('nowhere', false)).toBe('stay') // another app took it
+    expect(viewerBlur('inside', false)).toBe('stay') // Tab between its buttons
   })
 })
 

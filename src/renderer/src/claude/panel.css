@@ -401,6 +401,8 @@
 }
 .fi-tool .fi-images-hidden { grid-column: 2; justify-self: start; margin: 2px 0 4px; }
 .fi-images-hidden:hover:not(:disabled) { border-color: var(--line-strong); color: var(--text); }
+/* An image-only prompt starts with its images. */
+.fi-images:first-child, .fi-images-hidden:first-child { margin-top: 0; }
 
 /* Clamped text with "more": the button sits on the last line, over a fade. */
 .fi-clamp { position: relative; min-width: 0; }

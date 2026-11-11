@@ -1,10 +1,10 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FocusEvent, type KeyboardEvent, type MouseEvent } from 'react'
 import { createPortal } from 'react-dom'
 import { UNDECODABLE } from '@shared/claude-images'
 import type { ClaudeImageData } from '@shared/types'
 import { errorText } from '../git/format'
 import { CloseIcon, PictureIcon } from '../icons'
-import { COULD_NOT_LOAD, type FeedImage, isImageData, type Size, stepImage, VIEWER_MARGIN, viewerSize } from './images'
+import { backdropCloses, COULD_NOT_LOAD, type FeedImage, isImageData, type KeyboardMove, type Size, stepImage, VIEWER_MARGIN, viewerBlur, viewerSize } from './images'
 import { thumbs } from './useThumbnail'
 
 interface ImageViewerProps {
@@ -15,7 +15,10 @@ interface ImageViewerProps {
   /** The one shown (kept even when its item has left the feed). */
   entry: FeedImage
   onStep(entry: FeedImage): void
+  /** Esc, × or the backdrop: it closes and gives the keyboard back. */
   onClose(): void
+  /** The keyboard went elsewhere in Deck (Cmd+F's search): it closes and leaves the keyboard there. */
+  onLeave(): void
 }
 
 /** Where the tab bar ends (styles.css: .tabbar is 36 px): the viewer covers the window below it, so
@@ -35,9 +38,12 @@ function cycleFocus(root: HTMLElement | null, back: boolean): void {
  *  it and never past one image pixel per CSS pixel, over a checkerboard. Esc, ×, or a click on the
  *  backdrop closes it; ← and → step through the feed's images; Open shows a copy in the default image
  *  app. It takes only Esc, ←, → and Tab, so Deck's own shortcuts still work. Rendered into <body>. */
-export function ImageViewer({ folder, list, entry, onStep, onClose }: ImageViewerProps) {
+export function ImageViewer({ folder, list, entry, onStep, onClose, onLeave }: ImageViewerProps) {
   const rootRef = useRef<HTMLDivElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
+  const captionId = useId()
+  /** Where the last press started: a click on the backdrop closes the viewer only if it did there too. */
+  const pressedOn = useRef<EventTarget | null>(null)
   const [top] = useState(tabBarBottom)
   const [area, setArea] = useState<Size>({ width: 0, height: 0 })
   const [full, setFull] = useState<{ id: string; data: ClaudeImageData } | null>(null)
@@ -90,9 +96,11 @@ export function ImageViewer({ folder, list, entry, onStep, onClose }: ImageViewe
 
   const openCopy = () => {
     setOpening({ id, busy: true, error: null })
+    // Another image's Open, asked for since, keeps its own state.
+    const settle = (error: string | null) => setOpening((o) => (o?.id === id ? { id, busy: false, error } : o))
     window.deck.claude.openImage(folder, id).then(
-      (r) => setOpening({ id, busy: false, error: r && typeof r.error === 'string' ? r.error : null }),
-      (err: unknown) => setOpening({ id, busy: false, error: errorText(err) }),
+      (r) => settle(r && typeof r.error === 'string' ? r.error : null),
+      (err: unknown) => settle(errorText(err)),
     )
   }
 
@@ -109,29 +117,46 @@ export function ImageViewer({ folder, list, entry, onStep, onClose }: ImageViewe
     e.stopPropagation()
   }
 
+  // Not a double-click's second click (a double-click on a thumbnail opens the viewer under the first),
+  // nor a drag from the caption or the image that ends on the backdrop.
+  const isBackdrop = (target: EventTarget | null) => target !== null && (target === rootRef.current || target === stageRef.current)
   const onBackdrop = (e: MouseEvent) => {
-    if (e.target === e.currentTarget || e.target === stageRef.current) onClose()
+    const pressed = pressedOn.current
+    pressedOn.current = null
+    if (backdropCloses({ detail: e.detail, pressedOnBackdrop: isBackdrop(pressed), onBackdrop: isBackdrop(e.target) })) onClose()
   }
 
-  // A button that goes disabled while it has the keyboard (› onto the last image, Open while it
-  // works) drops it to <body>, where Esc and the arrows don't reach the viewer: it takes it back.
+  // The keyboard never leaves an open viewer. Gone elsewhere in Deck (Cmd+F's search), the viewer
+  // closes and leaves it there; a button that went disabled while it had it (› onto the last image,
+  // Open while it works) dropped it to <body>, out of reach of Esc and the arrows, so the viewer takes
+  // it back. Another app taking it leaves the viewer as it is.
   const onBlur = (e: FocusEvent<HTMLDivElement>) => {
-    if (e.target instanceof HTMLButtonElement && e.target.disabled && !e.relatedTarget) rootRef.current?.focus()
+    const to = e.relatedTarget
+    const move: KeyboardMove = to === null ? 'nowhere' : rootRef.current?.contains(to) ? 'inside' : 'outside'
+    const action = viewerBlur(move, e.target instanceof HTMLButtonElement && e.target.disabled)
+    if (action === 'close') onLeave()
+    else if (action === 'take') rootRef.current?.focus()
   }
 
   return createPortal(
-    <div className="iv" ref={rootRef} style={{ top }} role="dialog" aria-modal="true" aria-label={entry.caption} tabIndex={-1}
-      onKeyDown={onKeyDown} onBlur={onBlur} onClick={onBackdrop}>
+    <div className="iv" ref={rootRef} style={{ top }} role="dialog" aria-modal="true" aria-labelledby={captionId} tabIndex={-1}
+      onKeyDown={onKeyDown} onBlur={onBlur} onClick={onBackdrop}
+      onPointerDown={(e) => {
+        pressedOn.current = e.target
+      }}>
       <div className="iv-stage" ref={stageRef}>
         <div className={box ? 'iv-frame' : 'iv-frame auto'} style={box ?? undefined}>
           {url && <img src={url} alt={entry.caption} draggable={false} style={box ? undefined : room} onError={() => setBroken(id)} />}
           {stand && <img src={stand} alt="" draggable={false} style={box ? undefined : room} />}
-          {error && (
-            <span className="iv-error" role="status">
-              <PictureIcon size={22} />
-              {error}
-            </span>
-          )}
+          {/* A live region from the start, so the reason is announced when it arrives. */}
+          <span className="iv-status" role="status">
+            {error && (
+              <span className="iv-error">
+                <PictureIcon size={22} />
+                {error}
+              </span>
+            )}
+          </span>
         </div>
         <button className="iv-step prev" aria-label="Previous image" title="Previous image (←)" disabled={!prev}
           onClick={() => prev && onStep(prev)}>‹</button>
@@ -139,7 +164,7 @@ export function ImageViewer({ folder, list, entry, onStep, onClose }: ImageViewe
           onClick={() => next && onStep(next)}>›</button>
       </div>
       <div className="iv-bar">
-        <span className="iv-caption" title={entry.caption}>{entry.caption}</span>
+        <span className="iv-caption" id={captionId} title={entry.caption}>{entry.caption}</span>
         {list.length > 1 && at >= 0 && <span className="iv-count">{at + 1} of {list.length}</span>}
         {open?.error && <span className="iv-open-error" role="alert" title={open.error}>{open.error}</span>}
         <button className="button iv-open" disabled={open?.busy === true} title="Open a copy in your image app" onClick={openCopy}>

@@ -492,7 +492,7 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
           {showClaude && (
             <ClaudePanel folder={folder} imageFolder={claude.folder} snapshot={claude.snapshot} phase={claude.phase} error={claude.error}
               claudeRuns={claudeRuns} active={active} home={home} onRetry={claude.retry}
-              showImages={showImages} onImagesToggle={onImagesToggle} shown={claude.shown} />
+              showImages={showImages} onImagesToggle={onImagesToggle} showings={claude.showings} />
           )}
           {showClaude && usage && (
             <UsageCard state={usage} home={home} open={usageOpen} onToggle={onUsageToggle} onFocusLost={focusTerminal} />

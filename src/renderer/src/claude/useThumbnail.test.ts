@@ -80,15 +80,15 @@ describe('tileData', () => {
 
   it('waits (null) until the tile has an answer; a picture stays however often the panel is shown', () => {
     expect(tileData(null, 1)).toBeNull()
-    expect(tileData({ data: picture, shown: 1 }, 1)).toEqual(picture)
-    expect(tileData({ data: picture, shown: 1 }, 4)).toEqual(picture)
+    expect(tileData({ data: picture, showings: 1 }, 1)).toEqual(picture)
+    expect(tileData({ data: picture, showings: 1 }, 4)).toEqual(picture)
   })
 
   it('an error lasts until the panel is shown again, when the tile waits to ask again', () => {
     // A rewritten log: the image's line moved, so main didn't find it until the panel read the log
     // again (its tab came to the front, or its subscribe was answered again).
-    expect(tileData({ data: { error: GONE }, shown: 1 }, 1)).toEqual({ error: GONE })
-    expect(tileData({ data: { error: GONE }, shown: 1 }, 2)).toBeNull()
-    expect(tileData({ data: { error: TOO_LARGE }, shown: 2 }, 3)).toBeNull()
+    expect(tileData({ data: { error: GONE }, showings: 1 }, 1)).toEqual({ error: GONE })
+    expect(tileData({ data: { error: GONE }, showings: 1 }, 2)).toBeNull()
+    expect(tileData({ data: { error: TOO_LARGE }, showings: 2 }, 3)).toBeNull()
   })
 })

@@ -14,7 +14,7 @@ interface ImageTilesProps {
   /** Off: no thumbnails are made; a dim "▣ N images" opens the viewer instead. */
   show: boolean
   /** Counts the panel's showings: a thumbnail that couldn't be shown asks again at the next. */
-  shown: number
+  showings: number
   onOpen(key: string): void
   observe: Observe
 }
@@ -24,14 +24,14 @@ const keepFocus = (e: MouseEvent) => e.preventDefault()
 
 /** An item's images: thumbnails in the order they came (at most 10, then "+N more"), or "▣ N images"
  *  while images are hidden. Each opens the viewer. */
-export function ImageTiles({ item, rowKey, folder, show, shown, onOpen, observe }: ImageTilesProps) {
+export function ImageTiles({ item, rowKey, folder, show, showings, onOpen, observe }: ImageTilesProps) {
   const images = itemImages(item)
   const total = imageCount(item)
   if (!total) return null
   if (!show) {
     return (
-      <button className="fi-images-hidden" disabled={!images.length} onMouseDown={keepFocus} onClick={() => onOpen(`${rowKey}:0`)}
-        title="Images are hidden: open this one in the viewer">
+      <button className="fi-images-hidden" aria-haspopup="dialog" disabled={!images.length} onMouseDown={keepFocus}
+        onClick={() => onOpen(`${rowKey}:0`)} title={total === 1 ? 'Show it in the viewer' : 'Show these in the viewer'}>
         <span aria-hidden="true">▣</span> {total} image{total === 1 ? '' : 's'}
       </button>
     )
@@ -39,7 +39,7 @@ export function ImageTiles({ item, rowKey, folder, show, shown, onOpen, observe 
   return (
     <div className="fi-images">
       {images.map((image, i) => (
-        <Thumb key={`${i}:${image.id}`} image={image} caption={imageCaption(image, item)} folder={folder} shown={shown} observe={observe}
+        <Thumb key={`${i}:${image.id}`} image={image} caption={imageCaption(image, item)} folder={folder} showings={showings} observe={observe}
           onOpen={() => onOpen(`${rowKey}:${i}`)} />
       ))}
       {item.moreImages ? <span className="fi-images-more">+{item.moreImages} more</span> : null}
@@ -47,15 +47,15 @@ export function ImageTiles({ item, rowKey, folder, show, shown, onOpen, observe 
   )
 }
 
-function Thumb({ image, caption, folder, shown, observe, onOpen }: {
+function Thumb({ image, caption, folder, showings, observe, onOpen }: {
   image: ClaudeImage
   caption: string
   folder: string
-  shown: number
+  showings: number
   observe: Observe
   onOpen(): void
 }) {
-  const { ref, data } = useThumbnail(folder, image.id, observe, shown)
+  const { ref, data } = useThumbnail(folder, image.id, observe, showings)
   // The browser couldn't draw what main sent.
   const [broken, setBroken] = useState(false)
   const box = thumbSize(image)
@@ -64,7 +64,7 @@ function Thumb({ image, caption, folder, shown, observe, onOpen }: {
   return (
     // Its box is set from the start (the snapshot carries the size), so the feed doesn't jump when
     // the picture arrives; CSS narrows it to the row.
-    <button ref={ref} className={error ? 'fi-thumb failed' : 'fi-thumb'} draggable={false} aria-label={caption}
+    <button ref={ref} className={error ? 'fi-thumb failed' : 'fi-thumb'} draggable={false} aria-label={caption} aria-haspopup="dialog"
       title={error ?? caption} style={{ width: box.width, aspectRatio: `${box.width} / ${box.height}` }}
       onMouseDown={keepFocus} onClick={onOpen}>
       {url && <img src={url} alt="" draggable={false} onError={() => setBroken(true)} />}

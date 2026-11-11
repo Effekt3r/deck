@@ -2,6 +2,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffec
 import type { ClaudeFeedItem } from '@shared/types'
 import { sameItem, toolKind, toolLabel, type ToolKind } from './feedItems'
 import { ImageTiles } from './ImageTiles'
+import { itemImages } from './images'
 import { MarkdownView } from './MarkdownView'
 import { NearView, type Observe } from './useThumbnail'
 
@@ -18,7 +19,7 @@ interface FeedProps {
   /** Thumbnails, or "▣ N images" while they're hidden. */
   showImages: boolean
   /** Counts the panel's showings: a thumbnail that couldn't be shown asks again at the next. */
-  shown: number
+  showings: number
   /** Opens the viewer on image `<row key>:<index>`. */
   onOpenImage(key: string): void
 }
@@ -30,7 +31,7 @@ interface FeedContextValue {
   pause(): void
   folder: string
   showImages: boolean
-  shown: number
+  showings: number
   openImage(key: string): void
   observe: Observe
 }
@@ -39,7 +40,7 @@ const FeedContext = createContext<FeedContextValue>({
   pause: () => {},
   folder: '',
   showImages: true,
-  shown: 0,
+  showings: 0,
   openImage: () => {},
   observe: () => () => {},
 })
@@ -50,7 +51,7 @@ const FeedContext = createContext<FeedContextValue>({
  *  and only re-render when their content changed, so a streaming turn stays smooth; and
  *  while paused, the browser's scroll anchoring keeps the rows in view in place when a
  *  row above changes (a tool done) or old ones drop off the top. */
-export function Feed({ items, keys, showThinking, live, folder, showImages, shown, onOpenImage }: FeedProps) {
+export function Feed({ items, keys, showThinking, live, folder, showImages, showings, onOpenImage }: FeedProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
 
@@ -93,8 +94,8 @@ export function Feed({ items, keys, showThinking, live, folder, showImages, show
     nearRef.current?.dispose()
     nearRef.current = null
   }, [])
-  const context = useMemo(() => ({ pause, folder, showImages, shown, openImage: onOpenImage, observe }),
-    [pause, folder, showImages, shown, onOpenImage, observe])
+  const context = useMemo(() => ({ pause, folder, showImages, showings, openImage: onOpenImage, observe }),
+    [pause, folder, showImages, showings, onOpenImage, observe])
 
   // After every change: at the end while following.
   useLayoutEffect(() => {
@@ -203,7 +204,7 @@ const Row = memo(function Row({ item, rowKey }: { item: ClaudeFeedItem; rowKey: 
       return (
         <div className={item.text.startsWith('! ') ? 'fi-prompt shell' : 'fi-prompt'}>
           {/* A prompt that is only images shows just them, not "[image]". */}
-          {!(item.text === '[image]' && item.images?.length) && <Clamp lines={8}>{item.text}</Clamp>}
+          {!(item.text === '[image]' && itemImages(item).length > 0) && <Clamp lines={8}>{item.text}</Clamp>}
           <Images item={item} rowKey={rowKey} />
         </div>
       )
@@ -237,8 +238,8 @@ const Row = memo(function Row({ item, rowKey }: { item: ClaudeFeedItem; rowKey: 
 
 /** The item's thumbnails, with the feed's folder, switch and viewer. */
 function Images({ item, rowKey }: { item: Extract<ClaudeFeedItem, { kind: 'prompt' | 'tool' }>; rowKey: number }) {
-  const { folder, showImages, shown, openImage, observe } = useContext(FeedContext)
-  return <ImageTiles item={item} rowKey={rowKey} folder={folder} show={showImages} shown={shown} onOpen={openImage} observe={observe} />
+  const { folder, showImages, showings, openImage, observe } = useContext(FeedContext)
+  return <ImageTiles item={item} rowKey={rowKey} folder={folder} show={showImages} showings={showings} onOpen={openImage} observe={observe} />
 }
 
 function Tool({ item, rowKey }: { item: Extract<ClaudeFeedItem, { kind: 'tool' }>; rowKey: number }) {

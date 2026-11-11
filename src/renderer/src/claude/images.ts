@@ -98,6 +98,26 @@ export function stepImage(list: readonly FeedImage[], key: string, delta: -1 | 1
   return list[at + delta] ?? null
 }
 
+/** A click closes the viewer only when it's a single click that both started and ended on the
+ *  backdrop: a double-click on a thumbnail opens the viewer under its first click, and its second lands
+ *  on the backdrop; a drag from the caption or the image ends there. */
+export function backdropCloses(click: { detail: number; pressedOnBackdrop: boolean; onBackdrop: boolean }): boolean {
+  return click.detail <= 1 && click.pressedOnBackdrop && click.onBackdrop
+}
+
+/** Where the keyboard went when it left one of the viewer's elements: still inside it, somewhere else
+ *  in Deck (the terminal's search, another tab), or nowhere (another app took it, or the button it was
+ *  on became disabled). */
+export type KeyboardMove = 'inside' | 'outside' | 'nowhere'
+
+/** What the viewer does about it. 'close', leaving the keyboard where it went: the viewer never stays
+ *  up without it, or the next Esc would reach the terminal (Claude's interrupt). 'take' it back: a
+ *  button that went disabled dropped it to <body>, out of reach of Esc and the arrows. Else 'stay'. */
+export function viewerBlur(move: KeyboardMove, fromDisabledButton: boolean): 'close' | 'take' | 'stay' {
+  if (move === 'outside') return 'close'
+  return move === 'nowhere' && fromDisabledButton ? 'take' : 'stay'
+}
+
 /** An answer from main, checked: a data: URL of an image, or a reason. Any `url` must be an image's
  *  data: URL, even beside a reason, since the cache keeps whatever URL an answer has. */
 export function isImageData(x: unknown): x is ClaudeImageData {

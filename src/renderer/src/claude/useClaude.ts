@@ -13,14 +13,14 @@ export interface ClaudeFeedState {
   error: string | null
   /** Counts the subscribe's answers: each is the panel shown again (its tab came to the front, another
    *  folder, a retry), when thumbnails that couldn't be shown ask again. */
-  shown: number
+  showings: number
 }
 
 /** Follows Claude's session for `folder` while `enabled` (the tab is shown and its panel
  *  isn't hidden): `resume`, the session the tab showed before, or the newest (null). The
  *  last snapshot stays meanwhile. */
 export function useClaudeSession(folder: string, enabled: boolean, resume: ClaudeResume | null): ClaudeFeedState & { retry(): void } {
-  const [state, setState] = useState<ClaudeFeedState>({ folder, snapshot: null, phase: 'loading', error: null, shown: 0 })
+  const [state, setState] = useState<ClaudeFeedState>({ folder, snapshot: null, phase: 'loading', error: null, showings: 0 })
   const [attempt, setAttempt] = useState(0)
   // Read when subscribing, never a reason to: it changes with the sessions the panel shows.
   const resumeRef = useRef(resume)
@@ -37,7 +37,7 @@ export function useClaudeSession(folder: string, enabled: boolean, resume: Claud
     // showed its own session.
     let answered = false
     const accept = (snapshot: unknown, answer: boolean) =>
-      setState((s) => ({ folder, snapshot: usable(snapshot), phase: 'ready', error: null, shown: s.shown + (answer ? 1 : 0) }))
+      setState((s) => ({ folder, snapshot: usable(snapshot), phase: 'ready', error: null, showings: s.showings + (answer ? 1 : 0) }))
     const off = claude.onUpdate((f, snapshot) => {
       if (live && answered && f === folder) accept(snapshot, false)
     })
@@ -51,7 +51,7 @@ export function useClaudeSession(folder: string, enabled: boolean, resume: Claud
       (err: unknown) => {
         if (!live) return
         answered = true // updates may still follow
-        setState((s) => ({ folder, snapshot: s.folder === folder ? s.snapshot : null, phase: 'error', error: errorText(err), shown: s.shown + 1 }))
+        setState((s) => ({ folder, snapshot: s.folder === folder ? s.snapshot : null, phase: 'error', error: errorText(err), showings: s.showings + 1 }))
       },
     )
     return () => {

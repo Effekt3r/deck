@@ -45,42 +45,42 @@ export class NearView {
   }
 }
 
-/** A tile's answer, and the panel's showing it was asked in (`shown`, ClaudePanel's count). */
+/** A tile's answer, and the panel's showings when it was asked for (ClaudePanel's count). */
 export interface TileAnswer {
   data: ClaudeImageData
-  shown: number
+  showings: number
 }
 
 /** What a tile shows: its thumbnail, or why there's none, which lasts until the panel is shown again
  *  (an image whose line moved is found once the panel has read its log again); null while it waits to
  *  ask, so it asks (again) once it's near view. */
-export function tileData(got: TileAnswer | null, shown: number): ClaudeImageData | null {
-  return got && ('url' in got.data || got.shown === shown) ? got.data : null
+export function tileData(got: TileAnswer | null, showings: number): ClaudeImageData | null {
+  return got && ('url' in got.data || got.showings === showings) ? got.data : null
 }
 
 /** Image `id`'s thumbnail: from the cache, else asked for from `folder`'s session once its box (the
- *  ref) comes near view. null until then. `shown` counts the panel's showings: an error from an
+ *  ref) comes near view. null until then. `showings` counts the panel's showings: an error from an
  *  earlier one is asked for again. */
-export function useThumbnail(folder: string, id: string, observe: Observe, shown: number): { ref: (el: HTMLElement | null) => void; data: ClaudeImageData | null } {
+export function useThumbnail(folder: string, id: string, observe: Observe, showings: number): { ref: (el: HTMLElement | null) => void; data: ClaudeImageData | null } {
   const [got, setGot] = useState<TileAnswer | null>(() => {
     const url = thumbs.peek(id)
-    return url === undefined ? null : { data: { url }, shown }
+    return url === undefined ? null : { data: { url }, showings }
   })
   const [el, setEl] = useState<HTMLElement | null>(null)
-  const data = tileData(got, shown)
+  const data = tileData(got, showings)
   const waiting = data === null
   useEffect(() => {
     if (!el || !waiting) return
     let live = true
     const stop = observe(el, () => {
       void thumbs.get(id, () => window.deck.claude.image(folder, id, 'thumb')).then((answer) => {
-        if (live) setGot({ data: answer, shown })
+        if (live) setGot({ data: answer, showings })
       })
     })
     return () => {
       live = false
       stop()
     }
-  }, [el, folder, id, observe, waiting, shown])
+  }, [el, folder, id, observe, waiting, showings])
   return { ref: setEl, data }
 }
