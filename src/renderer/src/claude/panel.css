@@ -539,6 +539,64 @@
 .cpm-error { padding: 6px 10px 4px; color: var(--red); font-size: 11.5px; overflow-wrap: anywhere; }
 .cp-menu[aria-busy='true'] .cpm-list { opacity: 0.55; pointer-events: none; }
 
+/* ------------------------------------------------------------ image viewer */
+
+/* Over the window below the tab bar (ImageViewer sets `top`), on a dark backdrop. */
+.iv {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  background: rgb(5 6 16 / 0.92);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  user-select: none;
+}
+.iv-stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; }
+/* The image's box, over a checkerboard so transparent parts can be seen. */
+.iv-frame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background-color: #23264a;
+  background-image: conic-gradient(#30345e 25%, transparent 0 50%, #30345e 0 75%, transparent 0);
+  background-size: 16px 16px;
+  box-shadow: 0 12px 44px rgb(0 0 0 / 0.55);
+}
+.iv-frame img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
+.iv-frame.auto img { position: static; width: auto; height: auto; }
+.iv-frame.auto:has(.iv-error) { min-width: 240px; min-height: 160px; }
+.iv-error { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 100%; padding: 16px; color: var(--muted); text-align: center; }
+.iv-step {
+  position: absolute;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  margin-top: -17px;
+  display: grid;
+  place-items: center;
+  padding: 0 0 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: rgb(18 20 42 / 0.85);
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+}
+.iv-step.prev { left: 12px; }
+.iv-step.next { right: 12px; }
+.iv-step:hover:not(:disabled) { background: var(--tab-active); color: var(--ink); }
+.iv-step:disabled { opacity: 0.25; }
+.iv-bar { flex: none; display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 10px 0 16px; border-top: 1px solid var(--line); background: var(--chrome); }
+.iv-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); user-select: text; }
+.iv-count { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.iv-open-error { flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--red); }
+.iv-bar .button { height: 26px; }
+
 @media (prefers-reduced-motion: reduce) {
   .cp-glyph.spin::before, .cp-agent.running .cp-mark::before { animation: none; }
   .feed.live .fi-tool.running .fi-live { animation: none; }
