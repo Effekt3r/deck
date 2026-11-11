@@ -79,6 +79,19 @@ describe('imageRef', () => {
     expect(imageRef(imageBlock(jpegBytes(1600, 1200, { app1Bytes: 120_000 }), 'image/jpeg'))).toMatchObject({ format: 'jpeg', width: 0, height: 0 })
   })
 
+  it('a GIF with a global colour table whose first frame overhangs the screen lists the grown size', () => {
+    const header = Buffer.from(gifBytes(100, 50).subarray(0, 13)) // a copy: it's mutated next
+    header[10] = 0x80 | 7 // a global colour table follows: 256 entries, 768 bytes
+    const globalColourTable = Buffer.alloc(3 * 256)
+    const graphicControlExtension = Buffer.from([0x21, 0xf9, 4, 0, 0, 0, 0, 0])
+    const imageDescriptor = Buffer.alloc(9)
+    imageDescriptor[0] = 0x2c
+    imageDescriptor.writeUInt16LE(300, 5) // width
+    imageDescriptor.writeUInt16LE(200, 7) // height
+    const gif = Buffer.concat([header, globalColourTable, graphicControlExtension, imageDescriptor])
+    expect(imageRef(imageBlock(gif))).toMatchObject({ format: 'gif', width: 300, height: 200 })
+  })
+
   it('skips URL and file sources, empty data, text over 16 MiB, other formats and non-blocks', () => {
     const png = b64(pngBytes(2, 2))
     for (const bad of [

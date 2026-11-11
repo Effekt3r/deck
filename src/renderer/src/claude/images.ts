@@ -1,3 +1,4 @@
+import { fitInto } from '@shared/claude-images'
 import type { ClaudeFeedItem, ClaudeImage, ClaudeImageData } from '@shared/types'
 
 export interface Size {
@@ -9,13 +10,13 @@ export interface Size {
 export type ImageItem = Extract<ClaudeFeedItem, { kind: 'prompt' | 'tool' }>
 
 /** Thumbnails fit this box (main makes them at twice it, for Retina screens)… */
-export const THUMB_BOX: Size = { width: 240, height: 180 }
+const THUMB_BOX: Size = { width: 240, height: 180 }
 /** …and an image whose header gave no size gets a square this big. */
 const UNKNOWN_SIDE = 120
 /** The viewer leaves this much around its image. */
 export const VIEWER_MARGIN = 24
 /** Thumbnails kept, by the length of their data: URLs: about 1,000 of the sizes measured. */
-export const THUMB_CACHE_CHARS = 24 * 1024 * 1024
+const THUMB_CACHE_CHARS = 24 * 1024 * 1024
 /** The renderer's own reason: the request failed, or main's answer wasn't image data. Main's reasons
  *  are in @shared/claude-images. */
 export const COULD_NOT_LOAD = "Couldn't load this image"
@@ -33,17 +34,11 @@ export function imageCount(item: ClaudeFeedItem): number {
   return itemImages(item).length + (typeof item.moreImages === 'number' && item.moreImages > 0 ? item.moreImages : 0)
 }
 
-/** `size` fitted into `box` and never enlarged, in whole pixels. */
-function fit(size: Size, box: Size): Size {
-  const scale = Math.min(1, box.width / size.width, box.height / size.height)
-  return { width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }
-}
-
 /** A thumbnail's box: the image fitted into 240×180, never enlarged (a 32 px icon stays 32 px); a
  *  square when its header gave no size. CSS narrows it further to the row's width. */
 export function thumbSize(image: Size): Size {
   if (!(image.width > 0) || !(image.height > 0)) return { width: UNKNOWN_SIDE, height: UNKNOWN_SIDE }
-  return fit(image, THUMB_BOX)
+  return fitInto(image, THUMB_BOX)
 }
 
 /** The viewer's image: as large as `area` allows with 24 px around it, at no more than one image
@@ -51,7 +46,7 @@ export function thumbSize(image: Size): Size {
 export function viewerSize(image: Size, area: Size): Size | null {
   if (!(image.width > 0) || !(image.height > 0)) return null
   const room = { width: Math.max(1, area.width - 2 * VIEWER_MARGIN), height: Math.max(1, area.height - 2 * VIEWER_MARGIN) }
-  return fit(image, room)
+  return fitInto(image, room)
 }
 
 /** 512 B, 212 KB, 2.4 MB (powers of 1,000, as Finder counts). */

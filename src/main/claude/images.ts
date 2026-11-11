@@ -7,8 +7,14 @@ import { isRecord } from './describe'
 export const MAX_BASE64 = 16 * 1024 * 1024
 /** A JPEG's size marker is looked for in its first 96 KiB: every one measured was within 39 KB. */
 const JPEG_HEAD = 96 * 1024
-/** Base64 characters decoded to tell the format and read a PNG, GIF or WebP header: 96 bytes. */
+/** A GIF's first image descriptor is looked for in its first 4 KiB: enough for a 768-byte (256-colour)
+ *  global colour table and the usual extensions ahead of it. If the descriptor still isn't within that
+ *  much, gifSize's screen size stands, the same as when a GIF's bytes simply run out first. */
+const GIF_HEAD = 4 * 1024
+/** Base64 characters decoded to tell the format and read a PNG or WebP header: 96 bytes. */
 const HEAD_CHARS = 128
+/** Base64 characters that decode to at least `bytes` bytes (base64 expands 3 bytes to 4 characters). */
+const headChars = (bytes: number) => Math.ceil(bytes / 3) * 4
 
 /** The files Open writes, by format. */
 export const IMAGE_EXT: Record<ClaudeImageFormat, 'png' | 'jpg' | 'gif' | 'webp'> = { png: 'png', jpeg: 'jpg', gif: 'gif', webp: 'webp' }
@@ -188,7 +194,8 @@ export function imageRef(block: unknown, paste?: number): ClaudeImage | null {
   const head = Buffer.from(data.slice(0, HEAD_CHARS), 'base64')
   const format = sniffFormat(head)
   if (!format) return null
-  const size = imageSize(format, format === 'jpeg' ? Buffer.from(data.slice(0, (JPEG_HEAD / 3) * 4), 'base64') : head)
+  const bigHead = format === 'jpeg' ? JPEG_HEAD : format === 'gif' ? GIF_HEAD : null
+  const size = imageSize(format, bigHead ? Buffer.from(data.slice(0, headChars(bigHead)), 'base64') : head)
   return {
     id: imageId(data), format, width: size.width, height: size.height, bytes: Buffer.byteLength(data, 'base64'),
     ...(paste ? { paste } : {}),

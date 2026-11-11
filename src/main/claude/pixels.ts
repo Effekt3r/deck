@@ -1,6 +1,6 @@
 import { open } from 'node:fs/promises'
 import { nativeImage } from 'electron'
-import { GONE, NO_PREVIEW, TOO_LARGE, UNDECODABLE, UNREADABLE } from '@shared/claude-images'
+import { fitInto, GONE, NO_PREVIEW, TOO_LARGE, UNDECODABLE, UNREADABLE } from '@shared/claude-images'
 import type { ClaudeImageData, ClaudeImageFormat } from '@shared/types'
 import { findImageData, imageSize, type ImageSize, jpegOrientation, sniffFormat } from './images'
 
@@ -46,12 +46,6 @@ const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve))
 const dataUrl = (format: ClaudeImageFormat, bytes: Uint8Array) =>
   `data:image/${format};base64,${Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64')}`
 const tooLarge = (size: ImageSize) => size.width > MAX_SIDE || size.height > MAX_SIDE || size.width * size.height > MAX_PIXELS
-
-/** `size` fitted into `box`, never enlarged. */
-export function fitInto(size: ImageSize, box: ImageSize): ImageSize {
-  const scale = Math.min(1, box.width / size.width, box.height / size.height)
-  return { width: Math.max(1, Math.round(size.width * scale)), height: Math.max(1, Math.round(size.height * scale)) }
-}
 
 /** The line's bytes, read again: fewer when the file has shrunk since. */
 async function readLine(source: ImageSource): Promise<Buffer> {

@@ -191,9 +191,10 @@ Things that aren't obvious from the code:
       14 s (4.9% of a core) and 693 ms for 119 over 25 s (2.8%); the renderer at 158–169 MB with
       128–247 thumbnails loaded.
     - **Known limits:** the size guard lets a 20–40 MP PNG be decoded for its thumbnail on main's
-      thread, an estimated 100–300 ms stall (the largest in the logs was 3.4 MP); a hung read holds the
-      queue for its 15 s; 24 MiB is the cache's limit, not the renderer's: mounted tiles (inactive tabs
-      stay mounted) keep the thumbnails they show after the cache has dropped them.
+      thread, an estimated 100–300 ms stall (the largest in the logs was 3.4 MP); if the volume stays
+      hung, every queued request takes its own 15 s (N thumbnails, N × 15 s), each holding a file handle
+      until the volume answers; 24 MiB is the cache's limit, not the renderer's: mounted tiles (inactive
+      tabs stay mounted) keep the thumbnails they show after the cache has dropped them.
     - **Checked in the app** (2026-11-11, macOS, the crafted log, trusted input over CDP and
       `shell.openPath` swapped in main): the boxes and no jump; the viewer's keys, backdrop,
       double-click and drags, and where the keyboard goes back; Find closing it with no key reaching

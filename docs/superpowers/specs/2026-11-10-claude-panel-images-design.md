@@ -160,9 +160,9 @@ A click on a thumbnail opens it large, inside Deck.
 - **Moving:** ← and →, or the ‹ › buttons at the sides, step through the feed's images, oldest to
   newest.
 - **Open:**
-  - opens a copy in the default image app (Preview on most Macs, Photos on Windows), for zooming,
-    markup or copying;
-  - the copy goes in Deck's temp image folder and is removed when Deck quits;
+  - opens a copy in the default image app (Preview on most Macs, Photos on Windows), for zooming
+    or copying;
+  - the copy is temporary: it goes in Deck's temp image folder and is removed when Deck quits;
   - if it fails, the caption line says why.
 - **Closing:**
   - Esc, ×, or a single click that started and ended on the backdrop: a double-click on a thumbnail
@@ -530,8 +530,9 @@ One plan and one pull request, in this order, each step tested before the next:
     out;
   - the size guard still lets a 20–40 MP PNG be decoded for its thumbnail, on main's thread: an
     estimated 100–300 ms stall for every terminal (the largest here was 3.4 MP).
-- **A read that hangs** (a network volume) holds the queue: every image asked for behind it waits up to
-  its 15 s, then it says "Couldn't read the session log".
+- **A read that hangs** (a network volume): if it stays hung, every request queued behind it takes its
+  own 15 s in turn (N thumbnails, N × 15 s) before it says "Couldn't read the session log", each holding
+  a file handle open until the volume answers.
 - **The renderer's memory:** 24 MB is the cache's limit, not the renderer's. A mounted thumbnail keeps
   the URL it shows after the cache has dropped it, and inactive tabs stay mounted.
 - **A rewritten log:** an image whose line moved shows "No longer in the session log" until the panel

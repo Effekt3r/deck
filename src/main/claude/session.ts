@@ -6,7 +6,7 @@ import type { LinePlace } from './tail'
 /** Feed items kept (oldest dropped), as the prototype's MAX_EVENTS. */
 export const MAX_FEED = 600
 /** Images listed per item; more are only counted (3 was the most seen in one item). */
-export const MAX_IMAGES = 10
+const MAX_IMAGES = 10
 // Longest text kept per item. The snapshot cuts shorter (prompts 2,000, replies 8,000), so this only
 // bounds memory, and only because what is kept is copied (own()): a cut string would keep its whole
 // original alive. 600 items of at most 10,000 characters.
@@ -29,7 +29,7 @@ export interface AgentInfo {
 
 /** Where a listed image's line is in the log, and the size it was listed with (ClaudeImage.bytes):
  *  what finds it in that line again (findImageData compares the size before hashing a candidate). */
-export interface ImagePlace extends LinePlace {
+interface ImagePlace extends LinePlace {
   bytes: number
 }
 

@@ -171,7 +171,7 @@ export function ImageViewer({ folder, list, entry, onStep, onClose, onLeave }: I
         <span className="iv-caption" id={captionId} title={entry.caption}>{entry.caption}</span>
         {list.length > 1 && at >= 0 && <span className="iv-count">{at + 1} of {list.length}</span>}
         {open?.error && <span className="iv-open-error" role="alert" title={open.error}>{open.error}</span>}
-        <button className="button iv-open" disabled={open?.busy === true} title="Open a copy in your image app" onClick={openCopy}>
+        <button className="button iv-open" disabled={open?.busy === true} title="Open a temporary copy in your image app" onClick={openCopy}>
           Open
         </button>
         <button className="icon-button" aria-label="Close" title="Close (Esc)" onClick={onClose}>
