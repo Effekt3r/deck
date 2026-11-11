@@ -97,10 +97,13 @@ export function Feed({ items, keys, showThinking, live, folder, showImages, show
   const context = useMemo(() => ({ pause, folder, showImages, showings, openImage: onOpenImage, observe }),
     [pause, folder, showImages, showings, onOpenImage, observe])
 
-  // After every change: at the end while following.
+  // After every change: at the end while following. Showing thinking or images changes many rows'
+  // heights at once, and scroll anchoring may keep a row above the end in place: its scroll event can
+  // come before the ResizeObserver below and pause the feed (seen with images, on the first switch
+  // after a start), so the view goes to the end here, before either.
   useLayoutEffect(() => {
     if (following.current) toEnd()
-  }, [items, showThinking, toEnd])
+  }, [items, showThinking, showImages, toEnd])
 
   useEffect(() => {
     const el = scrollRef.current
