@@ -1,8 +1,10 @@
+import { readFileSync } from 'node:fs'
 import { join, resolve, sep } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import type { ClaudeFeedItem } from '@shared/types'
+import type { ClaudeFeedItem, ClaudeImage } from '@shared/types'
+import { imageId } from './images'
 import { SessionState } from './session'
-import { type LogWriter, makeClaudeHome, readEntries, removeClaudeHomes, sessionLog } from './test-log'
+import { imageBlock, jpegBytes, type LogWriter, makeClaudeHome, pngBytes, readEntries, readLines, removeClaudeHomes, sessionLog } from './test-log'
 
 const FOLDER = resolve(sep, 'Users', 'me', 'app')
 let home = ''
@@ -440,6 +442,190 @@ describe('SessionState: titles and to-dos', () => {
     expect(s.todos()).toEqual([
       { status: 'pending', text: 'First' },
       { status: 'in_progress', text: 'Second' },
+    ])
+  })
+})
+
+/** Parses the log with each line's place, as the app's tail gives them. */
+function parsePlaced(log: LogWriter, maxFeed?: number): SessionState {
+  const s = new SessionState(FOLDER, FOLDER, maxFeed)
+  for (const line of readLines(log.path)) s.ingest(line.entry, { offset: line.offset, length: line.length })
+  return s
+}
+const id = (bytes: Uint8Array) => imageId(Buffer.from(bytes).toString('base64'))
+const ref = (bytes: Uint8Array, width: number, height: number, paste?: number): ClaudeImage =>
+  ({ id: id(bytes), format: 'png', width, height, bytes: bytes.length, ...(paste ? { paste } : {}) })
+const imagesOn = (item: ClaudeFeedItem | undefined) => (item && 'images' in item ? item.images : undefined)
+
+describe('SessionState: images', () => {
+  const a = pngBytes(64, 48)
+  const b = pngBytes(32, 32)
+
+  it('a prompt with text and two pasted images: the images, numbered by imagePasteIds, in paste order', () => {
+    const s = parsePlaced(newLog().prompt('what are these?', { images: [a, b], pasteIds: [3, 4] }))
+    expect(s.feed).toEqual([{ kind: 'prompt', text: 'what are these?', images: [ref(a, 64, 48, 3), ref(b, 32, 32, 4)] }])
+  })
+
+  it('an image-only prompt is "[image]" with its images; without imagePasteIds they have no number', () => {
+    const s = parsePlaced(newLog().prompt('', { images: [a] }))
+    expect(s.feed).toEqual([{ kind: 'prompt', text: '[image]', images: [ref(a, 64, 48)] }])
+    expect(s.firstPrompt).toBe('')
+  })
+
+  it('a prompt typed while Claude worked: its images and the numbers in its attachment', () => {
+    const s = parsePlaced(newLog().prompt('go').queuedBlocks([{ type: 'text', text: 'and this' }, imageBlock(a)], { pasteIds: [2] })
+      .queuedBlocks([imageBlock(b)]))
+    expect(s.feed.slice(1)).toEqual([
+      { kind: 'prompt', text: 'and this', images: [ref(a, 64, 48, 2)] },
+      { kind: 'prompt', text: '[image]', images: [ref(b, 32, 32)] },
+    ])
+  })
+
+  it("a Read result, an MCP result with text and an image, and an error result with an image go on their tool's item", () => {
+    const jpeg = jpegBytes(923, 2000)
+    const s = parsePlaced(newLog().prompt('go')
+      .readImage('t1', join(FOLDER, 'docs', 'shot.png'), a)
+      .toolUse('t2', 'mcp__claude-in-chrome__computer', { action: 'screenshot' })
+      .toolResult('t2', { content: [{ type: 'text', text: 'Took a screenshot' }, imageBlock(jpeg, 'image/jpeg')] })
+      .toolUse('t3', 'mcp__browser__shot', { url: 'https://example.com' })
+      .toolResult('t3', { isError: true, content: [{ type: 'text', text: 'Page crashed' }, imageBlock(b)] }))
+    expect(s.feed.slice(1)).toEqual([
+      { kind: 'tool', id: 't1', name: 'Read', summary: join('docs', 'shot.png'), state: 'done', images: [ref(a, 64, 48)] },
+      {
+        kind: 'tool', id: 't2', name: 'claude-in-chrome:computer', summary: '', state: 'done',
+        images: [{ id: id(jpeg), format: 'jpeg', width: 923, height: 2000, bytes: jpeg.length }],
+      },
+      { kind: 'tool', id: 't3', name: 'browser:shot', summary: 'https://example.com', state: 'error', error: 'Page crashed', images: [ref(b, 32, 32)] },
+    ])
+  })
+
+  it("Read's toolUseResult, which repeats the image, isn't read", () => {
+    const s = parsePlaced(newLog().toolUse('t1', 'Read', { file_path: join(FOLDER, 'a.png') })
+      .toolResult('t1', { content: [imageBlock(a)], toolUseResult: { type: 'image', file: { base64: Buffer.from(b).toString('base64') } } }))
+    expect(imagesOn(s.feed[0])).toEqual([ref(a, 64, 48)])
+  })
+
+  it("an image pasted into an answer (AskUserQuestion) goes on the question's item, with no [image] prompt", () => {
+    const s = parsePlaced(newLog().prompt('go')
+      .toolUse('t1', 'AskUserQuestion', { questions: [{ question: 'Which layout?' }] })
+      .userBlocks([{ type: 'tool_result', tool_use_id: 't1', content: 'User answered: like this' }, imageBlock(a)], { imagePasteIds: [1] }))
+    expect(s.feed).toEqual([
+      { kind: 'prompt', text: 'go' },
+      { kind: 'tool', id: 't1', name: 'AskUserQuestion', summary: 'Which layout?', state: 'done', images: [ref(a, 64, 48, 1)] },
+    ])
+  })
+
+  it('a result for an item that has left the feed adds nothing', () => {
+    const log = newLog().toolUse('t1', 'Read', { file_path: join(FOLDER, 'a.png') })
+    for (let i = 0; i < 4; i++) log.reply(`r${i}`, { stopReason: 'tool_use' })
+    log.toolResult('t1', { content: [imageBlock(a)] })
+    const s = parsePlaced(log, 2)
+    expect(s.feed.some((item) => 'images' in item)).toBe(false)
+    expect(s.imagePlace(id(a))).toBeNull()
+  })
+
+  it('12 images in one item: 10 listed, 2 more counted', () => {
+    const many = Array.from({ length: 12 }, (_, i) => pngBytes(10 + i, 10))
+    const [item] = parsePlaced(newLog().prompt('all of them', { images: many })).feed
+    expect(item).toMatchObject({ kind: 'prompt', moreImages: 2 })
+    expect(imagesOn(item)?.map((im) => im.width)).toEqual([10, 11, 12, 13, 14, 15, 16, 17, 18, 19])
+  })
+
+  it("images from other origins, meta entries, the compact summary and sub-agents' lines aren't listed", () => {
+    const s = parsePlaced(newLog()
+      .prompt('from a peer', { origin: 'peer', images: [a] })
+      .prompt('skill text', { isMeta: true, images: [a] })
+      .userBlocks([{ type: 'text', text: 'summary' }, imageBlock(a)], { isCompactSummary: true })
+      .raw({ type: 'user', isSidechain: true, sessionId: 's', message: { role: 'user', content: [imageBlock(a)] } })
+      .prompt('mine', { images: [b] }))
+    expect(s.feed).toEqual([{ kind: 'prompt', text: 'mine', images: [ref(b, 32, 32)] }])
+  })
+
+  it('a slash command with an image drops it; skipped sources still make "[image]"', () => {
+    const s = parsePlaced(newLog()
+      .userBlocks([imageBlock(a), { type: 'text', text: '<command-name>/clear</command-name>' }])
+      .userBlocks([{ type: 'image', source: { type: 'url', url: 'https://example.com/a.png' } }]))
+    expect(s.feed).toEqual([{ kind: 'notice', text: '/clear', tone: 'info' }, { kind: 'prompt', text: '[image]' }])
+  })
+
+  it('the same image twice gets one id', () => {
+    const s = parsePlaced(newLog().prompt('one', { images: [a] }).prompt('again', { images: [pngBytes(64, 48)] }))
+    expect(imagesOn(s.feed[0])?.[0].id).toBe(imagesOn(s.feed[1])?.[0].id)
+  })
+
+  it("imagePlace: the line holding an image and its listed size, found by id; null for an id no item lists, or a place that wasn't given", () => {
+    const log = newLog().prompt('first', { images: [a] }).readImage('t1', join(FOLDER, 'b.png'), b)
+    const s = parsePlaced(log)
+    const bytes = readFileSync(log.path)
+    for (const image of [a, b]) {
+      const place = s.imagePlace(id(image))
+      expect(place).toMatchObject({ bytes: image.length })
+      const line = bytes.toString('utf8', place!.offset, place!.offset + place!.length)
+      expect(line).toContain(Buffer.from(image).toString('base64'))
+    }
+    expect(s.imagePlace('0123456789abcdef')).toBeNull()
+    expect(parse(log).imagePlace(id(a))).toBeNull() // ingested without places
+  })
+
+  it('imagePlace: the place ingest() was given is copied, never kept', () => {
+    const log = newLog().prompt('look', { images: [a] })
+    const [line] = readLines(log.path)
+    const given = { offset: line.offset, length: line.length, entry: line.entry }
+    const s = new SessionState(FOLDER)
+    s.ingest(line.entry, given)
+    given.offset = 999
+    expect(s.imagePlace(id(a))).toEqual({ offset: line.offset, length: line.length, bytes: a.length })
+  })
+
+  it('a place goes with its item when the item leaves the feed', () => {
+    const log = newLog().prompt('old', { images: [a] })
+    const s = new SessionState(FOLDER, FOLDER, 2)
+    const lines = () => readLines(log.path)
+    for (const line of lines()) s.ingest(line.entry, { offset: line.offset, length: line.length })
+    expect(s.imagePlace(id(a))).not.toBeNull()
+    log.reply('x', { stopReason: 'tool_use' }).reply('y', { stopReason: 'tool_use' })
+    for (const line of lines().slice(1)) s.ingest(line.entry, { offset: line.offset, length: line.length })
+    expect(s.imagePlace(id(a))).toBeNull()
+  })
+
+  it('an image beside several tool_results in one entry goes with the last of them', () => {
+    const s = parsePlaced(newLog()
+      .toolUse('t1', 'Bash', { command: 'one' })
+      .toolUse('t2', 'Bash', { command: 'two' })
+      .userBlocks([
+        { type: 'tool_result', tool_use_id: 't1', content: 'first done' },
+        { type: 'tool_result', tool_use_id: 't2', content: 'second done' },
+        imageBlock(a),
+      ]))
+    expect(s.feed).toEqual([
+      { kind: 'tool', id: 't1', name: 'Bash', summary: 'one', state: 'done' },
+      { kind: 'tool', id: 't2', name: 'Bash', summary: 'two', state: 'done', images: [ref(a, 64, 48)] },
+    ])
+  })
+
+  it("an answer's image is dropped once its AskUserQuestion has left the feed: no stray [image] prompt", () => {
+    const log = newLog().toolUse('t1', 'AskUserQuestion', { questions: [{ question: 'Which?' }] })
+    for (let i = 0; i < 4; i++) log.reply(`r${i}`, { stopReason: 'tool_use' })
+    log.userBlocks([{ type: 'tool_result', tool_use_id: 't1', content: 'like this' }, imageBlock(a)], { imagePasteIds: [1] })
+    const s = parsePlaced(log, 2)
+    expect(s.feed).toEqual([{ kind: 'reply', text: 'r2' }, { kind: 'reply', text: 'r3' }])
+  })
+
+  it("a queued prompt with images from another origin (a peer) isn't shown", () => {
+    const s = parsePlaced(newLog().queuedBlocks([{ type: 'text', text: 'from elsewhere' }, imageBlock(a)], { origin: 'peer' }))
+    expect(s.feed).toEqual([])
+  })
+
+  it("an entry with a tool_result, prompt text and an image puts the image on the tool (today's rule, pinned)", () => {
+    const s = parsePlaced(newLog().toolUse('t1', 'Bash', { command: 'ls' })
+      .userBlocks([
+        { type: 'tool_result', tool_use_id: 't1', content: 'ok' },
+        { type: 'text', text: 'here is a screenshot' },
+        imageBlock(a),
+      ]))
+    expect(s.feed).toEqual([
+      { kind: 'tool', id: 't1', name: 'Bash', summary: 'ls', state: 'done', images: [ref(a, 64, 48)] },
+      { kind: 'prompt', text: 'here is a screenshot' },
     ])
   })
 })

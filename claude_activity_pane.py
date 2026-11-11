@@ -94,6 +94,28 @@ def first_line(s, n=200):
     return (s[0] if s else "")[:n]
 
 
+def text_of(x):
+    """A log value that should be text: itself, else "" (the TypeScript parser's str())."""
+    return x if isinstance(x, str) else ""
+
+
+def clean_prompt(text):
+    """<pasted_content …> wrappers removed (the paste itself stays)."""
+    return re.sub(r"</?pasted_content[^>]*>", "", text).strip()
+
+
+def count_images(blocks):
+    """Images among content blocks that Deck's panel shows: base64 sources with data. (Deck also
+    checks that the bytes are PNG, JPEG, GIF or WebP and at most 16 MiB of text; every image in
+    the logs measured was.)"""
+    n = 0
+    for b in blocks:
+        src = b.get("source") if isinstance(b, dict) and b.get("type") == "image" else None
+        if isinstance(src, dict) and src.get("type") == "base64" and text_of(src.get("data")):
+            n += 1
+    return n
+
+
 def describe_tool(name, inp, project):
     """One-line summary of a tool call."""
     inp = inp if isinstance(inp, dict) else {}
@@ -129,7 +151,8 @@ class Session:
         self.path, self.project = path, project
         self.pos = 0
         self.partial = ""
-        self.events = []          # (kind, text) — kind: user/think/text/tool/err/sys
+        self.events = []          # [kind, text, images] — kind: user/think/text/tool/err/sys
+        self.tool_events = {}     # tool_use_id -> its "tool" event, while it's in self.events
         self.pending = {}         # tool_use_id -> (name, summary), until its result arrives
         self.agents = {}          # tool_use_id -> dict(type, desc, id, done, err)
         self.background = set()   # ids of background shell tasks still running
@@ -168,11 +191,22 @@ class Session:
                     self.ingest(json.loads(line))
                 except (ValueError, TypeError, AttributeError):
                     pass
-        del self.events[:-MAX_EVENTS]
+        self.trim()
         return True
 
+    def trim(self):
+        """Keeps the newest MAX_EVENTS events; a result for a tool that left adds nothing."""
+        cut = len(self.events) - MAX_EVENTS
+        if cut <= 0:
+            return
+        gone = {id(ev) for ev in self.events[:cut]}
+        del self.events[:cut]
+        self.tool_events = {k: ev for k, ev in self.tool_events.items() if id(ev) not in gone}
+
     def add(self, kind, text):
-        self.events.append((kind, text))
+        ev = [kind, text, 0]  # the 0 counts the images that came with it
+        self.events.append(ev)
+        return ev
 
     def ingest(self, e):
         t = e.get("type")
@@ -202,18 +236,33 @@ class Session:
         if t == "system":
             self.system(e)
         elif t == "attachment":
-            # Input that arrived while Claude was busy and was taken in mid-turn:
-            # prompts you typed, or notifications that a background task ended.
-            a = e.get("attachment") or {}
-            if a.get("type") == "queued_command" and isinstance(a.get("prompt"), str):
-                if a.get("commandMode") == "task-notification":
-                    self.notification(a["prompt"])
-                elif (a.get("origin") or {}).get("kind", "human") == "human":
-                    self.prompt(a["prompt"])
+            self.attachment(e)
         elif t == "user":
             self.user(e)
         else:
             self.assistant(e)
+
+    def attachment(self, e):
+        """Input that arrived while Claude was busy and was taken in mid-turn: prompts you
+        typed, or notifications that a background task ended."""
+        a = e.get("attachment") or {}
+        p = a.get("prompt")
+        if a.get("type") != "queued_command":
+            return
+        if a.get("commandMode") == "task-notification":
+            if isinstance(p, str):
+                self.notification(p)
+        elif (a.get("origin") or {}).get("kind", "human") == "human":
+            if isinstance(p, str):
+                self.prompt(clean_prompt(p))
+            elif isinstance(p, list):
+                # A prompt with a pasted image comes as content blocks.
+                blocks = [b for b in p if isinstance(b, dict)]
+                text = "\n".join(text_of(b.get("text")) for b in blocks if b.get("type") == "text")
+                has_image = any(b.get("type") == "image" for b in blocks)
+                ev = self.prompt(clean_prompt(text) or ("[image]" if has_image else ""))
+                if ev and has_image:
+                    ev[2] += count_images(blocks)
 
     def system(self, e):
         st = e.get("subtype")
@@ -232,11 +281,13 @@ class Session:
         # origin.kind: human (absent in older logs), task-notification, peer, auto-continuation, …
         human = (e.get("origin") or {}).get("kind", "human") == "human" and not e.get("isMeta")
         texts, images = [], 0
+        answered = None  # the last tool_result's id: an image beside it was pasted into that answer
         for b in blocks:
             if not isinstance(b, dict):
                 continue
             if b.get("type") == "tool_result":
                 self.result(b, e.get("toolUseResult"))
+                answered = text_of(b.get("tool_use_id"))
             elif b.get("type") == "text":
                 text = b.get("text") or ""
                 if "<task-notification>" in text[:40]:
@@ -245,31 +296,44 @@ class Session:
                     texts.append(text)
             elif b.get("type") == "image" and human:
                 images += 1
+        last = None
         for text in texts:
-            self.user_text(text, legacy=e.get("origin") is None)
-        if images and not texts:
-            self.prompt("[image]")
+            last = self.user_text(text, legacy=e.get("origin") is None) or last
+        if not images:
+            return
+        if answered is not None:
+            # Pasted into an answer (AskUserQuestion): the images go with that tool call.
+            target = self.tool_events.get(answered)
+        else:
+            # With the last prompt the entry added; no text: an "[image]" prompt.
+            target = last if texts else self.prompt("[image]")
+        if target:
+            target[2] += count_images(blocks)
 
     def user_text(self, text, legacy):
+        """Returns the prompt event the text added, if it added one."""
         text = text.strip()
         if not text or text.startswith(NOT_PROMPTS):
-            return
+            return None
         if text.startswith("<command-name>"):
             self.add("sys", tag(text, "command-name") or text[:60])
         elif text.startswith("<bash-input>"):
-            self.add("user", "! " + tag(text, "bash-input"))
+            return self.add("user", "! " + tag(text, "bash-input"))
         elif text.startswith("[Request interrupted"):
             self.add("err", "✗ interrupted")
             self.end_turn()
         elif legacy and text.startswith("<") and ">" in text[:40] and not text.startswith("<pasted"):
-            return  # older logs: hook output and reminders arrived as user text
+            return None  # older logs: hook output and reminders arrived as user text
         else:
-            self.prompt(re.sub(r"</?pasted_content[^>]*>", "", text).strip())
+            return self.prompt(clean_prompt(text))
+        return None
 
     def prompt(self, text):
         if text:
-            self.add("user", text)
+            ev = self.add("user", text)
             self.in_turn, self.error = True, ""
+            return ev
+        return None
 
     def end_turn(self):
         self.in_turn = False
@@ -293,6 +357,11 @@ class Session:
             if isinstance(txt, list):
                 txt = " ".join(x.get("text", "") for x in txt if isinstance(x, dict))
             self.add("err", f"✗ {name}: {first_line(str(txt), 300)}")
+        # What the result held (an image file Claude read, a screenshot, an MCP tool's images)
+        # goes with its tool call, error or not.
+        ev = self.tool_events.get(text_of(tid))
+        if ev and isinstance(b.get("content"), list):
+            ev[2] += count_images(b["content"])
 
     def notification(self, text):
         """<task-notification>: a background agent or shell command finished."""
@@ -335,7 +404,7 @@ class Session:
                 name, inp = b.get("name", "?"), b.get("input") or {}
                 summ = describe_tool(name, inp, self.project)
                 self.pending[b.get("id")] = (name, summ)
-                self.add("tool", (name, summ))
+                self.tool_events[text_of(b.get("id"))] = self.add("tool", (name, summ))
                 if name in AGENT_TOOLS:
                     self.agents[b.get("id")] = {
                         "type": inp.get("subagent_type") or "agent",
@@ -431,12 +500,18 @@ TOOL_COLOR = {"Bash": yellow, "Edit": green, "Write": green, "MultiEdit": green,
               "Read": blue, "Grep": blue, "Glob": blue, "Task": magenta, "Agent": magenta}
 
 
+def images_line(n):
+    return dim(f"  ▣ {n} image{'s' * (n != 1)}")
+
+
 def feed_lines(sess, width, show_thinking):
     out = []
-    for kind, val in sess.events:
+    for kind, val, images in sess.events:
         if kind == "user":
             out.append("")
             out += [bold(cyan(l)) for l in wrap(val, width, "› ")[:6]]
+            if images:
+                out.append(images_line(images))
         elif kind == "think":
             if not show_thinking:
                 continue
@@ -459,6 +534,8 @@ def feed_lines(sess, width, show_thinking):
             color = TOOL_COLOR.get(name, magenta)
             label = name[5:].replace("__", ":", 1) if name.startswith("mcp__") else name
             out.append(f"  {color('⏺ ' + label)} {dim(summ)}")
+            if images:
+                out.append(images_line(images))
         elif kind == "err":
             out.append("  " + red(val))
         elif kind == "sys":

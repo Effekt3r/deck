@@ -3,10 +3,12 @@ import type { ClaudeResume, ClaudeSessionSummary, ClaudeSnapshot } from '@shared
 import { pathKey } from '../projects/config'
 import { cut } from './describe'
 import type { SessionFile } from './locator'
+import type { ImageSource } from './pixels'
 import { SessionState } from './session'
 import { buildSnapshot, sessionTitle } from './snapshot'
 import { claudeStatus } from './status'
 import { StepCache, subagentsDir } from './subagents'
+import type { LinePlace } from './tail'
 
 /** A subscriber, i.e. a renderer (webContents). */
 export interface Client {
@@ -16,7 +18,8 @@ export interface Client {
 
 /** Reads a log incrementally (JsonlTail). */
 export interface LogReader {
-  read(maxBytes?: number): Promise<{ entries: unknown[]; reset: boolean; more?: boolean }>
+  /** `places`: each entry's line in the log, at the same index (without them, images can't be shown). */
+  read(maxBytes?: number): Promise<{ entries: unknown[]; places?: LinePlace[]; reset: boolean; more?: boolean }>
   /** The log's modification time (ms) at the last read; 0 before. */
   readonly modified: number
 }
@@ -218,6 +221,26 @@ export class ClaudeSubscriptions {
       const title = parsed?.loaded ? sessionTitle(parsed.state) : await this.deps.title(s.path).catch(() => '')
       return { id: s.id, path: s.path, title: cut(title, 300), modified: s.modified }
     }))
+  }
+
+  /** Where image `id` of the session `folder` follows is in its log: the line to read it from again,
+   *  and the size it was listed with. Only an image an item of that session's feed lists; null
+   *  otherwise, or when nobody follows the folder. Ask once settled() has resolved. */
+  imageSource(folder: string, id: string): ImageSource | null {
+    const w = this.folders.get(folderKey(folder))
+    const log = w && !w.closed ? w.log : null
+    const place = log?.state.imagePlace(id)
+    return log && place ? { path: log.path, offset: place.offset, length: place.length, bytes: place.bytes } : null
+  }
+
+  /** Resolves once the update a subscribe of `folder` is waiting for has run, so the session's log is
+   *  open and read: a tab coming back to the front shows its last snapshot, and asks for its images,
+   *  before its subscribe has been answered, and until that update has run imageSource() finds
+   *  nothing. At once when nobody follows the folder or no subscribe is waiting; never later than
+   *  that subscribe's answer, and never rejects (run() doesn't). */
+  async settled(folder: string): Promise<void> {
+    const w = this.folders.get(folderKey(folder))
+    if (w && !w.closed && w.pending > 0 && w.running) await w.running
   }
 
   /** Follow one session of a subscribed folder (an id from sessions()), or the newest again (null).
@@ -429,12 +452,12 @@ export class ClaudeSubscriptions {
   private catchUp(p: Parsed): Promise<void> {
     p.reading = p.reading.then(async () => {
       for (;;) {
-        const { entries, reset, more } = await p.reader.read(this.timing.chunkBytes)
+        const { entries, places, reset, more } = await p.reader.read(this.timing.chunkBytes)
         if (reset) {
           p.state = new SessionState(p.project, p.real)
           p.stepCache = new StepCache()
         }
-        for (const e of entries) p.state.ingest(e)
+        entries.forEach((e, i) => p.state.ingest(e, places?.[i]))
         if (!more) break
         await nextTurn()
       }

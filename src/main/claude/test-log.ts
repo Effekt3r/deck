@@ -5,7 +5,9 @@ import { randomUUID } from 'node:crypto'
 import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { crc32, deflateSync } from 'node:zlib'
 import { encodeFolder } from './locator'
+import type { LinePlace } from './tail'
 
 const made: string[] = []
 // Entries get increasing, fixed timestamps.
@@ -34,6 +36,27 @@ export function removeClaudeHomes(): void {
       // A watcher still closing on Windows can hold a handle; the OS cleans tmp eventually.
     }
   }
+}
+
+/** A log line that is JSON, and where it is in the file: bytes, without its newline. */
+export interface LogLine extends LinePlace {
+  entry: unknown
+}
+
+/** The log's whole lines (ended by a newline) that are JSON, with their places, as JsonlTail reads them. */
+export function readLines(path: string): LogLine[] {
+  const bytes = readFileSync(path)
+  const lines: LogLine[] = []
+  for (let start = 0, end = bytes.indexOf(0x0a); end >= 0; start = end + 1, end = bytes.indexOf(0x0a, start)) {
+    const text = bytes.toString('utf8', start, end)
+    if (!text.trim()) continue
+    try {
+      lines.push({ entry: JSON.parse(text), offset: start, length: end - start })
+    } catch {
+      // a deliberately broken line
+    }
+  }
+  return lines
 }
 
 /** The log's lines, parsed (lines that aren't JSON are left out). */
@@ -67,8 +90,11 @@ export interface PromptOptions {
   /** origin.kind; null leaves `origin` out, as older logs do. Default 'human'. */
   origin?: string | null
   isMeta?: boolean
-  /** Pasted images before the text. */
-  images?: number
+  /** Pasted images before the text: each image's bytes, or a count of blocks with empty data (which
+   *  the panel doesn't show). */
+  images?: number | Uint8Array[]
+  /** The entry's imagePasteIds: Claude Code's [Image #N] numbers, one per image block. */
+  pasteIds?: unknown
 }
 
 export interface Notification {
@@ -137,16 +163,15 @@ export class LogWriter {
 
   /** A typed prompt: content string, or image blocks then a text block. */
   prompt(text: string, opts: PromptOptions = {}): this {
-    const { origin = 'human', isMeta, images = 0 } = opts
-    const content = images
-      ? [
-          ...Array.from({ length: images }, () => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: '' } })),
-          ...(text ? [{ type: 'text', text }] : []),
-        ]
-      : text
+    const { origin = 'human', isMeta, images = 0, pasteIds } = opts
+    const blocks = typeof images === 'number'
+      ? Array.from({ length: images }, () => ({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: '' } }))
+      : images.map((bytes) => imageBlock(bytes))
+    const content = blocks.length ? [...blocks, ...(text ? [{ type: 'text', text }] : [])] : text
     return this.line('user', {
       promptId: randomUUID(),
       message: { role: 'user', content },
+      ...(pasteIds === undefined ? {} : { imagePasteIds: pasteIds }),
       ...(origin === null ? {} : { origin: { kind: origin } }),
       ...(isMeta ? { isMeta: true } : {}),
     })
@@ -220,6 +245,16 @@ export class LogWriter {
     })
   }
 
+  /** Claude reading an image file: a Read call whose result holds the image, which the line's
+   *  toolUseResult repeats (file.base64), as Claude Code writes it. */
+  readImage(id: string, filePath: string, bytes: Uint8Array, mediaType = 'image/png'): this {
+    const block = imageBlock(bytes, mediaType)
+    return this.toolUse(id, 'Read', { file_path: filePath }).toolResult(id, {
+      content: [block],
+      toolUseResult: { type: 'image', file: { base64: block.source.data, type: mediaType, originalSize: bytes.length } },
+    })
+  }
+
   system(subtype: string, fields: Record<string, unknown> = {}): this {
     return this.line('system', { subtype, isMeta: false, level: 'info', ...fields })
   }
@@ -256,6 +291,20 @@ export class LogWriter {
       type: 'queued_command',
       prompt: text,
       commandMode: 'prompt',
+      ...(origin === null ? {} : { origin: { kind: origin } }),
+      source_uuid: randomUUID(),
+      timestamp: new Date(clock).toISOString(),
+    })
+  }
+
+  /** A prompt with content blocks (text, pasted images) typed while Claude was busy. */
+  queuedBlocks(content: unknown[], opts: { pasteIds?: unknown; origin?: string | null } = {}): this {
+    const { pasteIds, origin = 'human' } = opts
+    return this.attachment({
+      type: 'queued_command',
+      prompt: content,
+      commandMode: 'prompt',
+      ...(pasteIds === undefined ? {} : { imagePasteIds: pasteIds }),
       ...(origin === null ? {} : { origin: { kind: origin } }),
       source_uuid: randomUUID(),
       timestamp: new Date(clock).toISOString(),
@@ -336,6 +385,120 @@ export class LogWriter {
     }
     return new LogWriter(join(base, `agent-${agentId}.jsonl`), this.sessionId, this.cwd, agentId)
   }
+}
+
+// Images, as Claude Code logs them: base64 in the line. The PNGs are whole (any decoder reads them);
+// the JPEG, GIF and WebP builders write headers only, enough to tell the format and size.
+
+/** An image content block holding `bytes`. The panel goes by the bytes, so `mediaType` may lie. */
+export function imageBlock(bytes: Uint8Array, mediaType = 'image/png') {
+  return { type: 'image', source: { type: 'base64', media_type: mediaType, data: Buffer.from(bytes).toString('base64') } }
+}
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+function pngChunk(type: string, data: Buffer): Buffer {
+  const head = Buffer.alloc(8)
+  head.writeUInt32BE(data.length, 0)
+  head.write(type, 4, 'latin1')
+  const crc = Buffer.alloc(4)
+  crc.writeUInt32BE(crc32(Buffer.concat([head.subarray(4), data])) >>> 0, 0)
+  return Buffer.concat([head, data, crc])
+}
+
+function ihdr(width: number, height: number, alpha: boolean): Buffer {
+  const data = Buffer.alloc(13)
+  data.writeUInt32BE(width, 0)
+  data.writeUInt32BE(height, 4)
+  data[8] = 8 // bits per channel
+  data[9] = alpha ? 6 : 2 // RGBA or RGB
+  return pngChunk('IHDR', data)
+}
+
+/** A whole PNG: a gradient, and with `alpha` its right half see-through. Different sizes make
+ *  different images (different ids). */
+export function pngBytes(width: number, height: number, opts: { alpha?: boolean } = {}): Buffer {
+  const alpha = Boolean(opts.alpha)
+  const channels = alpha ? 4 : 3
+  const stride = 1 + width * channels // each row starts with its filter byte (0: none)
+  const raw = Buffer.alloc(stride * height)
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const at = y * stride + 1 + x * channels
+      raw[at] = Math.round((x * 255) / Math.max(1, width - 1))
+      raw[at + 1] = Math.round((y * 255) / Math.max(1, height - 1))
+      raw[at + 2] = 160
+      if (alpha) raw[at + 3] = x < width / 2 ? 255 : 96
+    }
+  }
+  return Buffer.concat([PNG_SIGNATURE, ihdr(width, height, alpha), pngChunk('IDAT', deflateSync(raw)), pngChunk('IEND', Buffer.alloc(0))])
+}
+
+/** A PNG's signature and header with no pixels: any size, for checks that never decode. */
+export function pngHeaderBytes(width: number, height: number): Buffer {
+  return Buffer.concat([PNG_SIGNATURE, ihdr(width, height, false), pngChunk('IEND', Buffer.alloc(0))])
+}
+
+/** A JPEG's markers without its picture: SOI, `app1Bytes` of APP1 (EXIF) segments before the size
+ *  marker, SOF0 (baseline) or SOF2 (progressive), EOI. */
+export function jpegBytes(width: number, height: number, opts: { progressive?: boolean; app1Bytes?: number } = {}): Buffer {
+  const parts: Buffer[] = [Buffer.from([0xff, 0xd8])]
+  for (let left = opts.app1Bytes ?? 0; left > 0; left -= 65_533) {
+    const n = Math.min(left, 65_533) // a segment's length field counts itself: at most 65,535
+    const segment = Buffer.alloc(4 + n)
+    segment[0] = 0xff
+    segment[1] = 0xe1
+    segment.writeUInt16BE(n + 2, 2)
+    parts.push(segment)
+  }
+  const sof = Buffer.alloc(19)
+  sof[0] = 0xff
+  sof[1] = opts.progressive ? 0xc2 : 0xc0
+  sof.writeUInt16BE(17, 2)
+  sof[4] = 8
+  sof.writeUInt16BE(height, 5)
+  sof.writeUInt16BE(width, 7)
+  sof[9] = 3
+  parts.push(sof, Buffer.from([0xff, 0xd9]))
+  return Buffer.concat(parts)
+}
+
+/** A GIF's header and logical screen, then its trailer. */
+export function gifBytes(width: number, height: number): Buffer {
+  const head = Buffer.alloc(13)
+  head.write('GIF89a', 0, 'latin1')
+  head.writeUInt16LE(width, 6)
+  head.writeUInt16LE(height, 8)
+  return Buffer.concat([head, Buffer.from([0x3b])])
+}
+
+/** A WebP's RIFF header and first chunk, in each of its three forms: lossy (VP8), lossless (VP8L) and
+ *  extended (VP8X). */
+export function webpBytes(width: number, height: number, kind: 'VP8' | 'VP8L' | 'VP8X' = 'VP8'): Buffer {
+  let body: Buffer
+  if (kind === 'VP8') {
+    body = Buffer.alloc(10) // frame tag, start code, 14-bit width and height
+    body[3] = 0x9d
+    body[4] = 0x01
+    body[5] = 0x2a
+    body.writeUInt16LE(width & 0x3fff, 6)
+    body.writeUInt16LE(height & 0x3fff, 8)
+  } else if (kind === 'VP8L') {
+    body = Buffer.alloc(5) // signature, then width-1 and height-1 in 14 bits each
+    body[0] = 0x2f
+    body.writeUInt32LE((((width - 1) & 0x3fff) | (((height - 1) & 0x3fff) << 14)) >>> 0, 1)
+  } else {
+    body = Buffer.alloc(10) // flags, reserved, then canvas width-1 and height-1 in 24 bits each
+    body.writeUIntLE(width - 1, 4, 3)
+    body.writeUIntLE(height - 1, 7, 3)
+  }
+  const head = Buffer.alloc(20)
+  head.write('RIFF', 0, 'latin1')
+  head.writeUInt32LE(12 + body.length, 4)
+  head.write('WEBP', 8, 'latin1')
+  head.write(kind === 'VP8' ? 'VP8 ' : kind, 12, 'latin1')
+  head.writeUInt32LE(body.length, 16)
+  return Buffer.concat([head, body])
 }
 
 /** A session log of `folder` (as Claude spells its cwd) in `home`: `projects/<encoded>/<id>.jsonl`. */

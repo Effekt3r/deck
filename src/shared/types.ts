@@ -184,12 +184,38 @@ export interface ClaudeAgent {
   step?: string
 }
 
+export type ClaudeImageFormat = 'png' | 'jpeg' | 'gif' | 'webp'
+
+/** An image in Claude's session log as the panel lists it: never its pixels (claude.image() reads
+ *  those from the log when they're shown). */
+export interface ClaudeImage {
+  /** The first 16 hex digits of the SHA-1 of its base64 text: the same image always gets the same id. */
+  id: string
+  /** From its bytes, not the log's media_type. */
+  format: ClaudeImageFormat
+  /** In pixels, from its header; 0 when the header doesn't say. */
+  width: number
+  height: number
+  /** Its size, decoded. */
+  bytes: number
+  /** Its [Image #N] number, for an image pasted into a prompt or an AskUserQuestion answer. */
+  paste?: number
+}
+
 export type ClaudeFeedItem =
-  | { kind: 'prompt'; text: string }
+  /** images: pasted ones, in paste order (at most 10); moreImages: how many more it had. */
+  | { kind: 'prompt'; text: string; images?: ClaudeImage[]; moreImages?: number }
   | { kind: 'thinking'; text: string } // '' when the log kept only the signature
   | { kind: 'reply'; text: string } // markdown
-  | { kind: 'tool'; id: string; name: string; summary: string; state: 'running' | 'done' | 'error'; error?: string }
+  /** images: what its result held (or an answer's pasted image), at most 10; moreImages: how many more. */
+  | {
+      kind: 'tool'; id: string; name: string; summary: string; state: 'running' | 'done' | 'error'; error?: string
+      images?: ClaudeImage[]; moreImages?: number
+    }
   | { kind: 'notice'; text: string; tone: 'info' | 'error' }
+
+/** An image's pixels as a data: URL, or why there are none. */
+export type ClaudeImageData = { url: string } | { error: string }
 
 export interface ClaudeSnapshot {
   session: ClaudeSessionSummary & {
@@ -392,6 +418,14 @@ export interface DeckApi {
     sessions(folder: string): Promise<ClaudeSessionSummary[]>
     /** Follow one session (by id), or the newest again (null). */
     follow(folder: string, sessionId: string | null): Promise<void>
+    /** Image `id` of the session `folder` follows, read again from its log: 'thumb' fits 480×360 (a
+     *  small PNG or JPEG is itself), 'full' is the image itself. { error } says why there's none, in
+     *  the words of claude-images.ts: "No longer in the session log", "Too large to show", "Couldn't
+     *  decode this image", "No preview", "Couldn't read the session log". */
+    image(folder: string, id: string, size: 'thumb' | 'full'): Promise<ClaudeImageData>
+    /** Opens a copy of image `id` in the default image app (the copy is removed when Deck quits):
+     *  null, or why it couldn't. */
+    openImage(folder: string, id: string): Promise<{ error: string } | null>
   }
   clipboard: {
     /** The item the card offers now, or null. */

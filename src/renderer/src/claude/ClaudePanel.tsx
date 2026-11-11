@@ -1,9 +1,12 @@
-import { Component, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ErrorInfo, type MouseEvent, type ReactNode } from 'react'
-import type { ClaudeAgent, ClaudeSnapshot, ClaudeStatus, ClaudeTodo } from '@shared/types'
+import { Component, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ErrorInfo, type MouseEvent, type ReactNode } from 'react'
+import type { ClaudeAgent, ClaudeFeedItem, ClaudeSnapshot, ClaudeStatus, ClaudeTodo } from '@shared/types'
 import { baseName, displayPath } from '../git/format'
 import { useStoredFlag, useTick } from '../hooks'
-import { Caret } from '../icons'
+import { Caret, PictureIcon } from '../icons'
 import { Feed } from './Feed'
+import { feedKeys, NO_KEYS } from './feedItems'
+import { type FeedImage, feedImages } from './images'
+import { ImageViewer } from './ImageViewer'
 import { SessionPicker } from './SessionPicker'
 import { agentsView, formatTokens, modeLabel, modelLabel, statusExtras, statusView, todoView } from './summary'
 import type { ClaudeFeedState } from './useClaude'
@@ -12,6 +15,8 @@ import './panel.css'
 interface ClaudePanelProps {
   /** Where the tab's Claude runs (the tab's cwd). */
   folder: string
+  /** The folder `snapshot` came from (useClaudeSession's): its images are asked for there. */
+  imageFolder: string
   snapshot: ClaudeSnapshot | null
   phase: ClaudeFeedState['phase']
   error: string | null
@@ -20,6 +25,12 @@ interface ClaudePanelProps {
   active: boolean
   home: string
   onRetry(): void
+  /** Images show in the feed (one switch for every tab, App's). */
+  showImages: boolean
+  onImagesToggle(): void
+  /** Counts the subscribe's answers (useClaudeSession's): a thumbnail that couldn't be shown asks again
+   *  at the next. */
+  showings: number
 }
 
 const THINKING_KEY = 'deck.claudeThinking'
@@ -27,6 +38,15 @@ const TODOS_KEY = 'deck.claudeTodosOpen'
 const AGENTS_KEY = 'deck.claudeAgentsOpen'
 /** A turn is open in these. */
 const LIVE: ReadonlySet<ClaudeStatus['state']> = new Set(['working', 'tool', 'waiting', 'maybe-waiting'])
+const NO_FEED: ClaudeFeedItem[] = []
+const NO_IMAGES: FeedImage[] = []
+
+/** The image the viewer shows, where the keyboard was when it opened, and the session it's of. */
+interface Viewing {
+  entry: FeedImage
+  restore: Element | null
+  session: string
+}
 
 /** What Claude is doing in the tab's folder: status, model, context, branch and title,
  *  the to-do list, sub-agents and the feed. Read-only. A rendering error stays inside. */
@@ -38,10 +58,47 @@ export const ClaudePanel = memo(function ClaudePanel(props: ClaudePanelProps) {
   )
 })
 
-function PanelBody({ folder, snapshot, phase, error, claudeRuns, active, home, onRetry }: ClaudePanelProps) {
+function PanelBody(props: ClaudePanelProps) {
+  const { folder, imageFolder, snapshot, phase, error, claudeRuns, active, home, onRetry, showImages, onImagesToggle, showings } = props
   const platform = window.deck.platform
   const [showThinking, toggleThinking] = useStoredFlag(THINKING_KEY, true)
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+
+  // The rows' keys, kept from snapshot to snapshot: the feed's, and the viewer's way to an image.
+  // Kept across a session switch too, which is harmless: the Feed remounts and the viewer closes.
+  const keysRef = useRef(NO_KEYS)
+  const feed = snapshot?.feed ?? NO_FEED
+  const keys = useMemo(() => (keysRef.current = feedKeys(keysRef.current, feed)).keys, [feed])
+  const images = useMemo(() => (feed.length ? feedImages(feed, keys) : NO_IMAGES), [feed, keys])
+  const sessionId = snapshot?.session.id ?? ''
+
+  const [viewing, setViewing] = useState<Viewing | null>(null)
+  const latest = useRef({ images, sessionId, viewing })
+  useLayoutEffect(() => {
+    latest.current = { images, sessionId, viewing }
+  })
+  const openImage = useCallback((key: string) => {
+    const entry = latest.current.images.find((e) => e.key === key)
+    if (entry) setViewing({ entry, restore: document.activeElement, session: latest.current.sessionId })
+  }, [])
+  /** Closes the viewer and gives the keyboard back where it was when it opened (the terminal after a
+   *  click, the thumbnail after Enter), or to the terminal when that's gone. */
+  const closeViewer = useCallback(() => {
+    const restore = latest.current.viewing?.restore
+    setViewing(null)
+    if (restore instanceof HTMLElement && restore !== document.body && restore.isConnected) restore.focus()
+    else panelRef.current?.closest('.workspace')?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
+  }, [])
+  /** The keyboard went elsewhere in Deck (Cmd+F's search): the viewer closes and leaves it there. */
+  const leaveViewer = useCallback(() => setViewing(null), [])
+  // It lives in <body>: it goes when the tab leaves the front (the keyboard goes with the tab), or the
+  // panel shows another session.
+  useEffect(() => {
+    if (!viewing) return
+    if (!active) setViewing(null)
+    else if (viewing.session !== sessionId) closeViewer()
+  }, [active, sessionId, viewing, closeViewer])
 
   const anchorRef = useRef<HTMLElement | null>(null)
   useLayoutEffect(() => {
@@ -74,7 +131,7 @@ function PanelBody({ folder, snapshot, phase, error, claudeRuns, active, home, o
       )
     }
     return (
-      <div className="claude-panel">
+      <div className="claude-panel" ref={panelRef}>
         <header className="claude-header" onMouseDown={keepFocus}>
           <div className="cp-row">
             <span className="cp-name">Claude</span>
@@ -91,13 +148,18 @@ function PanelBody({ folder, snapshot, phase, error, claudeRuns, active, home, o
   const extras = statusExtras(status)
   const written = new Date(session.modified).toLocaleString()
   return (
-    <div className="claude-panel">
+    <div className="claude-panel" ref={panelRef}>
       {/* Clicking the header's text, like the tab bar, leaves the keyboard where it was (the terminal). */}
       <header className="claude-header" onMouseDown={keepFocus}>
         <div className="cp-row">
           <StatusChip status={status} modified={session.modified} />
           {extras.map((x) => <span key={x} className="cp-extra">· {x}</span>)}
           <span className="cp-spacer" />
+          {/* Hides images in every tab, e.g. before sharing the screen. */}
+          <button className="cp-icon-button cp-images" aria-pressed={showImages}
+            title={showImages ? 'Hide images (in every tab)' : 'Show images'} aria-label="Show images" onClick={onImagesToggle}>
+            <PictureIcon size={13} />
+          </button>
           <button className="cp-icon-button cp-thinking" aria-pressed={showThinking}
             title={showThinking ? 'Hide thinking' : 'Show thinking'} aria-label="Show thinking" onClick={toggleThinking}>
             ✻
@@ -120,9 +182,14 @@ function PanelBody({ folder, snapshot, phase, error, claudeRuns, active, home, o
       {snapshot.todos.length > 0 && <Todos todos={snapshot.todos} />}
       {snapshot.agents.length > 0 && <Agents agents={snapshot.agents} />}
       {phase === 'error' && error && <div className="cp-banner" role="alert">{error}</div>}
-      <Feed key={session.id} items={snapshot.feed} showThinking={showThinking} live={LIVE.has(status.state)} />
+      <Feed key={session.id} items={snapshot.feed} keys={keys} showThinking={showThinking} live={LIVE.has(status.state)}
+        folder={imageFolder} showImages={showImages} showings={showings} onOpenImage={openImage} />
       {menuAnchor && (
         <SessionPicker folder={folder} current={session.id} following={snapshot.following} anchor={menuAnchor} onClose={closeMenu} />
+      )}
+      {viewing && active && viewing.session === session.id && (
+        <ImageViewer folder={imageFolder} list={images} entry={viewing.entry}
+          onStep={(entry) => setViewing((v) => (v ? { ...v, entry } : v))} onClose={closeViewer} onLeave={leaveViewer} />
       )}
     </div>
   )

@@ -1,4 +1,4 @@
-import type { ClaudeFeedItem, ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
+import type { ClaudeFeedItem, ClaudeImage, ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
 import { cut } from './describe'
 import type { SessionState } from './session'
 import { claudeStatus } from './status'
@@ -13,11 +13,20 @@ export function sessionTitle(s: SessionState, fallback = ''): string {
   return s.customTitle || s.aiTitle || s.firstPrompt || fallback
 }
 
+/** Copies of an item's images and their count beyond them: ids, sizes and numbers, never pixels (the
+ *  renderer asks for those), and never where their lines are. */
+function imageFields(i: { images?: ClaudeImage[]; moreImages?: number }): { images?: ClaudeImage[]; moreImages?: number } {
+  return {
+    ...(i.images?.length ? { images: i.images.map((image) => ({ ...image })) } : {}),
+    ...(i.moreImages ? { moreImages: i.moreImages } : {}),
+  }
+}
+
 /** A capped copy: the state updates its tool items in place, a snapshot must not change. */
 function feedItem(i: ClaudeFeedItem): ClaudeFeedItem {
   switch (i.kind) {
     case 'prompt':
-      return { kind: 'prompt', text: cut(i.text, CAP.prompt) }
+      return { kind: 'prompt', text: cut(i.text, CAP.prompt), ...imageFields(i) }
     case 'thinking':
       return { kind: 'thinking', text: cut(i.text, CAP.thinking) }
     case 'reply':
@@ -26,6 +35,7 @@ function feedItem(i: ClaudeFeedItem): ClaudeFeedItem {
       return {
         kind: 'tool', id: i.id, name: i.name, summary: cut(i.summary, CAP.summary), state: i.state,
         ...(i.error === undefined ? {} : { error: cut(i.error, CAP.error) }),
+        ...imageFields(i),
       }
     case 'notice':
       return { kind: 'notice', text: cut(i.text, CAP.notice), tone: i.tone }

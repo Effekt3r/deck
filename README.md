@@ -59,6 +59,12 @@ Windows installer; publish it once it looks right.
   - **Work:** the to-do list and sub-agents with their current step.
   - **Feed:** prompts, collapsible thinking, replies as markdown and tool calls.
     It follows the end, pauses when you scroll up, and resumes from "↓ N new".
+    Images show as thumbnails: pasted ones under their prompt, and what a tool's result
+    held (an image Claude read, a browser screenshot) under its call. Click one to see it
+    large (← and → step through the session's images, Esc closes, **Open** shows a copy
+    in your image app); the picture button in the panel's header hides them in every
+    tab, say before sharing your screen. Deck reads them from the session log: nothing
+    goes over the network.
   - **Picker:** follows the folder's newest session; ▾ pins another one. Deck only
     reads Claude's files, apart from the status line the usage card's Connect adds.
   - **Clipboard:** what you just copied in another app (an image, files, text) shows
