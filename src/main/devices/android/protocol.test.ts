@@ -267,4 +267,17 @@ describe('VideoReader', () => {
     chunk.fill(0xff) // mutate the fed chunk after feed() returned
     expect(Buffer.from(last.data)).toEqual(before)
   })
+
+  it("reads Deck's iPhone helper's stream, which starts at the codec id, and names it in errors", () => {
+    const helper = { from: 'codec', sender: "Deck's iPhone helper" } as const
+    expect(new VideoReader(helper).feed(Buffer.concat([codecBuf(CODEC_H264), sessionBuf(736, 1600), packetBuf(1n << 62n, [0, 0, 0, 1, 0x67])]))).toEqual([
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'size', width: 736, height: 1600 },
+      { type: 'packet', config: true, key: false, data: new Uint8Array([0, 0, 0, 1, 0x67]) },
+    ])
+    expect(new VideoReader(helper).feed(Buffer.concat([codecBuf(CODEC_H264), sessionBuf(0, 1600)]))).toEqual([
+      { type: 'codec', codec: CODEC_H264 },
+      { type: 'error', message: "Deck's iPhone helper sent a 0×1600 screen." },
+    ])
+  })
 })
