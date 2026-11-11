@@ -682,8 +682,9 @@ excludes every `build` folder.
   activity pane live through prompt → thinking → Bash → reply → idle → exited.
   The parser was replayed over all 145 local session logs: no exceptions, and no
   turn, agent or background task left open in finished sessions.
-  The image rules were replayed the same way through both parsers (2026-11-11: 678 logs, every one
-  matching; 48 images on prompts, 942 on tool calls, 1 "[image]" prompt).
+  The image rules were replayed the same way through both parsers (2026-11-11: 681 logs, every one
+  matching; 50 images on prompts, 951 on tool calls, 1 "[image]" prompt; the review's item-by-item
+  replay of 683 logs matched too).
 - **Not yet tested:** anything on Windows; `TodoWrite`/`TaskCreate` logs; the
   "waiting on you?" guess outside bypass mode.
 
