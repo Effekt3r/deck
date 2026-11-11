@@ -2,6 +2,7 @@
 // after a fresh install every pty.spawn fails with "posix_spawnp failed" (and a
 // packaged app can't open a shell). Restore it.
 import { chmodSync } from 'node:fs'
+import { buildIphoneHelper } from './build-iphone-helper.mjs'
 
 for (const arch of ['arm64', 'x64']) {
   try {
@@ -10,3 +11,6 @@ for (const arch of ['arm64', 'x64']) {
     // not installed for this platform
   }
 }
+
+// Deck's iPhone helper, on macOS (scripts/build-iphone-helper.mjs).
+buildIphoneHelper()
