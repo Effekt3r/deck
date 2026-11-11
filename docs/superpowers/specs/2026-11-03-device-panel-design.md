@@ -31,6 +31,25 @@ four places, written into the sections below:
   most 8 pictures), else `sim-video` is started again: it can't be asked for a key frame, and a long
   replay would trip the view's 10-picture backlog rule.
 
+Updated 2026-11-11 with step 3's first check (iPhones), made with Franco's iPhone 17 Pro on a cable
+through a throwaway probe app (macOS 27.2, iOS 27). It passed, with one change to this design: an
+iPhone is known by its screen capture device's ID, not its UDID (below, under "iPhones").
+
+- **The screen appears:** once screen capture devices are allowed, the phone is offered as
+  "Franco's iPhone", model `iOS Device`, muxed (one format, `muxx`, with no size until frames come),
+  0.5 s after the probe started with the phone already plugged in, 2.5 s after it was plugged in
+  again.
+- **Frames come:** 60 a second at the screen's own 1206×2622, none dropped, the first 2.7 s after the
+  capture started.
+- **Its ID** (`0A156111-…`, a UUID) isn't the phone's UDID (`00008150-…`), nor derived from it
+  by any common hash, but it stayed the same from run to run and across unplugging the phone and
+  plugging it in again. Whether it survives a restart of the Mac isn't known; if it doesn't, a project
+  that picked the phone asks again.
+- **The camera prompt** shows on the Mac, for the app that started the capture, and is answered
+  there; the phone asks nothing (its consent is the Trust prompt it showed when first paired).
+- **The phone's own camera is listed too,** as a Continuity Camera ("Franco's iPhone Camera", model
+  `iPhone18,1`, video only, over the air). It isn't the screen, and Deck never opens it.
+
 ## Goal
 
 In a tab whose project is an Android or iOS app, show the device the app runs on, live, at the top of
@@ -73,7 +92,7 @@ Franco's choice (2026-11-03): live video for all three, decoded by one view in D
   devices), through a small Swift helper inside Deck that encodes H.264.
   - Over a cable only, and view only: Apple offers no way to tap a real iPhone remotely.
   - macOS treats an iPhone's screen as a camera, so the first use asks to let Deck use the camera.
-  - **Not tried yet** (the iPhone wasn't plugged in): checked first in step 3.
+  - **Tried 2026-11-11** with Franco's iPhone 17 Pro: it works (see the update at the top).
 - **Decoding:** WebCodecs in the renderer, in hardware.
 
 Rejected:
@@ -168,7 +187,8 @@ Rejected:
 - **One device, two connections:** the S25 FE over USB and over Wi-Fi is one device, used over USB
   while that's connected and over Wi-Fi when it isn't.
 - **Telling devices apart:** phones by serial number (`ro.serialno`), emulators by AVD name (their
-  `emulator-5554` changes with the port), simulators and iPhones by UDID. A device is listed only once
+  `emulator-5554` changes with the port), simulators by UDID, and iPhones by their screen capture
+  device's ID (a UUID that isn't the UDID but stays the same across reconnects). A device is listed only once
   it has said what it is (or didn't answer three times), and an emulator still starting not at all,
   so a device's id never changes under the panel. A phone still starting up is asked again every 3 s,
   for two minutes at most, so one rebooted while plugged in gets its own name back.
@@ -443,7 +463,9 @@ kinds are still finding their first devices (`pending`).
 - **The helper** (`native/iphone-screen/`, Swift, macOS only) turns on
   `kCMIOHardwarePropertyAllowScreenCaptureDevices`, then:
   - lists the iPhone and iPad screens macOS offers (plugged in, unlocked, trusting this Mac) as they
-    come and go;
+    come and go: the capture devices whose model is `iOS Device` and which carry muxed media. Not the
+    phone's own camera, which macOS lists too, over the air (a Continuity Camera, model `iPhone18,1`);
+    each is known by its capture device's ID;
   - streams one: AVFoundation capture, VideoToolbox H.264 (the long side within 1600 px, a key frame
     on request), frames on stdout behind a small header; closing its stdin stops it.
 - **Built** with `swiftc` on macOS (dev and CI), shipped in the app's resources, signed and notarised
@@ -451,8 +473,9 @@ kinds are still finding their first devices (`pending`).
 - **Camera:** Deck's Info.plist says why ("Deck shows a connected iPhone's screen, which macOS treats
   as a camera."), and the hardened runtime gets `com.apple.security.device.camera`. macOS asks once;
   if Franco says no, the panel says so.
-- **Checked first in step 3:** the phone appears, frames come, and the capture device's ID is the
-  phone's UDID.
+- **Checked first in step 3** (2026-11-11, the update at the top): the phone appears, frames come
+  (60 a second at 1206×2622), and the capture device's ID, though not the UDID, stays the same across
+  runs and reconnects.
 
 ### The view
 
