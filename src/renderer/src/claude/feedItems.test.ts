@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ClaudeFeedItem } from '@shared/types'
-import { feedKeys, NO_KEYS, sameItem, toolKind, toolLabel } from './feedItems'
+import type { ClaudeFeedItem, ClaudeImage } from '@shared/types'
+import { feedKeys, NO_KEYS, sameEntry, sameItem, toolKind, toolLabel } from './feedItems'
 
 const prompt = (text: string): ClaudeFeedItem => ({ kind: 'prompt', text })
 const reply = (text: string): ClaudeFeedItem => ({ kind: 'reply', text })
@@ -67,6 +67,36 @@ describe('sameItem', () => {
     expect(sameItem(tool('t', 'running'), tool('t', 'done'))).toBe(false)
     expect(sameItem(tool('t', 'error', 'x'), tool('t', 'error', 'y'))).toBe(false)
     expect(sameItem({ kind: 'notice', text: 'n', tone: 'info' }, { kind: 'notice', text: 'n', tone: 'error' })).toBe(false)
+  })
+})
+
+describe('items with images', () => {
+  type Prompt = Extract<ClaudeFeedItem, { kind: 'prompt' }>
+  type Tool = Extract<ClaudeFeedItem, { kind: 'tool' }>
+  const image = (id: string): ClaudeImage => ({ id, format: 'png', width: 10, height: 10, bytes: 100 })
+  const shot = (...ids: string[]): Prompt => ({ kind: 'prompt', text: '[image]', images: ids.map(image) })
+
+  it("two image-only prompts are the same entry only with the same images", () => {
+    expect(sameEntry(shot('a'), shot('a'))).toBe(true)
+    expect(sameEntry(shot('a'), shot('b'))).toBe(false)
+    expect(sameEntry(shot('a'), prompt('[image]'))).toBe(false)
+    expect(sameEntry(shot('a', 'b'), shot('a'))).toBe(false)
+    expect(sameEntry({ ...shot('a'), moreImages: 2 }, shot('a'))).toBe(false)
+  })
+
+  it('so the keys of two image-only prompts in a row follow the right one', () => {
+    const one = feedKeys(NO_KEYS, [shot('a'), shot('b')])
+    expect(feedKeys(one, [shot('b'), shot('c')]).keys).toEqual([1, 2])
+  })
+
+  it("a tool renders again when its result brings images; its key stays", () => {
+    const running: Tool = { kind: 'tool', id: 't1', name: 'Read', summary: 'a.png', state: 'running' }
+    const done: Tool = { ...running, state: 'done', images: [image('a')] }
+    expect(sameItem(done, { ...running, state: 'done' })).toBe(false)
+    expect(sameItem(done, { ...done, images: [image('a')] })).toBe(true)
+    expect(sameItem(done, { ...done, moreImages: 1 })).toBe(false)
+    const one = feedKeys(NO_KEYS, [prompt('go'), running])
+    expect(feedKeys(one, [prompt('go'), done]).keys).toEqual([0, 1])
   })
 })
 

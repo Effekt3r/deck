@@ -4,7 +4,7 @@ import type { InsertResult, Platform } from '@shared/types'
 import { fileThumbnail, imageInfo } from './image'
 import { insertFor } from './insert'
 import { readClipboard } from './read'
-import { TempImages } from './temp'
+import { type TempImageExt, TempImages, type TempImagePrefix } from './temp'
 import { ClipboardWatch } from './watch'
 
 export interface ClipboardIpc {
@@ -12,9 +12,10 @@ export interface ClipboardIpc {
   attach(win: BrowserWindow): void
   /** At quit: stop looking and remove the saved images. */
   dispose(): void
-  /** Saves a PNG beside the pasted images (cleared at start and quit): the device panel's
-   *  screenshots for Claude. Resolves with its path. */
-  saveImage(png: Uint8Array): Promise<string>
+  /** Saves an image beside the pasted images (cleared at start and quit): the device panel's
+   *  screenshots for Claude (a PNG), and the copies the Claude panel's viewer opens ('image').
+   *  Resolves with its path. */
+  saveImage(bytes: Uint8Array, ext?: TempImageExt, prefix?: TempImagePrefix): Promise<string>
 }
 
 export function registerClipboardIpc(opts: { tempDir: string; platform: Platform }): ClipboardIpc {
@@ -77,6 +78,6 @@ export function registerClipboardIpc(opts: { tempDir: string; platform: Platform
       watch.stop()
       temp.clear()
     },
-    saveImage: (png) => temp.save(png),
+    saveImage: (bytes, ext, prefix) => temp.save(bytes, ext, prefix),
   }
 }

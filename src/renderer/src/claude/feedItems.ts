@@ -1,4 +1,5 @@
 import type { ClaudeFeedItem } from '@shared/types'
+import { imageCount, itemImages } from './images'
 
 /** React keys for a feed, carried from one snapshot to the next. */
 export interface FeedKeys {
@@ -13,21 +14,31 @@ export const NO_KEYS: FeedKeys = { items: [], keys: [], next: 0 }
 type Tool = Extract<ClaudeFeedItem, { kind: 'tool' }>
 type Notice = Extract<ClaudeFeedItem, { kind: 'notice' }>
 
-/** The same entry of the log: a tool by its id (its state changes in place), anything else by content. */
-function sameEntry(a: ClaudeFeedItem, b: ClaudeFeedItem): boolean {
+/** The same images (ids are content hashes) and as many more. */
+function sameImages(a: ClaudeFeedItem, b: ClaudeFeedItem): boolean {
+  const x = itemImages(a)
+  const y = itemImages(b)
+  return x.length === y.length && x.every((image, i) => image.id === y[i].id) && imageCount(a) === imageCount(b)
+}
+
+/** The same entry of the log: a tool by its id (its state changes in place), a prompt by its text and
+ *  images (two image-only prompts are both "[image]"), anything else by content. */
+export function sameEntry(a: ClaudeFeedItem, b: ClaudeFeedItem): boolean {
   if (a.kind !== b.kind) return false
   if (a.kind === 'tool') return a.id === (b as Tool).id
   if (a.kind === 'notice') return a.text === (b as Notice).text && a.tone === (b as Notice).tone
+  if (a.kind === 'prompt') return a.text === (b as { text: string }).text && sameImages(a, b)
   return a.text === (b as { text: string }).text
 }
 
-/** Renders the same: every field equal (snapshots bring new objects with the same strings). */
+/** Renders the same: every field equal (snapshots bring new objects with the same strings). A tool
+ *  renders again when its result brings images. */
 export function sameItem(a: ClaudeFeedItem, b: ClaudeFeedItem): boolean {
   if (a === b) return true
   if (!sameEntry(a, b)) return false
   if (a.kind !== 'tool') return true
   const t = b as Tool
-  return a.name === t.name && a.summary === t.summary && a.state === t.state && a.error === t.error
+  return a.name === t.name && a.summary === t.summary && a.state === t.state && a.error === t.error && sameImages(a, t)
 }
 
 /** Keys for `items` that keep the previous snapshot's keys for the items still there. A

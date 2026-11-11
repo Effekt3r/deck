@@ -1,7 +1,7 @@
-import { appendFileSync, truncateSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, renameSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { JsonlTail } from './tail'
+import { JsonlTail, type LinePlace } from './tail'
 import { makeFolder, removeClaudeHomes } from './test-log'
 
 afterAll(removeClaudeHomes)
@@ -13,8 +13,10 @@ describe('JsonlTail', () => {
     const path = file()
     writeFileSync(path, '{"a":1}\n{"a":2}\n')
     const tail = new JsonlTail(path)
-    expect(await tail.read()).toEqual({ entries: [{ a: 1 }, { a: 2 }], reset: false, more: false })
-    expect(await tail.read()).toEqual({ entries: [], reset: false, more: false })
+    expect(await tail.read()).toEqual({
+      entries: [{ a: 1 }, { a: 2 }], places: [{ offset: 0, length: 7 }, { offset: 8, length: 7 }], reset: false, more: false,
+    })
+    expect(await tail.read()).toEqual({ entries: [], places: [], reset: false, more: false })
     appendFileSync(path, '{"a":3}\n')
     expect((await tail.read()).entries).toEqual([{ a: 3 }])
   })
@@ -43,14 +45,29 @@ describe('JsonlTail', () => {
     await tail.read()
     truncateSync(path, 0)
     appendFileSync(path, '{"b":1}\n')
-    expect(await tail.read()).toEqual({ entries: [{ b: 1 }], reset: true, more: false })
+    expect(await tail.read()).toEqual({ entries: [{ b: 1 }], places: [{ offset: 0, length: 7 }], reset: true, more: false })
     expect((await tail.read()).reset).toBe(false)
+  })
+
+  it('treats a replaced file (a different inode, even the same size or larger) like a shrink', async () => {
+    const path = file()
+    writeFileSync(path, '{"a":1}\n{"b":"x')
+    const tail = new JsonlTail(path)
+    expect((await tail.read()).places).toEqual([{ offset: 0, length: 7 }])
+    const swap = `${path}.new`
+    writeFileSync(swap, '{"n":1}\n{"n":2}\n{"n":3}\n{"n":4}\n')
+    renameSync(swap, path)
+    const read = await tail.read()
+    expect(read.reset).toBe(true)
+    const bytes = readFileSync(path)
+    expect(read.places.map((p) => bytes.toString('utf8', p.offset, p.offset + p.length))).toEqual(['{"n":1}', '{"n":2}', '{"n":3}', '{"n":4}'])
+    expect(read.entries).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }])
   })
 
   it('a missing file reads as nothing, and is read once it appears', async () => {
     const path = file()
     const tail = new JsonlTail(path)
-    expect(await tail.read()).toEqual({ entries: [], reset: false, more: false })
+    expect(await tail.read()).toEqual({ entries: [], places: [], reset: false, more: false })
     writeFileSync(path, '{"a":1}\n')
     expect((await tail.read()).entries).toEqual([{ a: 1 }])
   })
@@ -70,6 +87,48 @@ describe('JsonlTail', () => {
     }
     expect(calls).toBeGreaterThan(10)
     expect(got).toEqual(lines.map((l) => JSON.parse(l)))
+  })
+
+  it("each entry's place: its line's offset and length in bytes, exact around multi-byte text, blank and broken lines", async () => {
+    const path = file()
+    writeFileSync(path, '{"t":"héllo ✻ 😀"}\n\nnot json\n{"t":"wörld"}\r\n')
+    const { entries, places } = await new JsonlTail(path).read()
+    expect(entries).toEqual([{ t: 'héllo ✻ 😀' }, { t: 'wörld' }])
+    expect(places).toEqual([
+      { offset: 0, length: Buffer.byteLength('{"t":"héllo ✻ 😀"}') },
+      { offset: Buffer.byteLength('{"t":"héllo ✻ 😀"}\n\nnot json\n'), length: Buffer.byteLength('{"t":"wörld"}\r') },
+    ])
+    const bytes = readFileSync(path)
+    places.forEach((p, i) => expect(JSON.parse(bytes.toString('utf8', p.offset, p.offset + p.length))).toEqual(entries[i]))
+  })
+
+  it('a line split between two reads keeps the offset where it began', async () => {
+    const path = file()
+    writeFileSync(path, '{"a":1}\n{"b":"ü')
+    const tail = new JsonlTail(path)
+    expect((await tail.read()).places).toEqual([{ offset: 0, length: 7 }])
+    appendFileSync(path, 'ber"}')
+    expect((await tail.read()).places).toEqual([])
+    appendFileSync(path, '\n{"c":3}\n')
+    expect(await tail.read()).toMatchObject({
+      entries: [{ b: 'über' }, { c: 3 }],
+      places: [{ offset: 8, length: Buffer.byteLength('{"b":"über"}') }, { offset: 8 + Buffer.byteLength('{"b":"über"}\n'), length: 7 }],
+    })
+  })
+
+  it('places stay exact when every read is cut short, through lines and characters', async () => {
+    const path = file()
+    const lines = Array.from({ length: 40 }, (_, i) => JSON.stringify({ i, text: `héllo ✻ ${'x'.repeat(i * 3)}` }))
+    writeFileSync(path, `${lines.join('\n')}\n`)
+    const tail = new JsonlTail(path)
+    const places: LinePlace[] = []
+    for (;;) {
+      const read = await tail.read(53)
+      places.push(...read.places)
+      if (!read.more) break
+    }
+    const bytes = readFileSync(path)
+    expect(places.map((p) => bytes.toString('utf8', p.offset, p.offset + p.length))).toEqual(lines)
   })
 
   it('remembers the size and modification time it last saw', async () => {

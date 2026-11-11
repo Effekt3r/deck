@@ -1,4 +1,4 @@
-/* Claude panel: header, to-do, agents, feed (with markdown replies), session menu. */
+/* Claude panel: header, to-do, agents, feed (with markdown replies and images), session menu, image viewer. */
 
 .claude-panel {
   --green: #9ece6a;
@@ -85,7 +85,8 @@
 }
 .cp-icon-button:hover { background: rgb(244 245 251 / 0.08); color: var(--text); }
 .cp-thinking[aria-pressed='true'] { color: var(--violet); }
-.cp-thinking[aria-pressed='false']::after {
+.cp-images[aria-pressed='true'] { color: var(--teal); }
+.cp-thinking[aria-pressed='false']::after, .cp-images[aria-pressed='false']::after {
   content: '';
   position: absolute;
   left: 5px;
@@ -364,6 +365,45 @@
 .fi-notice.error { color: var(--red); }
 .fi-notice.error .fi-gutter { color: var(--red); }
 
+/* Images under a prompt's text or a tool's line (and its error): thumbnails in boxes sized from the
+   start (ImageTiles sets width and aspect-ratio), narrowed to the row, never dragged or selected. */
+.fi-images { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; min-width: 0; margin-top: 6px; user-select: none; }
+.fi-tool .fi-images { grid-column: 2; margin: 3px 0 5px; }
+.fi-thumb {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  height: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--field); /* shows through transparent parts */
+  color: var(--faint);
+}
+.fi-thumb:hover { border-color: var(--line-strong); }
+.fi-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.fi-thumb.failed { display: grid; place-items: center; opacity: 0.7; }
+.fi-images-more { align-self: center; color: var(--faint); font-size: 11px; }
+.fi-images-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  margin-top: 5px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: none;
+  color: var(--faint);
+  font-size: 11px;
+  user-select: none;
+}
+.fi-tool .fi-images-hidden { grid-column: 2; justify-self: start; margin: 2px 0 4px; }
+.fi-images-hidden:hover:not(:disabled) { border-color: var(--line-strong); color: var(--text); }
+/* An image-only prompt starts with its images. */
+.fi-images:first-child, .fi-images-hidden:first-child { margin-top: 0; }
+
 /* Clamped text with "more": the button sits on the last line, over a fade. */
 .fi-clamp { position: relative; min-width: 0; }
 .fi-clamp:not(.open) > .fi-text { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; }
@@ -500,6 +540,64 @@
 .cpm-note { padding: 7px 10px; color: var(--faint); font-size: 11.5px; }
 .cpm-error { padding: 6px 10px 4px; color: var(--red); font-size: 11.5px; overflow-wrap: anywhere; }
 .cp-menu[aria-busy='true'] .cpm-list { opacity: 0.55; pointer-events: none; }
+
+/* ------------------------------------------------------------ image viewer */
+
+/* Over the window below the tab bar (ImageViewer sets `top`), on a dark backdrop. */
+.iv {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 70;
+  display: flex;
+  flex-direction: column;
+  background: rgb(5 6 16 / 0.92);
+  color: var(--text);
+  font-size: 12px;
+  outline: none;
+  user-select: none;
+}
+.iv-stage { position: relative; flex: 1; min-height: 0; display: grid; place-items: center; overflow: hidden; }
+/* The image's box, over a checkerboard so transparent parts can be seen. */
+.iv-frame {
+  position: relative;
+  display: grid;
+  place-items: center;
+  background-color: #23264a;
+  background-image: conic-gradient(#30345e 25%, transparent 0 50%, #30345e 0 75%, transparent 0);
+  background-size: 16px 16px;
+  box-shadow: 0 12px 44px rgb(0 0 0 / 0.55);
+}
+.iv-frame img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
+.iv-frame.auto img { position: static; width: auto; height: auto; }
+.iv-frame.auto:has(.iv-error) { min-width: 240px; min-height: 160px; }
+.iv-error { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 100%; padding: 16px; color: var(--muted); text-align: center; }
+.iv-step {
+  position: absolute;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  margin-top: -17px;
+  display: grid;
+  place-items: center;
+  padding: 0 0 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: rgb(18 20 42 / 0.85);
+  color: var(--text);
+  font-size: 22px;
+  line-height: 1;
+}
+.iv-step.prev { left: 12px; }
+.iv-step.next { right: 12px; }
+.iv-step:hover:not(:disabled) { background: var(--tab-active); color: var(--ink); }
+.iv-step:disabled { opacity: 0.25; }
+.iv-bar { flex: none; display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 10px 0 16px; border-top: 1px solid var(--line); background: var(--chrome); }
+.iv-caption { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); user-select: text; }
+.iv-count { flex: none; color: var(--muted); font-variant-numeric: tabular-nums; }
+.iv-open-error { flex: 0 1 auto; min-width: 0; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--red); }
+.iv-bar .button { height: 26px; }
 
 @media (prefers-reduced-motion: reduce) {
   .cp-glyph.spin::before, .cp-agent.running .cp-mark::before { animation: none; }

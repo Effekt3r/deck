@@ -111,19 +111,20 @@ async function start(): Promise<void> {
   })
 
   registerGitIpc({ targetsFile: join(userData, 'git-targets.json') })
-  registerClaudeIpc()
   // Keyed by this instance's userData, not just shared machine temp: a dev build started with its
   // own --user-data-dir must not clear or collide with the installed app's saved clipboard images.
   const clipboardRoot = join(app.getPath('temp'), 'Deck clipboard')
   const instance = createHash('sha1').update(userData).digest('hex').slice(0, 8)
   // Builds before per-instance folders existed saved images directly in clipboardRoot; clean those
-  // up too. Never throws, and only removes its own clipboard-*.png(.tmp) files and the folder if
-  // that empties it, so another instance's subfolder here is left alone.
+  // up too. Never throws, and only removes the files save() writes (clipboard-* and image-*, and
+  // their .tmp) and the folder if that empties it, so another instance's subfolder here is left alone.
   new TempImages(clipboardRoot).clear()
   const clip = registerClipboardIpc({
     tempDir: join(clipboardRoot, instance),
     platform: process.platform as Platform,
   })
+  // The Claude panel's viewer opens copies of Claude's images from the same temp folder.
+  registerClaudeIpc({ saveImage: (bytes, ext) => clip.saveImage(bytes, ext, 'image') })
   const usage = registerUsageIpc({
     dir: join(userData, 'usage'),
     settingsFile: claudeSettingsFile(),

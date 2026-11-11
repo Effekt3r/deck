@@ -37,6 +37,8 @@ const CLAUDE_MAX_SHARE = 0.45
 const TERMINAL_MIN = 280
 /** The usage card's fold, shared by every tab. */
 const USAGE_OPEN_KEY = 'deck.usageOpen'
+/** The Claude panel's images, shown or hidden in every tab at once (e.g. before sharing the screen). */
+const CLAUDE_IMAGES_KEY = 'deck.claudeImages'
 /** The device panel's fold, shared by every tab. */
 const DEVICE_OPEN_KEY = 'deck.deviceOpen'
 /** The device panel's share of the right pane's height above the Claude panel, shared by every tab,
@@ -75,6 +77,7 @@ export function App() {
   /** Claude's plan usage, shown at the bottom of every Claude pane, which all fold together. */
   const usage = useUsage()
   const [usageOpen, toggleUsage] = useStoredFlag(USAGE_OPEN_KEY, true)
+  const [showImages, toggleImages] = useStoredFlag(CLAUDE_IMAGES_KEY, true)
   const [deviceOpen, toggleDevice] = useStoredFlag(DEVICE_OPEN_KEY, true)
   const [deviceShare, setDeviceShare] = useState(() => clampShare(loadSize(DEVICE_SHARE_KEY, DEVICE_SHARE * 1000) / 1000))
   /** Device screens stream only while the window can be seen. */
@@ -202,7 +205,7 @@ export function App() {
           <Workspace key={tab.id} tab={tab} active={tab.id === state.active} home={info?.home ?? ''}
             gitWidth={gitWidth} claudeWidth={claudeWidth} windowsBuild={info?.windowsBuild}
             findRequest={findRequests[tab.id] ?? 0} claudeToggle={claudeToggles[tab.id] ?? 0} clipItem={clipItem} usage={usage}
-            usageOpen={usageOpen} onUsageToggle={toggleUsage}
+            usageOpen={usageOpen} onUsageToggle={toggleUsage} showImages={showImages} onImagesToggle={toggleImages}
             deviceToggle={deviceToggles[tab.id] ?? 0} deviceOpen={deviceOpen} onDeviceToggle={toggleDevice}
             deviceShare={deviceShare} onDeviceShare={storeDeviceShare} pageVisible={pageVisible}
             onGitWidth={storeGitWidth} onClaudeWidth={storeClaudeWidth} onUpdate={update} onClose={close} />
@@ -231,6 +234,9 @@ interface WorkspaceProps {
   /** The usage card is unfolded (one flag for the window). */
   usageOpen: boolean
   onUsageToggle(): void
+  /** The Claude panel shows images (one flag for the window). */
+  showImages: boolean
+  onImagesToggle(): void
   /** Incremented by View → Device Panel. */
   deviceToggle: number
   /** The device panel is unfolded (one flag for the window). */
@@ -256,7 +262,7 @@ interface WorkspaceProps {
  *  with View → Claude Panel). Inactive tabs stay mounted. */
 const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const { tab, active, home, gitWidth, claudeWidth, findRequest, claudeToggle, windowsBuild, clipItem } = props
-  const { usage, usageOpen, onUsageToggle, onGitWidth, onClaudeWidth, onUpdate, onClose } = props
+  const { usage, usageOpen, onUsageToggle, showImages, onImagesToggle, onGitWidth, onClaudeWidth, onUpdate, onClose } = props
   const { deviceToggle, deviceOpen, onDeviceToggle, deviceShare, onDeviceShare, pageVisible } = props
   const repo = tab.vars.GIT_REPO ?? ''
   const showGit = repo !== '' && !tab.gitHidden
@@ -482,8 +488,9 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
               onReset={() => onDeviceShare(DEVICE_SHARE)} />
           )}
           {showClaude && (
-            <ClaudePanel folder={folder} snapshot={claude.snapshot} phase={claude.phase} error={claude.error}
-              claudeRuns={claudeRuns} active={active} home={home} onRetry={claude.retry} />
+            <ClaudePanel folder={folder} imageFolder={claude.folder} snapshot={claude.snapshot} phase={claude.phase} error={claude.error}
+              claudeRuns={claudeRuns} active={active} home={home} onRetry={claude.retry}
+              showImages={showImages} onImagesToggle={onImagesToggle} showings={claude.showings} />
           )}
           {showClaude && usage && (
             <UsageCard state={usage} home={home} open={usageOpen} onToggle={onUsageToggle} onFocusLost={focusTerminal} />
