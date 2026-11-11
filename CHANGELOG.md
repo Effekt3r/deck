@@ -4,6 +4,36 @@ Each version's section becomes the notes of its GitHub release
 (`.github/workflows/release.yml`), so write it for the people installing Deck.
 Headings are `## <version> — <date>`, with the version as in `package.json`.
 
+## 0.5.0 — 2026-11-11
+
+See Claude's images, and your iOS app on a simulator.
+
+- **Images in the Claude panel:** an image you paste into a prompt shows as a
+  thumbnail under it, and an image a tool returned (a file Claude read, a browser
+  screenshot) under that tool's call. Click one to see it large: ← and → step through
+  the session's images, Esc closes, and **Open** shows a copy in your image app
+  (removed when Deck quits). The picture button in the panel's header hides them in
+  every tab, for example before you share your screen. Deck reads them from Claude's
+  session log on your Mac; nothing goes over the network.
+- **iOS simulators** (macOS): in an iOS app's tabs, the device panel shows a booted
+  simulator, as it shows Android phones. Click to tap, drag to swipe or scroll, and
+  type or paste with the screen selected (Option and ⌘ editing keys work as on a
+  Mac; a paste is typed as on a US keyboard, up to 1,000 characters). Home sits in
+  the panel's header. Simulators need idb-companion
+  (`brew install facebook/fb/idb-companion`); the panel offers that command to copy
+  when a simulator is booted without it.
+- **Each project on its own devices:** a project remembers every device you pick in
+  it. Once it has one, only those open its panel: with its phone unplugged, a tab
+  shows no panel rather than another project's phone or a "Which device?". The ▾
+  menu still picks another device per tab, and **View → Device Panel** offers every
+  device. Android apps whose Gradle build sits two folders down (a monorepo's
+  `apps/<app>/`) are now found.
+- **Windows:** the new features are untested there. Simulators are macOS only.
+
+**Updating from 0.4.0:** quit Deck (your tabs close), open the new `.dmg` and drag
+Deck to Applications, replacing the old one. Windows: the installer is still
+unsigned; choose **More info → Run anyway**.
+
 ## 0.4.0 — 2026-11-04
 
 See and use the phone your app runs on, right next to Claude.
