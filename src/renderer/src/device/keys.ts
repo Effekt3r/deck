@@ -1,3 +1,4 @@
+import { HID_KEY, HID_MOD } from '@shared/hid'
 import type { Platform } from '@shared/types'
 
 /** Android key codes (android.view.KeyEvent). */
@@ -97,5 +98,28 @@ export function deviceKey(e: KeyPress, platform: Platform): { keycode: number; m
   const keycode = KEYS[e.key]
   if (keycode !== undefined) return { keycode, meta: (e.shiftKey ? META_SHIFT : 0) | (mac && e.altKey ? META_ALT : 0) }
   // One character ("a", "ø", "@"); named keys ("F5", "Dead") are longer.
+  return [...e.key].length === 1 ? { text: e.key } : null
+}
+
+const HID_KEYS: Record<string, number> = {
+  Enter: HID_KEY.ENTER, Escape: HID_KEY.ESCAPE, Backspace: HID_KEY.BACKSPACE, Tab: HID_KEY.TAB,
+  Home: HID_KEY.HOME, PageUp: HID_KEY.PAGE_UP, Delete: HID_KEY.DELETE, End: HID_KEY.END,
+  PageDown: HID_KEY.PAGE_DOWN, ArrowRight: HID_KEY.RIGHT, ArrowLeft: HID_KEY.LEFT,
+  ArrowDown: HID_KEY.DOWN, ArrowUp: HID_KEY.UP,
+}
+const ARROWS = new Set(['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'])
+
+/** What a key pressed on a simulator's screen sends: a named key's USB HID usage with its modifiers,
+ *  or a typed character as text; null leaves it to Deck. iOS edits text the way a Mac does, so keys
+ *  go as they are: Option+Backspace deletes a word, Option+←/→ move by word, ⌘←/→ go to the line's
+ *  ends and ⌘↑/↓ to the text's. Every other ⌘ key, and Ctrl ones, stay Deck's. (Simulators run on
+ *  macOS only.) */
+export function simulatorKey(e: KeyPress): { usage: number; modifiers: number } | { text: string } | null {
+  if (e.isComposing) return null
+  const modifiers = (e.shiftKey ? HID_MOD.SHIFT : 0) | (e.altKey ? HID_MOD.ALT : 0)
+  if (e.metaKey) return !e.ctrlKey && ARROWS.has(e.key) ? { usage: HID_KEYS[e.key], modifiers: modifiers | HID_MOD.CMD } : null
+  if (e.ctrlKey) return null
+  const usage = HID_KEYS[e.key]
+  if (usage !== undefined) return { usage, modifiers }
   return [...e.key].length === 1 ? { text: e.key } : null
 }

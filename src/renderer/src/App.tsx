@@ -6,7 +6,7 @@ import { useClaudeSession } from './claude/useClaude'
 import { ClipboardCard } from './clipboard/ClipboardCard'
 import { useClipboardItem } from './clipboard/useClipboardItem'
 import { DevicePanel } from './device/DevicePanel'
-import { choosePanel } from './device/pick'
+import { devicesNeeded, menuOrder, panelRules } from './device/pick'
 import { useDeviceList, useDeviceProject, useHeldView } from './device/useDevices'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
@@ -256,9 +256,10 @@ interface WorkspaceProps {
 }
 
 /** A terminal tab: the git panel while the shell is in a repo (unless hidden with View → Git
- *  Panel), the terminal, and the right pane: the device panel while a device fits the project
- *  (unless hidden with View → Device Panel) above the Claude panel while Claude runs in the tab or
- *  the folder has a session (unless hidden with View → Claude Panel). Inactive tabs stay mounted. */
+ *  Panel), the terminal, and the right pane: the device panel while a device fits the project, or a
+ *  booted simulator Deck can't show asks for idb-companion (unless hidden with View → Device Panel),
+ *  above the Claude panel while Claude runs in the tab or the folder has a session (unless hidden
+ *  with View → Claude Panel). Inactive tabs stay mounted. */
 const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const { tab, active, home, gitWidth, claudeWidth, findRequest, claudeToggle, windowsBuild, clipItem } = props
   const { usage, usageOpen, onUsageToggle, showImages, onImagesToggle, onGitWidth, onClaudeWidth, onUpdate, onClose } = props
@@ -308,9 +309,9 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
     rootRef.current?.querySelector<HTMLElement>('.xterm-helper-textarea')?.focus()
   }, [])
 
-  // The device panel: the tab's project (read when the tab comes to the front), the devices adb sees
-  // while this tab may show one (null until known), and which one it shows. Shown by hand, it works
-  // without a project too.
+  // The device panel: the tab's project (read when the tab comes to the front), every device adb
+  // and, on macOS, idb-companion see while this tab may show one (null until known), and which one
+  // it shows. Shown by hand, it works without a project too.
   const [project, pickForProject, projectFresh] = useDeviceProject(folder, active)
   // A tab's device and its View → Device Panel choice hold in the project they were made in: in
   // another one they don't count, from its first render (the effect below then clears them), so a cd
@@ -320,18 +321,14 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const movedOn = deviceRoot !== null && deviceRootSeen.current !== null && deviceRoot !== deviceRootSeen.current
   const tabDevice = movedOn ? undefined : tab.device
   const tabHidden = movedOn ? undefined : tab.deviceHidden
-  const byHand = tabHidden === false
-  // Outside an Android app the panel shows only when asked for: the project's picks are remembered
-  // for then, but don't open the panel in every new tab there.
-  const deviceNeeded = tabHidden !== true && (byHand || project?.android === true || Boolean(tabDevice))
+  const platform = window.deck.platform
+  // devicesNeeded gates useDeviceList; pick.ts's panelRules has the rest, once it answers.
+  const deviceNeeded = devicesNeeded({ project, tabDevice, tabHidden, platform })
   const deviceList = useDeviceList(deviceNeeded)
   const devices = deviceList?.devices ?? NO_DEVICES
-  // Not needed any more, the list is the old one until its effect lets it go: nothing to choose from.
-  const choice = deviceNeeded && deviceList && (project || byHand)
-    ? choosePanel({ tab: tabDevice, project: project?.picks ?? [], android: project?.android ?? false, byHand, devices })
-    : null
+  const { byHand, apps, wants, looking: deviceLooking, choice, iosHint } = panelRules({ project, tabDevice, tabHidden, list: deviceList, platform })
   const deviceView = useHeldView(choice, devices, deviceRoot, tabDevice ?? project?.picks[0] ?? null)
-  const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand)
+  const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand || iosHint)
   const shownDevice = deviceView.kind === 'device' ? deviceView.device.id : null
   const showRight = showClaude || showDevice
   const [deviceDrag, setDeviceDrag] = useState<number | null>(null)
@@ -473,7 +470,8 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
         <div className={deviceSplit ? 'claude-pane with-device' : 'claude-pane'} ref={claudeRef} style={{ width: claudeDrag ?? claudeWidth }}>
           {showDevice && (
             <div className="device-slot" ref={deviceRef} style={deviceStyle}>
-              <DevicePanel view={deviceView} devices={devices} problem={deviceList?.problem ?? null} looking={deviceList === null}
+              <DevicePanel view={deviceView} devices={menuOrder(devices, apps)} problem={deviceList?.problem ?? null}
+                iosProblem={deviceList?.iosProblem ?? null} wants={wants} looking={deviceLooking}
                 open={deviceOpen} onToggle={onDeviceToggle} visible={active && pageVisible && projectFresh} claudeRuns={claudeRuns}
                 onPick={pickDevice} onInsert={insert} onFocusLost={focusTerminal} />
             </div>

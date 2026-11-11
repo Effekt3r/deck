@@ -49,7 +49,11 @@ card. Windows to test.
 The device panel, step 1 (Android: spec `…/2026-11-03-device-panel-design.md`, plan
 `docs/superpowers/plans/2026-11-03-device-panel-android.md`, built 2026-11-03/04): the phone or
 emulator a tab's project runs on, live at the top of the right pane. Checked with two phones on macOS
-(2026-11-04); the hands-on checks and Windows are still to do. Simulators and iPhones are steps 2 and 3.
+(2026-11-04); the hands-on checks and Windows are still to do. Step 2 (simulators: plan
+`docs/superpowers/plans/2026-11-10-device-panel-simulators.md`, the spec updated; built 2026-11-10):
+a booted iOS simulator in an iOS project's tabs, on macOS with idb-companion from Homebrew, with taps,
+drags, typing, pastes and Home. Checked on a throwaway simulator (2026-11-10); the camera with Claude
+running and a landscape app are still to do. iPhones are step 3.
 
 Images in the Claude panel (spec `…/2026-11-10-claude-panel-images-design.md`, plan
 `docs/superpowers/plans/2026-11-11-claude-panel-images.md`, built 2026-11-11): pasted images and the
@@ -58,7 +62,7 @@ Checked on macOS with a crafted log (2026-11-11); Franco's own sessions and Wind
 
 | Path | Role |
 |---|---|
-| `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, `quote.ts` (shell quoting, and `quoteImagePath` for Claude Code's image paths; used by main and the renderer) and `claude-images.ts` (why the Claude panel can't show an image: the reasons main answers); the only thing main and renderer share |
+| `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, `quote.ts` (shell quoting, and `quoteImagePath` for Claude Code's image paths; used by main and the renderer), `claude-images.ts` (why the Claude panel can't show an image: the reasons main answers) and `hid.ts` (a simulator's named keys as USB HID usages); the only thing main and renderer share |
 | `src/preload/index.ts` | exposes `window.deck`; sandboxed, requires only `electron` |
 | `src/main/index.ts` | lifecycle, single instance + `--open <folder>`, IPC wiring; `window.ts`, `menu.ts` (platform shortcuts → `MenuCommand`) |
 | `src/main/shell/` | `shellLaunch()` (which shell/args/env, pure), zsh `ZDOTDIR` wrappers + `deck.zsh`, PowerShell `deck.ps1`, installed to userData |
@@ -68,9 +72,9 @@ Checked on macOS with a crafted log (2026-11-11); Franco's own sessions and Wind
 | `src/main/claude/` | session-log locator, incremental tail (with each line's place), the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions, images (`images.ts`: formats, sizes, ids, lookups; `pixels.ts`: thumbnails and full images read again from the log) |
 | `src/main/clipboard/` | reads the clipboard (files, text, images; concealed copies skipped), decides what the card offers, saves pasted images for Claude |
 | `src/main/usage/` | Claude's plan usage: the status line command and script, Claude Code's settings (connect/disconnect), reading and merging reports, `usage.json` |
-| `src/main/devices/` | the device panel's main side: `android/` (finding and running adb, `track-devices` and identities, scrcpy's protocol, input checks and sessions), `streams.ts` (viewers, grace, retries), `project.ts` (a folder's project, Android app or not), `picks.ts` (`devices.json`), `ipc.ts` (wiring, lock and sleep) |
+| `src/main/devices/` | the device panel's main side: `android/` (finding and running adb, `track-devices` and identities, scrcpy's protocol, input checks and sessions), `ios/` (finding idb-companion and following the simulators; a simulator's session: its companion, gRPC on `node:http2`, `sim-video`'s fMP4, HID input), `session.ts` (one session shape for every kind), `streams.ts` (viewers, grace, retries), `registry.ts` (one list from both sources), `project.ts` (a folder's project, Android or iOS app or neither), `picks.ts` (`devices.json`), `ipc.ts` (wiring, both sources, lock and sleep) |
 | `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker, images: thumbnails, viewer), `clipboard/` (card, hook), `usage/` (card, donut, view), `device/` (below) |
-| `src/renderer/src/device/` | the device panel: which device a tab shows (`pick.ts`), the screen (WebCodecs, canvas, input: `codec.ts`, `fit.ts`, `keys.ts`), the menu, `useDevices.ts` |
+| `src/renderer/src/device/` | the device panel: which device a tab shows and the panel's rules (`pick.ts`), the screen (WebCodecs, canvas, input: `codec.ts`, `fit.ts`, `keys.ts`: Android key codes and simulators' HID usages), the menu, `useDevices.ts` |
 | `resources/` | `scrcpy-server.json` (the server's version, URL, size, SHA-256) and `THIRD-PARTY-NOTICES.txt`; the server itself is downloaded at install (`scripts/fetch-scrcpy-server.mjs`), never committed |
 
 Things that aren't obvious from the code:
@@ -96,9 +100,12 @@ Things that aren't obvious from the code:
 - Flow control: the renderer acks output from xterm's write callback and main
   pauses a pty above 100k unacknowledged chars (resumes below 10k). Anything
   that writes to xterm must ack, or that tab freezes.
-- `ipcMain.on` listeners check their arguments and pty calls are guarded: a throw
-  in a listener shows a modal error dialog (node-pty throws on a pty whose shell
-  just exited).
+- `ipcMain.on` listeners check their arguments and pty calls are guarded (node-pty
+  throws on a pty whose shell just exited). A throw in a listener leaves its work
+  half done, and no later listener on that channel runs. It reaches main's own
+  `uncaughtException` handler, which only logs it: Electron shows its modal error
+  dialog only when no other handler is registered (checked with Electron 45.2.0,
+  2026-11-10).
 - Git panel: Deck never writes to a repo or fetches. The merge-target override
   lives in userData (`git-targets.json`), never in `.git/config`. Every git call
   goes through `src/main/git/runner.ts`, which sets `GIT_NO_LAZY_FETCH` so a
@@ -430,7 +437,9 @@ Things that aren't obvious from the code:
       break is retried after 1, 2 and 5 s, then it's an error until Try again. A stream counts as
       recovered only after 5 s live, so one that dies right after its first frame still reaches the
       error. Each start has its own 20 s deadline, an ended session is never heard from again, and
-      `view()` always answers with a state.
+      `view()` always answers with a state. It takes any `DeviceSession` (`session.ts`: `input`,
+      `keyframe` and `stop`, none of which throws; guarded anyway, since a throw would leave `halt()`
+      half done); `android/session.ts` wraps scrcpy's, a simulator's is `ios/simulator.ts`'s.
   - **On the device:** `stay_awake` keeps the screen on while it's shown and plugged in:
     `stay_on_while_plugged_in` is 7 while shown and goes back when the stream stops (2 on the C66,
     2026-11-04). scrcpy's cleanup is a separate process: it deletes the jar at start and puts the
@@ -444,31 +453,150 @@ Things that aren't obvious from the code:
       Mac's `adb shell`.
     - **Known limit:** a Deck crash in the ~1 s a start takes leaves the adb client and the server
       waiting, with the screen kept on, as scrcpy itself would.
+  - **Simulators** (`ios/`, macOS only; measured 2026-11-10 with idb-companion 1.6.1 from Homebrew and
+    iOS 27.0 simulators):
+    - **Homebrew's layout:** `/opt/homebrew/bin/idb_companion` links to
+      `…/Cellar/idb-companion/1.6.1/libexec/idb_companion`, and `sim-video` sits beside that real
+      file. Deck takes `sim-video` through Homebrew's stable `opt/idb-companion/libexec/` link first: a
+      `brew upgrade` deletes the versioned path a running Deck may have resolved. `idb_companion
+      --version` prints only a build date, so "too old" means no `sim-video` ("Update it:" with
+      `brew upgrade idb-companion`).
+    - **The notifier** (`ios/simulators.ts`): one `idb_companion --notify stdout --only simulator
+      --log-level info` (idb's default, debug, would drown a real failure's last line in chatter —
+      the same reason a simulator's own companion isn't left at debug either) beside adb's tracker
+      while any tab needs devices. About 2.5 s after it starts it prints one line,
+      a JSON array of every simulator (`{"udid","name","model","os_version":"iOS 27.0","state",
+      "type":"Simulator"}`); each later line holds only the simulators whose state changed
+      (`Booting`, `Booted`, `Shutting Down`, `Shutdown`), and creating or deleting a shut-down
+      simulator prints nothing. Only booted ones are listed. It gets 20 s for its first list, else
+      it's killed as hung and the next run gets twice as long, up to 2 minutes (a list resets it);
+      one that stops is started again after 1 s, doubling to 30 s, as adb's tracker is.
+      idb_companion handles SIGTERM itself on a dispatch queue, so a hung one may never act on it:
+      every idb process gets SIGKILL 2 s after a SIGTERM it ignores (`ios/process.ts`). A run that had
+      listed keeps its list while it's away; one that never listed makes a panel asked for say "Deck
+      couldn't list the simulators", with its last words.
+    - **One list** (`registry.ts`, a pure merge; `ipc.ts` starts and stops both sources): adb's
+      devices, then the simulators, each source's problem (`problem`, `iosProblem`) and the
+      platforms still finding their first devices (`pending`).
+    - **No idb-companion:** `pgrep -x launchd_sim` (each booted simulator runs one) decides whether an
+      iOS project's panel opens to say "Deck shows simulators with idb-companion:" with Copy (or, for
+      one without `sim-video`, to update it), at each start of watching and each focus. Not the
+      selected Xcode's `simctl`: it's a bash wrapper that can run `xcodebuild -runFirstLaunch` after
+      an Xcode update, which a background hint must never start. Installed meanwhile, the next focus
+      starts the notifier, and the hint stays up until its first list rather than flash "Looking for
+      devices…".
+    - **A session** (`ios/simulator.ts`): its own `idb_companion --udid <udid> --grpc-domain-sock
+      <socket> --terminate-offline true --log-level info` (`debug` otherwise), which takes about half
+      a second to open its socket, and about 29 MB. It exits when its simulator shuts down, saying
+      "Target is no longer booted, companion going offline". Two companions for one simulator work side
+      by side (idb's own client keeps one in `/tmp/idb/`). Then `describe` for the screen's pixels and
+      points, and `sim-video stream --set <set> --udid <udid> --scale <s> --key-frame-rate 2
+      --transport fmp4 -`, the long side within 1600 px. The `hid` call opens at the first input and
+      stays open: idb applies each event as it arrives (a Home press changed the screen before the
+      call ended).
+    - **The socket's path** must stay under 104 bytes (macOS's `sun_path`): a longer one fails with
+      "GRPCCore.RuntimeError error 1", and the companion keeps running without a socket.
+      `socketDirFor` gives `<temp>/deck-<instance>/` (`<instance>` as for the clipboard's images), or
+      `/tmp/deck-<uid>-<instance>/` when that leaves no room for `<udid8>-<8 hex>.sock`. A folder that
+      isn't this user's own and closed to others, or a link, is refused; the folder goes at quit.
+      Names are random per start, so a companion slow to exit removes only its own socket.
+    - **gRPC on `node:http2`**, the few protobuf messages written by hand (`ios/proto.ts`, idb's field
+      numbers; its MIT notice is in `resources/THIRD-PARTY-NOTICES.txt`): `@grpc/grpc-js` and its
+      loader are 33 packages and 12 MB for two calls. Main runs on Electron 45's own Node (24.22)
+      while CI runs Node 22, and `node:http2` differs: `request()` on a closed session throws on 22 but
+      fails the stream a tick later on 24, and a stream the server ends while ours is open never
+      closes until we end our side. So the `ios/` tests run on both (Handy commands).
+    - **Input** (`ios/input.ts`): touches in points, the frame's pixels scaled by the screen's points.
+      A tap is a touch down, then an up; idb has no move, so a drag is a touch down at each point
+      along the way, then an up (it scrolled Settings). Keys are USB HID usages with their modifiers
+      pressed around them: Shift (225) held around 4 typed "A", and "Ab1!" was typed exactly. Typing
+      and pastes go as a US keyboard types them, at most 1,000 characters, cut before any work on
+      them. Not through the pasteboard: `xcrun simctl pbcopy` then ⌘V makes iOS ask "would like to
+      paste from CoreSimulatorBridge" every time.
+    - **fMP4, not Annex B:** with `--transport annex-b` a still screen gave SPS, PPS and one IDR, then
+      nothing: with no delimiters a picture ends only where the next begins, so the last one never
+      would. The fMP4 is `ftyp`, `moov` (`avc1` and `avcC`: High profile, 4-byte NAL lengths, one SPS,
+      one PPS), then a `moof` and an `mdat` per picture, each `mdat` one NAL, an IDR first, then P
+      slices; the first boxes came 0.95 s after the start. `ios/fmp4.ts` turns them into the Annex B
+      packets the view already decodes.
+    - **Key frames:** frames come only when the screen changes, and while it changes a key frame every
+      2 s; `sim-video` can't be asked for one. So a key frame for a viewer joining or a decoder behind
+      replays the current group of pictures when it's at most 8, else starts `sim-video` again (a new
+      one begins with a key frame): a longer replay would trip the view's 10-picture backlog rule. One
+      asked for before a `sim-video`'s first key frame has come does nothing.
+    - **Endings:** closing `sim-video`'s stdin ends it (exit 0); a bad UDID prints
+      `Error: No simulator <udid> in <set>` and exits 64. Its stderr also carries info lines
+      ("Overlay setup: screenInfo=…"), so only a line that reads as a failure is a reason. When it
+      ends without an `Error:` line, or the connection closes, the session waits up to 1 s for the
+      companion's words, since it's usually the simulator shutting down. Reasons are cut at 500
+      characters.
+    - **Node 22's kill:** a `kill()` in the same tick as a spawn that fails (ENOENT, EACCES) signals
+      pid 0, on Node 22 the caller's whole process group: `stopper()` never kills a child without a
+      pid.
+    - **`.gitignore`:** `src/main/devices/ios/` is un-ignored: Franco's global gitignore excludes every
+      `ios` folder, as it does `build/`.
+    - **Checks:** `DECK_SIMULATOR_SET` points the notifier, the companion and `sim-video` at another
+      device set, and `DECK_IDB_COMPANION` replaces where `idb_companion` is looked for (`/nowhere`
+      hides it). Never boot, shut down or type into Franco's own simulators in a check: create a
+      throwaway one in a private set (`xcrun simctl --set <dir> create …`).
+    - **Unit tests:** the notifier's lines, restarts, first-list deadline and SIGKILL; finding idb
+      (the `opt` link, the real file, `DECK_IDB_COMPANION`) and the `pgrep` hint; fMP4 split anywhere,
+      a High-profile `avcC` and broken boxes; idb's messages byte for byte against protobufjs's; gRPC
+      against a local HTTP/2 server on a Unix socket; a session against fake processes (replays and
+      restarts, its reasons, stops that leave nothing running, a companion that ignores SIGTERM); the
+      socket folder; input and `simulatorKey`; the iOS project rule; `pick.ts`'s platforms,
+      `stillLooking` and `panelRules`; `ipc.watch.test.ts`'s races between the two sources; and, on
+      macOS, simulators listed beside a fake adb (never a real one).
+    - **Known limits:** a paste of more than 1,000 characters is cut without a word, and characters a
+      US keyboard can't type are skipped; only Xcode's own device set is listed (another only with
+      `DECK_SIMULATOR_SET`); a rotated simulator in a landscape app is unchecked (idb's orientation
+      event changed no box size, as iPhone Settings stays portrait); idb-companion uninstalled while
+      its notifier runs shows the restarted notifier's ENOENT, not the install hint; a notifier that
+      never lists is started again and again, its 20 s wait doubling; a companion or notifier that
+      ignores SIGTERM can outlive Deck when it quits (Deck exits before the 2 s SIGKILL); simulators
+      of other platforms (watchOS, tvOS, visionOS) aren't listed.
   - **Which projects** (`project.ts`): a tab's project is its repository's main work tree (worktrees
     share it), else its folder. Inside git the whole repository is scanned; outside git only a Gradle
     build (`settings.gradle[.kts]` at the root or in `android/`); the home folder never: scanning `~`
     stats inside Desktop, Documents and Downloads, which can raise macOS privacy prompts for Deck,
-    and a "Don't Allow" also blocks the terminals there. An app has `AndroidManifest.xml` in
+    and a "Don't Allow" also blocks the terminals there. An Android app has `AndroidManifest.xml` in
     `src/main/` or `src/androidMain/` of a first-level folder, or of a second-level one inside
     `android/` (any case) or a first-level Gradle build of its own, or of a third-level one inside a
     second-level Gradle build (`apps/<build>/<module>/`: a monorepo's; the other first-level folders
     are listed only when nothing was found higher up); at most 200 folders per level, and 200 in all
-    at the second and third. Main caches {root, android} per folder for 30 s and reads the picks fresh.
-    `gitDirs` resolves git's relative common dir against the path it's given, so pass it a real
-    path (`project.ts` realpaths first): through a symlink or junction it lands beside the repository.
+    at the second and third. An iOS app has an Xcode project or workspace (a `.xcodeproj` or
+    `.xcworkspace` folder) at the root or in a first-level folder (`ios/Runner.xcworkspace`: Flutter,
+    React Native); outside git only in the folder itself; a Mac-only one counts too. Off macOS there's
+    no Xcode scan at all (`wantIos`). Main caches {root, android, ios} per folder for 30 s and reads
+    the picks fresh. `gitDirs` resolves git's relative common dir against the path it's given, so
+    pass it a real path (`project.ts` realpaths first): through a symlink or junction it lands beside
+    the repository.
     - **Known limits:** a folder outside git holding several Gradle builds isn't found (show the panel
       by hand); a temporary git failure is cached as "outside git" for 30 s; each worktree of a bare
       repository is its own project; a single-module app at the repository's root isn't found, nor
       one deeper than a Gradle build two levels down (`apps/<app>/android/app/`); a repository with
-      only an Android library counts as an app.
+      only an Android library counts as an app; a symlinked `.xcodeproj`, or a symlinked folder
+      anywhere in the scan, isn't seen (`readdir`'s entries are the links themselves).
   - **Which device a tab shows** (`pick.ts`): the tab's pick, else the latest connected of the
     project's picks (`devices.json`: each project's devices, latest first, at most 8; Deck 0.4 wrote
     one id per project, read as a list of one). A project that has picked devices shows no panel
     while none of them is connected: another project's phone never opens it (Guard with its C66
     unplugged asked between the S25 FE and another repository's face terminal, 2026-11-10). Nothing
-    picked yet: the only device that fits; with several the panel asks. Shown by hand, every device
-    fits. Outside an Android app the project's picks don't open the panel by themselves; they're used
-    once the panel is shown by hand.
+    picked yet: the only device that fits, by platform (phones and emulators an Android app,
+    simulators an iOS one; Flutter and React Native take both); with several the panel asks. Shown by
+    hand, every device fits. The menu lists those that fit first (`menuOrder`). Outside an Android or
+    iOS app the project's picks don't open the panel by themselves; they're used once the panel is
+    shown by hand.
+    - **Waiting:** a tab says "Looking for devices…" until the list is in and no kind it may show is
+      still `pending`: its project's apps' kinds, those of the devices picked in the project or by
+      the tab, and every kind when shown by hand (`stillLooking`). So a project with a phone and a
+      simulator asks rather than showing whichever came first, and an Android app's tab doesn't wait
+      out the notifier's 2.5 s.
+    - **The rules** are pure, in `pick.ts`: `devicesNeeded` (whether main should watch; App.tsx asks
+      before `useDeviceList`, so it can't read the list it gates) and `panelRules` (the rest, once the
+      list answers: the choice, what the panel speaks of, whether it's looking, and `iosHint`, which
+      opens an iOS project's panel for the idb-companion hint). `showDevice` and `movedOn` are still
+      in App.tsx.
     - **Holds:** a shown device that goes away stays, as "disconnected", for 10 s, and one still
       connected stays when a second arrives (no drop to "Which device?"; the menu switches). Either
       hold ends at once when the tab picks another device or moves to another project. The hold keeps
@@ -488,14 +616,17 @@ Things that aren't obvious from the code:
       picture between, "Couldn't show …" with Try again, rather than restart the device's encoder over
       and over. Each view tries the GPU first again. More than 10 frames queued: skip to the next key
       frame. Key frames asked for that way are one a second at most (each restarts the device's
-      encoder), and one held back is asked for once the gap has passed.
+      encoder), and one held back is asked for once the gap has passed, on a timer: a still
+      simulator sends no next frame to check on. A key frame arriving, or the decoder closing, clears
+      that timer.
     - **Canvas:** the fitted screen's size at `devicePixelRatio`, which it follows (another display,
       zoom). Its edge is a box-shadow ring: a border squeezed the picture inside the canvas's size and
       shifted touches. A picture of the old orientation isn't stretched into a turned canvas.
     - **Touch:** one pointer at a time. A touch in progress when the frame changes size (a rotation)
       is lifted at its last point for both sizes: scrcpy drops a touch made for another size, and may
       switch before or after it says so. A finger down when the screen goes (a tab switch, a fold) is
-      lifted too. A pinch (a wheel with Ctrl) isn't a scroll; a wheel notch is taken as 100 px.
+      lifted too. A pinch (a wheel with Ctrl) isn't a scroll; a wheel notch is taken as 100 px. A
+      simulator gets no wheel: it scrolls by dragging.
     - **Keys** (`keys.ts`): macOS's Option+Backspace/Delete/←/→ are word-wise, so they go to Android
       with Ctrl: Android's Alt+Backspace deletes the whole line. Shift is dropped on the deletes
       (Android deletes nothing for Ctrl+Shift+Backspace) and kept on the arrows. Option+↑/↓ are plain
@@ -507,12 +638,16 @@ Things that aren't obvious from the code:
       the window menu, and Android's Alt+Backspace would delete the whole line. AltGr types:
       `getModifierState('AltGraph')`, or Ctrl+Alt, since Chromium may report AltGraph only for the
       right-hand key. `menu.test.ts` checks that no menu shortcut is ever sent to the device. Tab and
-      Esc go to the device by design: the way out is a click elsewhere, or Deck's shortcuts.
+      Esc go to the device by design: the way out is a click elsewhere, or Deck's shortcuts. A
+      simulator's keys (`simulatorKey`) go as they are, since iOS edits text the way a Mac does:
+      named keys as USB HID usages with Shift and Option, ⌘ only with the arrows (the line's or the
+      text's ends), typed characters as text; every other ⌘ key and every Ctrl one stay Deck's.
     - **Pastes:** Chromium fires the Edit menu's paste (and its own Ctrl+V) at the element holding the
       page's text selection when there is one, else at the focused element. So the screen listens on
       the document and takes a paste while it has the keyboard, and pressing on it clears the page's
-      selection. Off macOS, Ctrl+V and Ctrl+Shift+V both paste. Known limit: Cmd+A on the screen
-      selects Deck's own text (the Edit menu's Select All), not the device's.
+      selection. Off macOS, Ctrl+V and Ctrl+Shift+V both paste. On a simulator the paste is typed
+      (Simulators above). Known limit: Cmd+A on the screen selects Deck's own text (the Edit menu's
+      Select All), not the device's.
   - **The panel** (`DevicePanel.tsx`, App.tsx): 60 % of the right pane at first, 15–85 % by its
     splitter (shared by every tab). Its slot shrinks first (`flex: 0 1 auto`): the device panel keeps
     152 px (its header and 120 px of screen) and the Claude panel under it 160 px
@@ -533,8 +668,9 @@ Things that aren't obvious from the code:
     only a PNG of at most 32 MiB, saves it with the clipboard's `saveImage` (same folder, cleared at
     start and quit) and returns `quoteImagePath`'s text (see the clipboard's image paths above).
   - **IPC:** a pick needs an absolute root and a project an absolute folder; a view of a device that
-    isn't listed is ignored (it could only cycle through retries); input goes through
-    `android/input.ts`'s checks. For M4, see Security below.
+    isn't listed is ignored (it could only cycle through retries); input goes to the device's
+    session, which checks it (`android/input.ts`, `ios/input.ts`) and drops what it can't use. For
+    M4, see Security below.
   - **Cost:** only the active tab's unfolded panel streams, with the window visible (page
     visibility); a stream lingers 10 s after its last viewer; lock and sleep stop it. Measured
     2026-11-04 (dev build, the C66 and S25 FE on their lock screens, so almost no frames): main, GPU
@@ -549,6 +685,30 @@ Things that aren't obvious from the code:
     the device panel had its 60 % (518 px) and the Claude panel 168 px. With real mouse clicks, a
     pick from the ▾ menu gave the keyboard back to the terminal, a click on the screen took it, and
     a fold while the screen had it gave it to the terminal.
+  - **Checked on a simulator** (2026-11-10, macOS: a dev build with its own userData,
+    `DECK_SIMULATOR_SET` at a throwaway device set with a throwaway "Deck probe" iPhone 17 on iOS 27.0,
+    and a throwaway git repository with an `App.xcodeproj`; through the DevTools protocol with trusted
+    mouse and key events, and `simctl io screenshot`; Franco's own simulators untouched):
+    - the iOS project's tab opened its panel by itself, "Deck probe · Simulator · iOS 27.0", with only
+      Home in the header; one `idb_companion --udid … --grpc-domain-sock <temp>/deck-<instance>/…` and
+      one `sim-video` from Homebrew's `opt/idb-companion/libexec`. The canvas's picture matched the
+      simulator's screenshot (Settings, Dynamic Island included);
+    - a tap on Settings' General opened it, a drag scrolled the list, the header's Home went to the
+      home screen, and typing "Ab1!" then pasting " xyz" made the search field read "Ab1! xyz". A tap
+      during an app's launch lands on its blank launch screen, as on a device;
+    - tab switches within the 10 s grace: with the screen moving (a blinking caret) each one started
+      `sim-video` again (a new pid, exactly one running); with the screen still since a fresh key
+      frame, two switches kept the same `sim-video` (the group replayed);
+    - a 1,000-character paste arrived whole, and Settings' search, searching again at every key,
+      settled about 89 s later. Home pressed 1 s in took effect 2.2 s after the paste began: the home
+      screen responds while Settings is busy;
+    - ten minutes idle (22:33–22:43), then a tap still worked: the same companion and `sim-video`
+      served the whole session;
+    - quitting left no dev build, companion, notifier or `sim-video`, and removed Deck's socket folder;
+    - with `DECK_IDB_COMPANION=/nowhere` and simulators booted (4 `launchd_sim`), the iOS project's
+      panel opened with "Deck shows simulators with idb-companion:",
+      `brew install facebook/fb/idb-companion` and Copy ("Copy the command"). Copy wasn't clicked: it
+      would overwrite Franco's clipboard.
   - **Not yet checked:**
     - by hand: taps, swipes, typing and pasting; rotating while a touch is held; the Option and Cmd
       editing keys; a paste after selecting text in Claude's reply, and after Cmd+A; the wheel's
@@ -560,7 +720,9 @@ Things that aren't obvious from the code:
       Shift-flagged key in Shift down/up;
     - dead keys: macOS should compose them (Option+E, E types "é"); unverified on Windows. Input
       methods (Chinese, Japanese, Korean) don't reach the device;
-    - Windows, all of it: `docs/TESTING.md` 18p–18y.
+    - on a simulator: the camera's `[Image #N]` with Claude running, a landscape app, the "old-idb"
+      hint (an idb-companion without `sim-video`), the notifier failing for real, two Decks at once;
+    - Windows, all of it: `docs/TESTING.md` 18p–18y (simulators don't apply there).
   - **Known limits, devices:** two devices sharing an id look like one (cheap boards' `0123456789ABCDEF`
     serial; two copies of one AVD with `-read-only`); Linux's `no permissions` shows as offline, or
     not at all when adb gives no reason; recovery and sideload devices are told to unplug; devices
@@ -728,11 +890,11 @@ excludes every `build` folder.
    accessible by integration"; seen 2026-10-31), so the run fails at the end.
    A Keychain-exported `.p12` uses old ciphers: OpenSSL 3 reads it only with
    `openssl pkcs12 -legacy`.
-5. Device panel: step 1 (Android) built 2026-11-03/04 and checked with two phones on macOS. Next:
-   Franco's hands-on checks (Device panel → "Not yet checked" above) and Windows
-   (`docs/TESTING.md` 18p–18y); then step 2, simulators (idb-companion), and step 3, iPhones (a
-   Swift helper on CoreMediaIO, once an iPhone has been seen streaming). Each step gets its own plan
-   and pull request.
+5. Device panel: step 1 (Android) built 2026-11-03/04 and checked with two phones on macOS; step 2
+   (simulators, idb-companion) built 2026-11-10. Next: Franco's hands-on checks (Device panel → "Not
+   yet checked" above) and Windows (`docs/TESTING.md` 18p–18y); then step 3, iPhones (a Swift helper
+   on CoreMediaIO, once an iPhone has been seen streaming). Each step gets its own plan and pull
+   request.
 
 Deferred from the M1 review (`3f9feb6` fixed the important ones):
 - **Windows, untested:**
@@ -787,20 +949,22 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
     Node's `fetch` ignores `HTTPS_PROXY`, so behind a proxy the install-time download fails.
   - A dev build without the server retries for about 8 s before it says so; a missing server could
     go straight to the error.
-  - A paste of more than 256 KiB is dropped without a word.
+  - A paste of more than 256 KiB is dropped without a word, and one of more than 1,000 characters on
+    a simulator is cut without one.
   - `DevicePanel`'s `State`, `Boundary` and `Chevron` copy `ClaudePanel`'s; the PNG signature check
     is in both `devices/ipc.ts` and `clipboard/read.ts`.
   - Tests: no test drives a real stream through `registerDeviceIpc` (a fake adb and a TCP server
-    standing in for scrcpy's would pin "nothing left on the phone" after a reload or quit), and
-    `App.tsx`'s panel rules (`movedOn`, `deviceNeeded`, `choice`, `showDevice`) could move into a
-    pure function with tests before step 2 adds simulators.
+    standing in for scrcpy's would pin "nothing left on the phone" after a reload or quit; likewise
+    a fake `idb_companion` and `sim-video` for a simulator). `App.tsx`'s panel rules moved into
+    `pick.ts`'s `devicesNeeded` and `panelRules`, with tests, in step 2; `showDevice` and `movedOn`
+    are still in App.tsx and could follow.
 - **Accepted risk (device panel):** on Windows `devices:project` accepts a UNC path from the tab's
   folder, which other programs' output can set (OSC 7), so Deck may run git and stat files on a
   network share: the same exposure as the git panel's.
 - **Security (M4):**
   - Check the IPC sender frame (`clipboard:paste` hands password-manager text to the renderer;
-    `devices:input` taps and types on a phone; `claude:image` and `claude:open-image` read images
-    from Claude's session logs).
+    `devices:input` taps and types on a phone or simulator; `claude:image` and `claude:open-image`
+    read images from Claude's session logs).
   - Load the renderer from a custom protocol, not `file://`.
   - Deny permission requests.
   - Set Electron fuses, after moving node-pty into a `utilityProcess` (its Windows
@@ -823,6 +987,8 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
 ```bash
 # Deck app (Node 22: export PATH="$HOME/.nvm/versions/node/v22.19.0/bin:$PATH" or `nvm use`)
 npm test && npm run typecheck && npm run build
+# the simulator code's tests on main's own Node too (Electron 45's 24.22; CI runs Node 22)
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron ./node_modules/vitest/vitest.mjs run src/main/devices/ios
 npm run dev                                   # the app, with renderer hot reload
 npx electron-vite dev --remoteDebuggingPort 9333   # + DevTools protocol for scripted checks
 # unsigned packaged app (never let it sign with whatever identity is in the keychain)

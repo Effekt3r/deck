@@ -84,15 +84,39 @@ export async function isAndroidApp(root: string): Promise<boolean> {
   return anyManifest(third)
 }
 
+/** An Xcode project or workspace: a folder Xcode opens. */
+const isXcode = (name: string) => name.endsWith('.xcodeproj') || name.endsWith('.xcworkspace')
+
+async function hasXcode(dir: string): Promise<boolean> {
+  const entries = await readdir(dir, { withFileTypes: true }).catch(() => [])
+  return entries.some((e) => e.isDirectory() && isXcode(e.name))
+}
+
+/** An iOS app has an Xcode project or workspace at the project's root (`App.xcodeproj`) or in a
+ *  first-level folder (`ios/Runner.xcworkspace`: Flutter, React Native). A Mac-only one counts too. */
+export async function isIosApp(root: string): Promise<boolean> {
+  if (await hasXcode(root)) return true
+  return (await Promise.all((await subfolders(root)).map(hasXcode))).some(Boolean)
+}
+
 /** `android` is never scanned for the home folder — resolved with `realpath` first, so a `$HOME`
  *  given in another case or through a symlink still matches (some people keep `~` as a dotfiles
  *  repo: scanning would stat into `~/Desktop`, `~/Documents` and `~/Downloads`, which can raise a
  *  macOS privacy prompt for Deck). Inside git the whole project is scanned; outside it (a copied or
- *  unpacked project, no `.git`), only when the folder is itself a Gradle build. */
-export async function describeProject(folder: string, home: string): Promise<{ root: string; android: boolean }> {
+ *  unpacked project, no `.git`), only when the folder is itself a Gradle build. Outside git, an
+ *  Xcode project counts only in the folder itself. `wantIos` false (ipc.ts, off macOS: simulators
+ *  never show there) skips the Xcode scan too, not just its result: always `ios: false`. */
+export async function describeProject(folder: string, home: string, wantIos: boolean): Promise<{ root: string; android: boolean; ios: boolean }> {
   const { root, git } = await findRoot(folder)
   const realHome = await realpath(home).catch(() => resolve(home))
-  if (pathKey(resolve(root)) === pathKey(realHome)) return { root, android: false }
-  if (!git && !(await isGradleProject(root))) return { root, android: false }
-  return { root, android: await isAndroidApp(root) }
+  if (pathKey(resolve(root)) === pathKey(realHome)) return { root, android: false, ios: false }
+  if (!git) {
+    const [android, ios] = await Promise.all([
+      isGradleProject(root).then((gradle) => gradle && isAndroidApp(root)),
+      wantIos ? hasXcode(root) : Promise.resolve(false),
+    ])
+    return { root, android, ios }
+  }
+  const [android, ios] = await Promise.all([isAndroidApp(root), wantIos ? isIosApp(root) : Promise.resolve(false)])
+  return { root, android, ios }
 }

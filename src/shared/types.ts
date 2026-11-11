@@ -312,27 +312,36 @@ export interface UsageState {
 /** Connect's or Disconnect's outcome: the new state, or what went wrong. */
 export type UsageChange = { state: UsageState } | { error: string }
 
-/** An Android phone or emulator that adb sees. */
+/** A device Deck can show: an Android phone or emulator adb sees, or a booted simulator. */
 export interface DeviceInfo {
-  /** The same across reconnects and connections: `android:<serial number>`, or
-   *  `emulator:<AVD name>` (an emulator's adb name changes with its port). */
+  /** The same across reconnects and connections: `android:<serial number>`,
+   *  `emulator:<AVD name>` (an emulator's adb name changes with its port), or `simulator:<UDID>`. */
   id: string
-  kind: 'android' | 'emulator'
-  /** The name set on the phone ("Franco's S25 FE"), else its maker and model; an emulator's AVD name. */
+  kind: 'android' | 'emulator' | 'simulator'
+  /** The name set on the phone ("Franco's S25 FE"), else its maker and model; an emulator's AVD
+   *  name; a simulator's name. */
   name: string
-  /** Its Android version and connection: "Android 13 · USB", "Android 17 · USB + Wi-Fi",
-   *  "Emulator · Android 15". */
+  /** Its system and connection: "Android 13 · USB", "Android 17 · USB + Wi-Fi",
+   *  "Emulator · Android 15", "Simulator · iOS 27.0". */
   detail: string
   /** ready: it can be shown; unauthorized: USB debugging isn't allowed on it yet; offline: adb
    *  can't reach it; connecting: adb is still setting it up. */
   state: 'ready' | 'unauthorized' | 'offline' | 'connecting'
 }
 
+/** What a device runs: Android phones and emulators, or iOS simulators. */
+export type DevicePlatform = 'android' | 'ios'
+
 /** The devices Deck sees, or why it sees none. */
 export interface DeviceList {
   devices: DeviceInfo[]
-  /** 'no-adb': adb wasn't found; { error }: adb failed; null: adb runs. */
+  /** Android: 'no-adb': adb wasn't found; { error }: adb failed; null: adb runs. */
   problem: 'no-adb' | { error: string } | null
+  /** Simulators (macOS): 'no-idb': one is booted but idb-companion isn't installed; 'old-idb': the
+   *  idb-companion found has no sim-video; { error }: its notifier failed; null otherwise. */
+  iosProblem: 'no-idb' | 'old-idb' | { error: string } | null
+  /** The platforms still finding their first devices: a tab waits only for the ones it shows. */
+  pending: DevicePlatform[]
 }
 
 /** A tab's project, for the device panel. */
@@ -341,6 +350,8 @@ export interface DeviceProject {
   root: string
   /** It's an Android app, so it takes Android phones and emulators. */
   android: boolean
+  /** It's an iOS app (an Xcode project or workspace), so it takes simulators. */
+  ios: boolean
   /** The devices picked in it, latest first (at most 8). */
   picks: string[]
 }
@@ -364,8 +375,13 @@ export type DeviceInput =
   | { type: 'scroll'; x: number; y: number; width: number; height: number; dx: number; dy: number }
   /** An Android key code pressed and let go, with Android's meta state (shift 1, alt 2). */
   | { type: 'key'; keycode: number; meta: number }
+  /** A simulator's named key (`HID_KEY` in @shared/hid) with `HID_MOD` bits. */
+  | { type: 'hid'; usage: number; modifiers: number }
+  /** A simulator's Home button. */
+  | { type: 'button'; button: 'home' }
   | { type: 'text'; text: string }
-  /** Puts `text` on the device's clipboard and pastes it. */
+  /** Android: puts `text` on the device's clipboard and pastes it. A simulator has no paste shortcut
+   *  idb can send, so it's typed instead, the same as `text`. */
   | { type: 'paste'; text: string }
 
 export interface DeckApi {
@@ -456,15 +472,16 @@ export interface DeckApi {
     disconnect(): Promise<UsageChange>
   }
   devices: {
-    /** Look for Android devices (adb) from now; the function stops this look. adb runs while any
-     *  look is on, so only while some tab needs devices. */
+    /** Look for devices (adb, and on macOS idb-companion for simulators) from now; the function
+     *  stops this look. Both run while any look is on, so only while some tab needs devices. */
     watch(): () => void
-    /** The devices now, while something watches (call watch() first); null until Deck has its first
-     *  list (adb starting, or devices still saying what they are) and whenever nothing watches. The
-     *  list is pushed when it's there. */
+    /** The devices now, while something watches (call watch() first); null until a list comes (once
+     *  some source has answered; `pending` names those still looking) and whenever nothing watches.
+     *  The list is pushed when it's there. */
     list(): Promise<DeviceList | null>
     onList(cb: (list: DeviceList) => void): () => void
-    /** `folder`'s project: its root, whether it's an Android app, and the devices picked in it. */
+    /** `folder`'s project: its root, whether it's an Android app or an iOS one, and the devices
+     *  picked in it. */
     project(folder: string): Promise<DeviceProject>
     /** Puts `id` first among the project's devices. */
     pick(root: string, id: string): Promise<void>

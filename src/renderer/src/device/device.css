@@ -118,3 +118,7 @@
 }
 .dp-choice:hover { border-color: var(--teal); }
 .dp-choice-detail { color: var(--muted); font-size: 11px; }
+
+/* Everything else a <code> needs (padding, background, font) is claude/panel.css's .cp-state code,
+   more specific than a single class: this only adds what it doesn't. */
+.dp-command { user-select: text; }

@@ -73,6 +73,7 @@ const devices = registerDeviceIpc({
   platform: 'linux',
   home: join(root, 'home'),
   env,
+  socketDir: join(root, 'sockets'),
   saveImage: (png) => saveImageImpl(png),
 })
 const { win, sent } = fakeWindow()
@@ -86,8 +87,8 @@ describe('registerDeviceIpc', () => {
   it("answers null until the first list, says so when adb can't be found, and forgets it when nothing needs devices", async () => {
     expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
     emit(IPC.devicesWatch)
-    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
-    expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [], problem: 'no-adb' })
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [] }]]))
+    expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [], problem: 'no-adb', iosProblem: null, pending: [] })
     const pushes = sent.length
     emit(IPC.devicesUnwatch)
     // Nobody listens any more: nothing is pushed, and the list is unknown again.
@@ -99,12 +100,18 @@ describe('registerDeviceIpc', () => {
     // Only git repositories are looked into for an app.
     const app = makeRepo()
     commit(app, 'app', { 'app/src/main/AndroidManifest.xml': '<manifest/>' })
-    expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, picks: [] })
+    expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, ios: false, picks: [] })
     await call(IPC.devicesPick, app, 'android:8d2e61a')
     await call(IPC.devicesPick, app, 'emulator:Pixel_9')
-    expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, picks: ['emulator:Pixel_9', 'android:8d2e61a'] })
+    expect(await call<DeviceProject>(IPC.devicesProject, app)).toEqual({ root: app, android: true, ios: false, picks: ['emulator:Pixel_9', 'android:8d2e61a'] })
     await expect(call(IPC.devicesProject, 42)).rejects.toThrow('No folder given.')
     await expect(call(IPC.devicesProject, 'relative/app')).rejects.toThrow('No folder given.')
+  })
+
+  it("reports no iOS app off macOS (this registration is 'linux'), even with an Xcode project", async () => {
+    const ios = makeRepo()
+    commit(ios, 'app', { 'App.xcodeproj/project.pbxproj': '// !$*UTF8*$!' })
+    expect(await call<DeviceProject>(IPC.devicesProject, ios)).toEqual({ root: ios, android: false, ios: false, picks: [] })
   })
 
   it('devices:pick rejects a relative root, a non-string id, and an over-long id', async () => {
@@ -160,7 +167,7 @@ describe('registerDeviceIpc', () => {
 
   it("a reload forgets the watches: devices:watch publishes no-adb again, and the old page's late unwatch does nothing", async () => {
     emit(IPC.devicesWatch)
-    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [] }]]))
 
     win.webContents.emit('did-start-loading')
     expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
@@ -170,7 +177,7 @@ describe('registerDeviceIpc', () => {
     expect(sent).toHaveLength(pushes)
 
     emit(IPC.devicesWatch) // the new page watches again
-    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [] }]]))
     emit(IPC.devicesUnwatch) // leave watchers at 0 for later tests
   })
 
@@ -196,7 +203,7 @@ describe('registerDeviceIpc', () => {
         () =>
           expect(sent.at(-1)).toEqual([
             IPC.devicesChanged,
-            [{ devices: [{ id: 'android:FAKE01', kind: 'android', name: 'FAKE01', detail: 'USB', state: 'unauthorized' }], problem: null }],
+            [{ devices: [{ id: 'android:FAKE01', kind: 'android', name: 'FAKE01', detail: 'USB', state: 'unauthorized' }], problem: null, iosProblem: null, pending: [] }],
           ]),
         { timeout: 3000 },
       )
@@ -230,11 +237,11 @@ describe('registerDeviceIpc', () => {
     chmodSync(join(lateAdbDir, 'adb'), 0o755)
     try {
       emit(IPC.devicesWatch)
-      await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb' }]]))
+      await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [] }]]))
       env.PATH = lateAdbDir // the platform tools are installed now
       win.emit('focus')
       await vi.waitFor(
-        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE03', state: 'unauthorized' })], problem: null }]]),
+        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE03', state: 'unauthorized' })], problem: null, iosProblem: null, pending: [] }]]),
         { timeout: 3000 },
       )
     } finally {
@@ -258,10 +265,10 @@ describe('registerDeviceIpc', () => {
       expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
       expect(pushes()).toBe(before)
       await vi.waitFor(
-        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE02', state: 'unauthorized' })], problem: null }]]),
+        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE02', state: 'unauthorized' })], problem: null, iosProblem: null, pending: [] }]]),
         { timeout: 3000 },
       )
-      expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [expect.objectContaining({ id: 'android:FAKE02' })], problem: null })
+      expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [expect.objectContaining({ id: 'android:FAKE02' })], problem: null, iosProblem: null, pending: [] })
     } finally {
       emit(IPC.devicesUnwatch)
       env.PATH = ''

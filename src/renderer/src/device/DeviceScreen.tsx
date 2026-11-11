@@ -1,8 +1,8 @@
 import { type KeyboardEvent, type PointerEvent as ReactPointerEvent, type Ref, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type WheelEvent } from 'react'
-import type { DeviceInput, DeviceStreamEvent } from '@shared/types'
+import type { DeviceInfo, DeviceInput, DeviceStreamEvent } from '@shared/types'
 import { avcCodec, joined } from './codec'
 import { type Box, fitSize, toFrame } from './fit'
-import { deviceKey } from './keys'
+import { deviceKey, simulatorKey } from './keys'
 
 export interface ScreenHandle {
   /** The screen now, as a PNG at the stream's size; null while there's no live picture. */
@@ -12,6 +12,8 @@ export interface ScreenHandle {
 interface DeviceScreenProps {
   deviceId: string
   name: string
+  /** Simulators take HID keys and no wheel. */
+  kind: DeviceInfo['kind']
   /** Stream now: the tab is in front, the panel unfolded, the window visible, the device ready. */
   live: boolean
   /** Why the device can't be shown (gone, not allowed, offline), over the dimmed last picture. */
@@ -49,7 +51,7 @@ function usePixelRatio(): number {
 
 /** One device's screen: its stream decoded with WebCodecs onto a canvas that fits the space, and
  *  the pointer and keyboard sent back as touches, scrolls, keys and text. */
-export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceScreenProps) {
+export function DeviceScreen({ deviceId, name, kind, live, message, handle }: DeviceScreenProps) {
   const platform = window.deck.platform
   const ratio = usePixelRatio()
   const areaRef = useRef<HTMLDivElement>(null)
@@ -72,6 +74,11 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
   const failures = useRef(0)
   const software = useRef(false)
   const lastKeyframe = useRef(-Infinity)
+  /** A held-back key frame request (the gap since the last ask hasn't passed yet): scheduled for when
+   *  it will, since sim-video (unlike scrcpy) sends nothing while the screen is still, so there may
+   *  be no next packet to recheck on. Cleared when a key frame arrives, or the decoder is replaced
+   *  (closeDecoder: reconfigured, failed, or the view stopped). */
+  const keyframeRetry = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** The latest picture, kept for redraws and screenshots; each one before it is closed. */
   const frame = useRef<VideoFrame | null>(null)
   const timestamp = useRef(0)
@@ -101,6 +108,13 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
     codec.current = ''
     waitKey.current = true
     behind.current = false
+    // A held-back request from the old decoder must not fire into the new one (configure(), after a
+    // failure that still retries) or after the screen's given up for good (failed(), the third
+    // failure in a row): the decoder it was for is gone either way.
+    if (keyframeRetry.current !== null) {
+      clearTimeout(keyframeRetry.current)
+      keyframeRetry.current = null
+    }
     if (d && d.state !== 'closed') d.close()
   }, [])
 
@@ -148,9 +162,25 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
     failures.current = 0
     software.current = false
     setBroken(null)
+    const clearKeyframeRetry = () => {
+      if (keyframeRetry.current === null) return
+      clearTimeout(keyframeRetry.current)
+      keyframeRetry.current = null
+    }
     const keyframe = () => {
+      clearKeyframeRetry()
       lastKeyframe.current = performance.now()
       window.deck.devices.keyframe(deviceId)
+    }
+    /** Asks again once the gap since the last ask has passed: now, if it already has, else on a
+     *  timer — sim-video sends nothing while the screen is still, so the next packet (which a moving
+     *  scrcpy screen would have sent by then, to recheck on) can't be relied on. Already pending: its
+     *  deadline stands (only keyframe() moves it, by clearing it first). */
+    const keyframeSoon = () => {
+      if (keyframeRetry.current !== null) return
+      const elapsed = performance.now() - lastKeyframe.current
+      if (elapsed >= KEYFRAME_GAP_MS) return keyframe()
+      keyframeRetry.current = setTimeout(keyframe, KEYFRAME_GAP_MS - elapsed)
     }
     /** A decoder failed (its error, or a frame it refused). A new one starts at the next key frame,
      *  in software from now on, since most such failures are the GPU decoder's; after MAX_FAILURES
@@ -207,16 +237,16 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
       const d = decoder.current
       if (!d || d.state !== 'configured') return
       if (waitKey.current && !event.key) {
-        // A key frame not asked for yet (one was, just before) is asked for once the gap has passed:
-        // frames keep coming (scrcpy repeats the last one every 100 ms) to check on.
-        if (behind.current && performance.now() - lastKeyframe.current >= KEYFRAME_GAP_MS) keyframe()
+        // A key frame not asked for yet (one was, just before) is asked for again once the gap has
+        // passed.
+        if (behind.current) keyframeSoon()
         return
       }
       if (d.decodeQueueSize > MAX_QUEUE) {
-        // Behind: skip to a key frame, asking for one now unless one was asked for just now.
+        // Behind: skip to a key frame, asking for one now, or once the gap since the last ask passes.
         waitKey.current = true
         behind.current = true
-        if (performance.now() - lastKeyframe.current >= KEYFRAME_GAP_MS) keyframe()
+        keyframeSoon()
         return
       }
       try {
@@ -228,6 +258,7 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
         if (event.key) {
           waitKey.current = false
           behind.current = false
+          clearKeyframeRetry()
         }
       } catch (err) {
         failed(err)
@@ -240,7 +271,7 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
       if (sizeRef.current) lift([sizeRef.current])
       stopViewing()
       off()
-      closeDecoder() // the last picture stays until the stream comes back
+      closeDecoder() // the last picture stays until the stream comes back; also ends a held-back retry
     }
   }, [deviceId, live, draw, closeDecoder, lift])
 
@@ -311,6 +342,7 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
     touch('up', e)
   }
   const onWheel = (e: WheelEvent<HTMLCanvasElement>) => {
+    if (kind === 'simulator') return // a simulator scrolls by dragging
     const point = at(e)
     // A trackpad pinch arrives as a wheel with Ctrl held: it isn't a scroll.
     if (!interactive || !point || e.ctrlKey) return
@@ -324,10 +356,17 @@ export function DeviceScreen({ deviceId, name, live, message, handle }: DeviceSc
     if (!interactive) return
     // Built by hand: a KeyboardEvent says whether AltGr is held only through getModifierState.
     const native = e.nativeEvent
-    const key = deviceKey({
+    const press = {
       key: native.key, shiftKey: native.shiftKey, ctrlKey: native.ctrlKey, metaKey: native.metaKey, altKey: native.altKey,
       altGraph: native.getModifierState('AltGraph'), isComposing: native.isComposing,
-    }, platform)
+    }
+    if (kind === 'simulator') {
+      const key = simulatorKey(press)
+      if (!key) return
+      e.preventDefault()
+      return send('usage' in key ? { type: 'hid', ...key } : { type: 'text', text: key.text })
+    }
+    const key = deviceKey(press, platform)
     if (!key) return
     e.preventDefault()
     send('keycode' in key ? { type: 'key', ...key } : { type: 'text', text: key.text })

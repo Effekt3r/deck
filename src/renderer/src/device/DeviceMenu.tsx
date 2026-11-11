@@ -19,7 +19,7 @@ export type MenuClose = 'back' | 'tab' | 'leave'
 
 const STATE_WORDS: Record<DeviceInfo['state'], string> = { ready: '', connecting: 'connecting', unauthorized: 'not allowed yet', offline: 'offline' }
 
-/** Which device the tab shows, from every device adb sees. Rendered into <body> like the session menu. */
+/** Which device the tab shows, from every device Deck sees. Rendered into <body> like the session menu. */
 export function DeviceMenu({ devices, current, anchor, onPick, onClose }: DeviceMenuProps) {
   // The cursor is a device, not a place in the list, which can change under it (one unplugged).
   const [cursorId, setCursorId] = useState<string | null>(() => current ?? devices[0]?.id ?? null)
