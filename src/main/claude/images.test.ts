@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { findImageData, IMAGE_EXT, imageId, imageRef, imageSize, imagesOf, MAX_BASE64, sniffFormat } from './images'
+import { findImageData, IMAGE_EXT, imageId, imageRef, imageSize, imagesOf, jpegOrientation, MAX_BASE64, sniffFormat } from './images'
 import { gifBytes, imageBlock, jpegBytes, pngBytes, pngHeaderBytes, webpBytes } from './test-log'
 
 const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64')
@@ -52,6 +52,10 @@ describe('imageSize', () => {
     expect(imageSize('webp', webpBytes(10, 10).subarray(0, 24))).toEqual(none)
     expect(imageSize('webp', Buffer.from('RIFF\x10\x00\x00\x00WEBPABCD\x00\x00\x00\x00......'))).toEqual(none)
   })
+
+  it('a PNG width of 0xFFFFFFFF stays unsigned', () => {
+    expect(imageSize('png', pngHeaderBytes(0xffffffff, 1))).toEqual({ width: 0xffffffff, height: 1 })
+  })
 })
 
 describe('imageRef', () => {
@@ -91,6 +95,12 @@ describe('imageRef', () => {
       expect(imageRef(bad)).toBeNull()
     }
   })
+
+  it('exactly MAX_BASE64 characters of base64 text is still listed', () => {
+    const data = b64(pngBytes(2, 2)).padEnd(MAX_BASE64, 'A')
+    expect(data.length).toBe(MAX_BASE64)
+    expect(imageRef(block(data))).toMatchObject({ format: 'png', bytes: Buffer.byteLength(data, 'base64') })
+  })
 })
 
 describe('imagesOf', () => {
@@ -116,22 +126,103 @@ describe('findImageData', () => {
   const png = b64(pngBytes(8, 8))
   const other = b64(pngBytes(9, 8))
   const id = imageId(png)
+  const bytes = Buffer.byteLength(png, 'base64')
 
   it("finds the image in a prompt's content, a tool result's content or a queued prompt's blocks", () => {
-    expect(findImageData({ type: 'user', message: { content: [block(other), block(png), { type: 'text', text: 'x' }] } }, id)).toBe(png)
-    expect(findImageData({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'ok' }, block(png)] }] } }, id)).toBe(png)
-    expect(findImageData({ type: 'attachment', attachment: { type: 'queued_command', prompt: [block(png)] } }, id)).toBe(png)
+    expect(findImageData({ type: 'user', message: { content: [block(other), block(png), { type: 'text', text: 'x' }] } }, id, bytes)).toBe(png)
+    expect(findImageData({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: [{ type: 'text', text: 'ok' }, block(png)] }] } }, id, bytes)).toBe(png)
+    expect(findImageData({ type: 'attachment', attachment: { type: 'queued_command', prompt: [block(png)] } }, id, bytes)).toBe(png)
   })
 
   it("never looks in toolUseResult, and answers null for an id the entry doesn't hold", () => {
-    expect(findImageData({ type: 'user', message: { content: [{ type: 'tool_result', content: [block(other)] }] }, toolUseResult: { file: { base64: png } } }, id)).toBeNull()
-    expect(findImageData({ type: 'user', message: { content: [block(other)] } }, id)).toBeNull()
-    for (const bad of [null, 42, {}, { message: { content: 'text' } }, { attachment: { prompt: 'text' } }]) expect(findImageData(bad, id)).toBeNull()
+    expect(findImageData({ type: 'user', message: { content: [{ type: 'tool_result', content: [block(other)] }] }, toolUseResult: { file: { base64: png } } }, id, bytes)).toBeNull()
+    expect(findImageData({ type: 'user', message: { content: [block(other)] } }, id, bytes)).toBeNull()
+    for (const bad of [null, 42, {}, { message: { content: 'text' } }, { attachment: { prompt: 'text' } }]) expect(findImageData(bad, id, bytes)).toBeNull()
+  })
+
+  it('skips a candidate whose decoded size misses the listed bytes, before it would be hashed', () => {
+    expect(findImageData({ type: 'user', message: { content: [block(png)] } }, id, Buffer.byteLength(other, 'base64'))).toBeNull()
   })
 })
 
 describe('IMAGE_EXT', () => {
   it('names the file Open writes', () => {
     expect(IMAGE_EXT).toEqual({ png: 'png', jpeg: 'jpg', gif: 'gif', webp: 'webp' })
+  })
+})
+
+describe('imageSize agrees with the decoders', () => {
+  it('JPEG: FF 00 and junk between segments are skipped, as libjpeg does', () => {
+    const real = jpegBytes(600, 400)
+    const smallSof = Buffer.from([0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x10, 0x00, 0x10, 0x03, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1])
+    const app1 = Buffer.alloc(34); app1[0] = 0xff; app1[1] = 0xe1; app1.writeUInt16BE(32, 2); smallSof.copy(app1, 14)
+    expect(imageSize('jpeg', Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0x00, 0x00, 0x10]), app1, real.subarray(2)]))).toEqual({ width: 600, height: 400 })
+    expect(imageSize('jpeg', Buffer.concat([Buffer.from([0xff, 0xd8, 0, 0, 0]), real.subarray(2)]))).toEqual({ width: 600, height: 400 })
+  })
+  it("JPEG: a SOF inside an APP1 segment (an EXIF thumbnail's) isn't the image's", () => {
+    const thumb = jpegBytes(160, 120)
+    const app1 = Buffer.concat([Buffer.from([0xff, 0xe1, 0, thumb.length + 2]), thumb])
+    expect(imageSize('jpeg', Buffer.concat([Buffer.from([0xff, 0xd8]), app1, jpegBytes(4000, 3000).subarray(2)]))).toEqual({ width: 4000, height: 3000 })
+  })
+  it('JPEG: fill bytes, and RSTn/TEM markers with no length field, are skipped before the SOF', () => {
+    const real = jpegBytes(640, 480)
+    const markers = Buffer.from([0xff, 0xff, 0xff, 0xd0, 0xff, 0xd7, 0xff, 0x01]) // fill bytes, then RST0, RST7, TEM
+    expect(imageSize('jpeg', Buffer.concat([Buffer.from([0xff, 0xd8]), markers, real.subarray(2)]))).toEqual({ width: 640, height: 480 })
+  })
+  it('GIF: grown to cover the first frame; later frames and a cut-short head keep the screen', () => {
+    const frame = (l: number, t: number, w: number, h: number) => { const d = Buffer.alloc(10); d[0] = 0x2c; d.writeUInt16LE(l, 1); d.writeUInt16LE(t, 3); d.writeUInt16LE(w, 5); d.writeUInt16LE(h, 7); return Buffer.concat([d, Buffer.from([2, 0])]) }
+    const head = gifBytes(1, 1).subarray(0, 13)
+    const ext = Buffer.from([0x21, 0xf9, 4, 0, 0, 0, 0, 0])
+    expect(imageSize('gif', Buffer.concat([head, ext, frame(50, 50, 300, 200)]))).toEqual({ width: 350, height: 250 })
+    expect(imageSize('gif', Buffer.concat([gifBytes(10, 10).subarray(0, 13), frame(0, 0, 10, 10), frame(0, 0, 300, 200)]))).toEqual({ width: 10, height: 10 })
+    expect(imageSize('gif', head)).toEqual({ width: 1, height: 1 })
+  })
+})
+
+/** A JPEG APP1 "Exif\0\0" segment with one IFD0 entry: tag 0x0112 (Orientation), as a SHORT. */
+function exifApp1(orientation: number, big = true): Buffer {
+  const u16 = (n: number) => { const buf = Buffer.alloc(2); if (big) buf.writeUInt16BE(n, 0); else buf.writeUInt16LE(n, 0); return buf }
+  const u32 = (n: number) => { const buf = Buffer.alloc(4); if (big) buf.writeUInt32BE(n, 0); else buf.writeUInt32LE(n, 0); return buf }
+  const entry = Buffer.concat([u16(0x0112), u16(3), u32(1), u16(orientation), Buffer.from([0, 0])])
+  const tiff = Buffer.concat([Buffer.from(big ? 'MM' : 'II', 'latin1'), u16(42), u32(8), u16(1), entry, u32(0)])
+  const data = Buffer.concat([Buffer.from('Exif\0\0', 'latin1'), tiff])
+  const length = Buffer.alloc(2)
+  length.writeUInt16BE(data.length + 2, 0)
+  return Buffer.concat([Buffer.from([0xff, 0xe1]), length, data])
+}
+
+/** A real JPEG with an Exif APP1 (giving `orientation`) spliced in right after its SOI. */
+function jpegWithExif(orientation: number, width: number, height: number, big = true): Buffer {
+  const real = jpegBytes(width, height)
+  return Buffer.concat([real.subarray(0, 2), exifApp1(orientation, big), real.subarray(2)])
+}
+
+describe('jpegOrientation', () => {
+  it('reads tag 0x0112 from the APP1 Exif segment, in either byte order', () => {
+    expect(jpegOrientation(jpegWithExif(6, 640, 480, true))).toBe(6)
+    expect(jpegOrientation(jpegWithExif(6, 640, 480, false))).toBe(6)
+  })
+
+  it('is 1 for orientation 1, and when there is no Exif APP1 at all', () => {
+    expect(jpegOrientation(jpegWithExif(1, 640, 480))).toBe(1)
+    expect(jpegOrientation(jpegBytes(640, 480))).toBe(1)
+  })
+
+  it('is 1 for a broken Exif segment (the signature is not "Exif\\0\\0")', () => {
+    const payload = Buffer.from('NotAnExifHere!', 'latin1') // 14 bytes: long enough, wrong signature
+    const n = payload.length + 2
+    const bogus = Buffer.concat([Buffer.from([0xff, 0xe1, n >> 8, n & 0xff]), payload])
+    expect(jpegOrientation(Buffer.concat([Buffer.from([0xff, 0xd8]), bogus, jpegBytes(640, 480).subarray(2)]))).toBe(1)
+  })
+})
+
+describe('imageSize: a rotated JPEG', () => {
+  it('swaps width and height for an EXIF orientation of 5–8', () => {
+    expect(imageSize('jpeg', jpegWithExif(6, 640, 480))).toEqual({ width: 480, height: 640 })
+  })
+
+  it('leaves width and height as the SOF gives them for orientation 1, or no Exif at all', () => {
+    expect(imageSize('jpeg', jpegWithExif(1, 640, 480))).toEqual({ width: 640, height: 480 })
+    expect(imageSize('jpeg', jpegBytes(640, 480))).toEqual({ width: 640, height: 480 })
   })
 })

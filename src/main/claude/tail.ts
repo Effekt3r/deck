@@ -20,6 +20,10 @@ export class JsonlTail {
   private partial: Buffer[] = []
   /** Where that line starts in the file. */
   private partialStart = 0
+  /** The file's inode at the last read; null before the first. A changed inode is a different file
+   *  (e.g. a log replaced by a rename) even when it's the same size or larger, which size alone
+   *  can't tell from one that just kept growing. */
+  private ino: number | null = null
   /** Size and modification time (ms) at the last read; 0 before the first. */
   size = 0
   modified = 0
@@ -28,27 +32,31 @@ export class JsonlTail {
 
   /**
    * Entries appended since the last call (parsed objects; bad lines skipped; a partial last line
-   * waits for its newline; a file that shrank is read again from the start and `reset` is true),
-   * and each entry's place in the file, at the same index. At most `maxBytes` are read per call;
-   * `more` says there is more to read already.
+   * waits for its newline; a file that shrank, or was replaced by another one, is read again from
+   * the start and `reset` is true), and each entry's place in the file, at the same index. At most
+   * `maxBytes` are read per call; `more` says there is more to read already.
    */
   async read(maxBytes = Number.POSITIVE_INFINITY): Promise<{ entries: unknown[]; places: LinePlace[]; reset: boolean; more: boolean }> {
     let size: number
+    let ino: number
     try {
       const st = await stat(this.path)
       size = st.size
+      ino = st.ino
       this.modified = st.mtimeMs
     } catch {
       return { entries: [], places: [], reset: false, more: false } // not written yet, or deleted
     }
     let reset = false
-    if (size < this.pos) {
-      // Rewritten: start again (the caller drops what it parsed).
+    if (size < this.pos || (this.ino !== null && ino !== this.ino)) {
+      // Rewritten, or replaced by a different file (a different inode): start again (the caller
+      // drops what it parsed).
       this.pos = 0
       this.partial = []
       this.partialStart = 0
       reset = true
     }
+    this.ino = ino
     this.size = size
     if (size === this.pos) return { entries: [], places: [], reset, more: false }
 

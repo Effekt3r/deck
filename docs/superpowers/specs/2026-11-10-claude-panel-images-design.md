@@ -209,8 +209,12 @@ The parser's rules, in `session.ts` and in `claude_activity_pane.py`:
   - `id`: the first 16 hex digits of the SHA-1 of its base64 text. The same image gets the same id,
     so it's never made twice, and the id says nothing about the session;
   - `format`: png, jpeg, gif or webp;
-  - `width` and `height`, from its header: PNG's IHDR, GIF's screen descriptor, WebP's VP8, VP8L or
-    VP8X, or JPEG's first SOF within the first 96 KiB. They are 0 when the header doesn't say;
+  - `width` and `height`, from its header: PNG's IHDR; GIF's screen descriptor, grown to cover its
+    first frame, as Chromium sizes one; WebP's VP8, VP8L or VP8X; or JPEG's first SOF within the
+    first 96 KiB, found by a libjpeg-style marker walk (fill bytes, stray bytes between segments and
+    FF 00 are skipped, and a decoy SOF inside another segment's data isn't read as one). They are 0
+    when the header doesn't say. A JPEG with an EXIF orientation of 5–8 has them swapped, so it's
+    listed upright;
   - `bytes`;
   - `paste`: its `[Image #N]` number, from `imagePasteIds` when that has one positive integer per
     image.
@@ -260,6 +264,10 @@ The parser's rules, in `session.ts` and in `claude_activity_pane.py`:
     - JPEG sources as JPEG at quality 85: 3–6 ms, 9–27 KB. As PNG they cost 13–15 ms and 61–89 KB;
   - **GIF and WebP:** `nativeImage` can't decode them, so the thumbnail is the image itself when it is
     at most 1 MiB, else "No preview". An animated GIF moves in its thumbnail. None were in the logs.
+  - **A rotated JPEG (EXIF orientation 5–8):** already shown upright by the width/height swap above,
+    but that's a listing fact, not a pixel rotation — `nativeImage` doesn't honour EXIF orientation,
+    only Chromium does. So its bytes are passed through rather than resized with `nativeImage`, which
+    would hand back a sideways thumbnail.
   - **Size guard:** more than 16,384 px a side or 40 MP (from the header, which is what the decoder
     uses) is "Too large to show", before anything is decoded. The largest here was 3.4 MP.
 - **Full images:**

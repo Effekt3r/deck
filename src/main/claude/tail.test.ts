@@ -1,4 +1,4 @@
-import { appendFileSync, readFileSync, truncateSync, writeFileSync } from 'node:fs'
+import { appendFileSync, readFileSync, renameSync, truncateSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import { JsonlTail, type LinePlace } from './tail'
@@ -47,6 +47,21 @@ describe('JsonlTail', () => {
     appendFileSync(path, '{"b":1}\n')
     expect(await tail.read()).toEqual({ entries: [{ b: 1 }], places: [{ offset: 0, length: 7 }], reset: true, more: false })
     expect((await tail.read()).reset).toBe(false)
+  })
+
+  it('treats a replaced file (a different inode, even the same size or larger) like a shrink', async () => {
+    const path = file()
+    writeFileSync(path, '{"a":1}\n{"b":"x')
+    const tail = new JsonlTail(path)
+    expect((await tail.read()).places).toEqual([{ offset: 0, length: 7 }])
+    const swap = `${path}.new`
+    writeFileSync(swap, '{"n":1}\n{"n":2}\n{"n":3}\n{"n":4}\n')
+    renameSync(swap, path)
+    const read = await tail.read()
+    expect(read.reset).toBe(true)
+    const bytes = readFileSync(path)
+    expect(read.places.map((p) => bytes.toString('utf8', p.offset, p.offset + p.length))).toEqual(['{"n":1}', '{"n":2}', '{"n":3}', '{"n":4}'])
+    expect(read.entries).toEqual([{ n: 1 }, { n: 2 }, { n: 3 }, { n: 4 }])
   })
 
   it('a missing file reads as nothing, and is read once it appears', async () => {

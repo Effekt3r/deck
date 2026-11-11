@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { crc32, deflateSync } from 'node:zlib'
 import { encodeFolder } from './locator'
+import type { LinePlace } from './tail'
 
 const made: string[] = []
 // Entries get increasing, fixed timestamps.
@@ -38,10 +39,8 @@ export function removeClaudeHomes(): void {
 }
 
 /** A log line that is JSON, and where it is in the file: bytes, without its newline. */
-export interface LogLine {
+export interface LogLine extends LinePlace {
   entry: unknown
-  offset: number
-  length: number
 }
 
 /** The log's whole lines (ended by a newline) that are JSON, with their places, as JsonlTail reads them. */

@@ -198,7 +198,7 @@ export interface ClaudeImage {
   height: number
   /** Its size, decoded. */
   bytes: number
-  /** Its [Image #N] number, for an image pasted into a prompt. */
+  /** Its [Image #N] number, for an image pasted into a prompt or an AskUserQuestion answer. */
   paste?: number
 }
 
