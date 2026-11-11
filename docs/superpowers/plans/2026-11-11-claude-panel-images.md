@@ -3467,6 +3467,22 @@ git -c user.email=franco@effektstudios.com commit -m "Claude images: IPC for thu
 ```
 
 ---
+**After review (Tasks 9-12, built in `7bf5f92`..`09dabe5`):** what later tasks must know:
+- The reasons main answers are in `src/shared/claude-images.ts`: `GONE` ("No longer in the session
+  log"), `TOO_LARGE`, `UNDECODABLE`, `NO_PREVIEW` and a new `UNREADABLE` ("Couldn't read the session
+  log", a read that timed out or failed). Task 13 imports them from `@shared/claude-images` instead of
+  defining `UNDECODABLE` itself; `COULD_NOT_LOAD` stays the renderer's own.
+- Both image handlers wait for the folder's first update (`hub.settled`), so a thumbnail asked for
+  right after a tab comes back gets its pixels, not "No longer in the session log".
+- Task 15: a tile whose answer was an error asks again when its panel is shown again (its tab comes
+  to the front, or the panel's subscribe answers again), so a moved image's message lasts "until the
+  panel is shown again" as the spec says, not until the tile remounts. Test it.
+- A rotated JPEG over 1 MiB, like GIF and WebP, answers "No preview" (it still opens upright).
+- Docs (Task 19): the known limit that decoding a 20-40 MP PNG runs on main's thread (an estimated
+  100-300 ms stall); the per-job 15 s timeout; places carry the image's listed size.
+
+---
+
 ### Task 13: Sizes, captions, the feed's images and the thumbnail cache
 
 **Files:**
