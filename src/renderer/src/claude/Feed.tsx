@@ -1,20 +1,49 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { ClaudeFeedItem } from '@shared/types'
-import { feedKeys, NO_KEYS, sameItem, toolKind, toolLabel, type ToolKind } from './feedItems'
+import { sameItem, toolKind, toolLabel, type ToolKind } from './feedItems'
+import { ImageTiles } from './ImageTiles'
+import { itemImages } from './images'
 import { MarkdownView } from './MarkdownView'
+import { NearView, type Observe } from './useThumbnail'
 
 interface FeedProps {
   /** Oldest first. */
   items: ClaudeFeedItem[]
+  /** Each item's React key, kept from snapshot to snapshot (feedKeys). */
+  keys: number[]
   showThinking: boolean
   /** A turn is open: running tools pulse. (One a killed Claude left running doesn't.) */
   live: boolean
+  /** The folder the snapshot came from: its images are asked for there. */
+  folder: string
+  /** Thumbnails, or "▣ N images" while they're hidden. */
+  showImages: boolean
+  /** Counts the panel's showings: a thumbnail that couldn't be shown asks again at the next. */
+  showings: number
+  /** Opens the viewer on image `<row key>:<index>`. */
+  onOpenImage(key: string): void
 }
 
 /** This close to the end counts as at the end (px). */
 const AT_END = 24
 
-const FeedContext = createContext<{ pause(): void }>({ pause: () => {} })
+interface FeedContextValue {
+  pause(): void
+  folder: string
+  showImages: boolean
+  showings: number
+  openImage(key: string): void
+  observe: Observe
+}
+
+const FeedContext = createContext<FeedContextValue>({
+  pause: () => {},
+  folder: '',
+  showImages: true,
+  showings: 0,
+  openImage: () => {},
+  observe: () => () => {},
+})
 
 /** Prompts, thinking, replies, tool calls and notices, newest at the bottom. It follows
  *  the end while the view is there; scrolling up pauses it (like the prototype's f, End
@@ -22,11 +51,9 @@ const FeedContext = createContext<{ pause(): void }>({ pause: () => {} })
  *  and only re-render when their content changed, so a streaming turn stays smooth; and
  *  while paused, the browser's scroll anchoring keeps the rows in view in place when a
  *  row above changes (a tool done) or old ones drop off the top. */
-export function Feed({ items, showThinking, live }: FeedProps) {
+export function Feed({ items, keys, showThinking, live, folder, showImages, showings, onOpenImage }: FeedProps) {
   const scrollRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
-  const keysRef = useRef(NO_KEYS)
-  const keys = useMemo(() => (keysRef.current = feedKeys(keysRef.current, items)).keys, [items])
 
   const following = useRef(true)
   /** A pointer is down on the rows (selecting text): no jumping to the end under it. */
@@ -54,12 +81,29 @@ export function Feed({ items, showThinking, live }: FeedProps) {
     setPausedAfter(null)
     toEnd()
   }, [toEnd])
-  const context = useMemo(() => ({ pause }), [pause])
+  // Thumbnails ask for their pixels when they come near view: one observer for the feed, made once
+  // the scroller is there (a child's effect runs after the refs are set).
+  const nearRef = useRef<NearView | null>(null)
+  const observe = useCallback<Observe>((el, near) => {
+    const root = scrollRef.current
+    if (!root) return () => {}
+    nearRef.current ??= new NearView(root)
+    return nearRef.current.watch(el, near)
+  }, [])
+  useEffect(() => () => {
+    nearRef.current?.dispose()
+    nearRef.current = null
+  }, [])
+  const context = useMemo(() => ({ pause, folder, showImages, showings, openImage: onOpenImage, observe }),
+    [pause, folder, showImages, showings, onOpenImage, observe])
 
-  // After every change: at the end while following.
+  // After every change: at the end while following. Showing thinking or images changes many rows'
+  // heights at once, and scroll anchoring may keep a row above the end in place: its scroll event can
+  // come before the ResizeObserver below and pause the feed (seen with images, on the first switch
+  // after a start), so the view goes to the end here, before either.
   useLayoutEffect(() => {
     if (following.current) toEnd()
-  }, [items, showThinking, toEnd])
+  }, [items, showThinking, showImages, toEnd])
 
   useEffect(() => {
     const el = scrollRef.current
@@ -129,7 +173,7 @@ export function Feed({ items, showThinking, live }: FeedProps) {
 
   const rows: ReactNode[] = []
   for (let i = 0; i < items.length; i++) {
-    if (showThinking || items[i].kind !== 'thinking') rows.push(<Row key={keys[i]} item={items[i]} />)
+    if (showThinking || items[i].kind !== 'thinking') rows.push(<Row key={keys[i]} rowKey={keys[i]} item={items[i]} />)
   }
 
   return (
@@ -157,12 +201,14 @@ export function Feed({ items, showThinking, live }: FeedProps) {
 /** How far the view is from the end (px). */
 const fromEnd = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight
 
-const Row = memo(function Row({ item }: { item: ClaudeFeedItem }) {
+const Row = memo(function Row({ item, rowKey }: { item: ClaudeFeedItem; rowKey: number }) {
   switch (item.kind) {
     case 'prompt':
       return (
         <div className={item.text.startsWith('! ') ? 'fi-prompt shell' : 'fi-prompt'}>
-          <Clamp lines={8}>{item.text}</Clamp>
+          {/* A prompt that is only images shows just them, not "[image]". */}
+          {!(item.text === '[image]' && itemImages(item).length > 0) && <Clamp lines={8}>{item.text}</Clamp>}
+          <Images item={item} rowKey={rowKey} />
         </div>
       )
     case 'thinking':
@@ -180,7 +226,7 @@ const Row = memo(function Row({ item }: { item: ClaudeFeedItem }) {
         </div>
       )
     case 'tool':
-      return <Tool item={item} />
+      return <Tool item={item} rowKey={rowKey} />
     case 'notice':
       return (
         <div className={`fi fi-notice ${item.tone === 'error' ? 'error' : 'info'}`}>
@@ -191,9 +237,15 @@ const Row = memo(function Row({ item }: { item: ClaudeFeedItem }) {
     default:
       return null
   }
-}, (a, b) => sameItem(a.item, b.item))
+}, (a, b) => a.rowKey === b.rowKey && sameItem(a.item, b.item))
 
-function Tool({ item }: { item: Extract<ClaudeFeedItem, { kind: 'tool' }> }) {
+/** The item's thumbnails, with the feed's folder, switch and viewer. */
+function Images({ item, rowKey }: { item: Extract<ClaudeFeedItem, { kind: 'prompt' | 'tool' }>; rowKey: number }) {
+  const { folder, showImages, showings, openImage, observe } = useContext(FeedContext)
+  return <ImageTiles item={item} rowKey={rowKey} folder={folder} show={showImages} showings={showings} onOpen={openImage} observe={observe} />
+}
+
+function Tool({ item, rowKey }: { item: Extract<ClaudeFeedItem, { kind: 'tool' }>; rowKey: number }) {
   const kind = toolKind(item.name)
   const name = toolLabel(item.name)
   const title = [item.summary ? `${name}: ${item.summary}` : name, item.state === 'error' && item.error ? item.error : '']
@@ -207,6 +259,7 @@ function Tool({ item }: { item: Extract<ClaudeFeedItem, { kind: 'tool' }> }) {
         {item.state === 'running' && <span className="fi-live" aria-label="running" />}
       </span>
       {item.state === 'error' && item.error && <span className="fi-tool-error">{item.error}</span>}
+      <Images item={item} rowKey={rowKey} />
     </div>
   )
 }

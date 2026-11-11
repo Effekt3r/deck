@@ -1,9 +1,10 @@
-import { existsSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { basename, resolve, sep } from 'node:path'
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClaudeSnapshot } from '@shared/types'
 import { type Client, type ClaudeDeps, ClaudeSubscriptions, type LogReader, TIMING } from './subscriptions'
-import { type LogWriter, makeClaudeHome, readEntries, removeClaudeHomes, sessionLog } from './test-log'
+import { imageId } from './images'
+import { type LogWriter, makeClaudeHome, pngBytes, readLines, removeClaudeHomes, sessionLog } from './test-log'
 
 const FOLDER = resolve(sep, 'Users', 'me', 'app')
 const T0 = Date.UTC(2026, 9, 31, 8, 0, 0)
@@ -37,21 +38,21 @@ function setup() {
     open: vi.fn((path: string): LogReader => {
       opened.push(path)
       let seen = 0
-      // As JsonlTail: what was appended since the last read; a deleted log has nothing new; one
-      // that got shorter was rewritten and is read again from the start (reset).
+      // As JsonlTail: what was appended since the last read, with each line's place; a deleted log
+      // has nothing new; one that got shorter was rewritten and is read again from the start (reset).
       const reader = {
         modified: 0, // the time seen at the last read
         async read(maxBytes?: number) {
           reads.count++
           reads.maxBytes.push(maxBytes)
-          if (!existsSync(path)) return { entries: [], reset: false, more: false }
+          if (!existsSync(path)) return { entries: [], places: [], reset: false, more: false }
           reader.modified = mtime.get(path) ?? 0
-          const all = readEntries(path)
+          const all = readLines(path)
           const reset = all.length < seen
           if (reset) seen = 0
-          const entries = all.slice(seen, seen + chunk.entries)
-          seen += entries.length
-          return { entries, reset, more: seen < all.length }
+          const lines = all.slice(seen, seen + chunk.entries)
+          seen += lines.length
+          return { entries: lines.map((l) => l.entry), places: lines.map(({ offset, length }) => ({ offset, length })), reset, more: seen < all.length }
         },
       }
       return reader
@@ -553,6 +554,58 @@ describe('ClaudeSubscriptions', () => {
       { id: 's1', path: expect.stringContaining('s1.jsonl'), title: 'title of s1', modified: T0 },
     ])
     expect(deps.title).toHaveBeenCalledTimes(1)
+  })
+
+  it("imageSource(): an image of the followed session is found in its log's line, and only there", async () => {
+    const { hub, session, write, change, client } = setup()
+    const shot = pngBytes(12, 8)
+    const id = imageId(Buffer.from(shot).toString('base64'))
+    const s1 = session('s1', (l) => l.prompt('first'))
+    await hub.subscribe(client(1), FOLDER)
+    expect(hub.imageSource(FOLDER, id)).toBeNull()
+    write(s1, (l) => l.prompt('look', { images: [shot] }))
+    await change(basename(s1.path))
+    const source = hub.imageSource(FOLDER, id)
+    expect(source).toMatchObject({ path: s1.path, bytes: shot.length })
+    const line = readFileSync(s1.path).toString('utf8', source!.offset, source!.offset + source!.length)
+    expect(JSON.parse(line)).toMatchObject({ message: { content: [{ type: 'image' }, { type: 'text', text: 'look' }] } })
+    expect(hub.imageSource(FOLDER, '0123456789abcdef')).toBeNull()
+    expect(hub.imageSource(resolve(sep, 'Users', 'me', 'other'), id)).toBeNull()
+    hub.unsubscribe(1, FOLDER)
+    expect(hub.imageSource(FOLDER, id)).toBeNull() // nobody follows the folder now
+  })
+
+  it('settled(): an image asked for while a subscribe is still reading the log is found once it has', async () => {
+    const { hub, deps, session, client } = setup()
+    const shot = pngBytes(12, 8)
+    const id = imageId(Buffer.from(shot).toString('base64'))
+    session('s1', (l) => l.prompt('look', { images: [shot] }))
+    await hub.settled(FOLDER) // nobody follows the folder: at once
+    const subscribed = hub.subscribe(client(1), FOLDER) // a tab coming back to the front
+    expect(hub.imageSource(FOLDER, id)).toBeNull() // its log isn't open yet
+    await hub.settled(FOLDER)
+    expect(hub.imageSource(FOLDER, id)).toMatchObject({ bytes: shot.length })
+    await subscribed
+    hub.unsubscribe(1, FOLDER)
+    // A first update that fails still settles, and never rejects.
+    vi.mocked(deps.scan).mockRejectedValueOnce(new Error('EIO'))
+    const failing = hub.subscribe(client(2), FOLDER)
+    await expect(hub.settled(FOLDER)).resolves.toBeUndefined()
+    expect(hub.imageSource(FOLDER, id)).toBeNull()
+    await failing
+    hub.unsubscribe(2, FOLDER)
+  })
+
+  it('imageSource(): a rewritten log gives the same image its new place', async () => {
+    const { hub, session, rewrite, change, client } = setup()
+    const shot = pngBytes(12, 8)
+    const id = imageId(Buffer.from(shot).toString('base64'))
+    const s1 = session('s1', (l) => l.prompt('before').prompt('look', { images: [shot] }))
+    await hub.subscribe(client(1), FOLDER)
+    expect(hub.imageSource(FOLDER, id)?.offset).toBe(readLines(s1.path)[1].offset)
+    rewrite(s1, (l) => l.prompt('look', { images: [shot] })) // shorter: parsed again from the start
+    await change(basename(s1.path))
+    expect(hub.imageSource(FOLDER, id)).toMatchObject({ offset: 0, length: readLines(s1.path)[0].length })
   })
 
   it('a scan that fails keeps what it had', async () => {

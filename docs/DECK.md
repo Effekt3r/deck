@@ -155,6 +155,9 @@ deck/
      WebCodecs), with touch, keys, paste and a screenshot for Claude. Simulators (idb-companion) and
      iPhones (a Swift helper on CoreMediaIO) are steps 2 and 3. Spec:
      `docs/superpowers/specs/2026-11-03-device-panel-design.md`.
+   - **Images in the Claude panel** (built 2026-11-11; Windows to test): pasted images and tool
+     results' images as thumbnails in the feed, a viewer and Open, read from the session log (no
+     network). Spec: `docs/superpowers/specs/2026-11-10-claude-panel-images-design.md`.
    - **Permissions guide on first launch:** walk through every permission Deck
      needs, including what Claude Code and the other tools in its tabs need
      (macOS asks on Deck's behalf for anything run in a tab): Desktop, Documents

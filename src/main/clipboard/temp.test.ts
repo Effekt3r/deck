@@ -102,11 +102,42 @@ describe('TempImages', () => {
     expect(readdirSync(dir).some((name) => name.endsWith('.tmp'))).toBe(false)
   })
 
+  it("an opened copy of Claude's image: image-<hash>.<ext>, kept apart from a pasted PNG of the same bytes", async () => {
+    const dir = join(root, 'opened')
+    const temp = new TempImages(dir)
+    const jpg = await temp.save(new Uint8Array([0xff, 0xd8, 0xff]), 'jpg', 'image')
+    expect(jpg).toMatch(/[\\/]image-[0-9a-f]{16}\.jpg$/)
+    expect(await temp.save(new Uint8Array([0xff, 0xd8, 0xff]), 'jpg', 'image')).toBe(jpg)
+    const png = await temp.save(new Uint8Array([0xff, 0xd8, 0xff]))
+    expect(png).toMatch(/[\\/]clipboard-[0-9a-f]{16}\.png$/)
+    expect(readdirSync(dir).sort()).toHaveLength(2)
+  })
+
+  it('refuses a name it would not clear', async () => {
+    const temp = new TempImages(join(root, 'refuse'))
+    await expect(temp.save(new Uint8Array([1]), 'exe' as never)).rejects.toThrow('Not an image Deck saves')
+    await expect(temp.save(new Uint8Array([1]), 'png', '../x' as never)).rejects.toThrow('Not an image Deck saves')
+    expect(existsSync(join(root, 'refuse'))).toBe(false)
+  })
+
+  it('clear() removes every kind save() writes, and their leftover .tmp files, and nothing else', async () => {
+    const dir = join(root, 'kinds')
+    const temp = new TempImages(dir)
+    for (const ext of ['png', 'jpg', 'gif', 'webp'] as const) await temp.save(new Uint8Array([ext.length, 1]), ext, 'image')
+    await temp.save(new Uint8Array([7]))
+    writeFileSync(join(dir, 'image-0123456789abcdef.webp.00000000-0000-4000-8000-000000000000.tmp'), 'half')
+    writeFileSync(join(dir, 'image-0123456789abcdef.exe'), 'not ours')
+    writeFileSync(join(dir, 'photo-0123456789abcdef.png'), 'not ours')
+    temp.clear()
+    expect(readdirSync(dir).sort()).toEqual(['image-0123456789abcdef.exe', 'photo-0123456789abcdef.png'])
+  })
+
   it.skipIf(process.platform === 'win32')('a new folder gets mode 0700 and a new file 0600', async () => {
     const dir = join(root, 'perms')
     const temp = new TempImages(dir)
     const file = await temp.save(new Uint8Array([1, 2, 3]))
     expect(statSync(dir).mode & 0o777).toBe(0o700)
     expect(statSync(file).mode & 0o777).toBe(0o600)
+    expect(statSync(await temp.save(new Uint8Array([4]), 'webp', 'image')).mode & 0o777).toBe(0o600)
   })
 })
