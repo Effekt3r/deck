@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import type { ClaudeSessionSummary } from '@shared/types'
 import { SessionState } from './session'
 import { buildSnapshot, sessionTitle } from './snapshot'
-import { type LogWriter, makeClaudeHome, readEntries, removeClaudeHomes, sessionLog } from './test-log'
+import { type LogWriter, makeClaudeHome, pngBytes, readEntries, readLines, removeClaudeHomes, sessionLog } from './test-log'
 
 const FOLDER = resolve(sep, 'Users', 'me', 'app')
 let home = ''
@@ -89,6 +89,35 @@ describe('buildSnapshot', () => {
     s.ingest(readEntries(log.toolResult('t1').path).at(-1))
     expect(before.feed.at(-1)).toMatchObject({ state: 'running' })
     expect(buildSnapshot(summary(log), s, 0, new Map(), 'newest').feed.at(-1)).toMatchObject({ state: 'done' })
+  })
+})
+
+describe('buildSnapshot: images', () => {
+  it('copies the images and their count beyond ten; where their lines are stays out', () => {
+    const many = Array.from({ length: 11 }, (_, i) => pngBytes(20 + i, 10))
+    const log = sessionLog(home, FOLDER).prompt('see', { images: many, pasteIds: many.map((_, i) => i + 1) })
+      .readImage('t1', resolve(FOLDER, 'a.png'), pngBytes(8, 8))
+    const s = new SessionState(FOLDER)
+    for (const line of readLines(log.path)) s.ingest(line.entry, { offset: line.offset, length: line.length })
+    const snap = buildSnapshot(summary(log), s, 0, new Map(), 'newest')
+    expect(snap.feed[0]).toMatchObject({ kind: 'prompt', text: 'see', moreImages: 1 })
+    expect(snap.feed[0]).toEqual(s.feed[0])
+    expect(snap.feed[1]).toMatchObject({ kind: 'tool', id: 't1', images: [{ format: 'png', width: 8, height: 8 }] })
+    const json = JSON.stringify(snap)
+    expect(json).not.toContain('offset')
+    expect(json).not.toContain(Buffer.from(pngBytes(8, 8)).toString('base64'))
+  })
+
+  it("shares nothing with the state: images a tool's result adds later don't change an earlier snapshot", () => {
+    const log = sessionLog(home, FOLDER).toolUse('t1', 'Read', { file_path: resolve(FOLDER, 'a.png') })
+    const s = parse(log)
+    const before = buildSnapshot(summary(log), s, 0, new Map(), 'newest')
+    s.ingest(readEntries(log.toolResult('t1', { content: [{ type: 'image', source: { type: 'base64', data: Buffer.from(pngBytes(8, 8)).toString('base64') } }] }).path).at(-1))
+    expect(before.feed[0]).not.toHaveProperty('images')
+    expect(buildSnapshot(summary(log), s, 0, new Map(), 'newest').feed[0]).toMatchObject({ images: [{ width: 8 }] })
+    const again = buildSnapshot(summary(log), s, 0, new Map(), 'newest')
+    if (again.feed[0].kind === 'tool') again.feed[0].images![0].width = 99
+    expect(s.feed[0]).toMatchObject({ images: [{ width: 8 }] })
   })
 })
 
