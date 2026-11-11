@@ -1159,6 +1159,23 @@ git -c user.email=franco@effektstudios.com commit -m "Claude panel: each log ent
 
 ---
 
+**After review (Tasks 1-4, built in `ef5799f`..`cb69583`):** what later tasks must know, since
+their snippets were written before it:
+- `findImageData(line, id, bytes)` now takes the image's listed byte count (third argument) and
+  compares the decoded length before hashing a candidate. Every call in Tasks 10-12 passes the
+  `bytes` of the `ClaudeImage` being looked up.
+- `imageSize` follows the decoders: JPEG sizes come from a libjpeg-style marker walk, a GIF's size is
+  its screen grown to cover the first frame, and a JPEG with an EXIF orientation of 5-8 reports its
+  upright (swapped) size. `jpegOrientation(bytes)` (1 when absent) is exported.
+- Task 10: a JPEG whose `jpegOrientation` isn't 1 is passed through as is for its thumbnail (as GIF and
+  WebP are, under the same 1 MiB limit), since Chromium honours EXIF orientation and `nativeImage`
+  doesn't; beyond the limit it gets the "Too large to show" placeholder like them.
+- The tail treats a changed inode like a shrink (a replaced log is read again from the start); the
+  docs task's "Rewritten logs" line says so.
+- Ids are `digest().toString('hex', 0, 8)` (16 hex characters, as before).
+
+---
+
 ### Task 5: Images on prompts and tool calls
 
 **Files:**
