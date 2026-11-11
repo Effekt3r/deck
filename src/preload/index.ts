@@ -53,6 +53,8 @@ const api: DeckApi = {
     onUpdate: (cb) => on<[string, ClaudeSnapshot | null]>(IPC.claudeUpdate, cb),
     sessions: (folder) => ipcRenderer.invoke(IPC.claudeSessions, folder),
     follow: (folder, sessionId) => ipcRenderer.invoke(IPC.claudeFollow, folder, sessionId),
+    image: (folder, id, size) => ipcRenderer.invoke(IPC.claudeImage, folder, id, size),
+    openImage: (folder, id) => ipcRenderer.invoke(IPC.claudeOpenImage, folder, id),
   },
   clipboard: {
     current: () => ipcRenderer.invoke(IPC.clipboardCurrent),
