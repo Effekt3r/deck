@@ -1,5 +1,6 @@
 import { open } from 'node:fs/promises'
 import { nativeImage } from 'electron'
+import { GONE, NO_PREVIEW, TOO_LARGE, UNDECODABLE, UNREADABLE } from '@shared/claude-images'
 import type { ClaudeImageData, ClaudeImageFormat } from '@shared/types'
 import { findImageData, imageSize, type ImageSize, jpegOrientation, sniffFormat } from './images'
 
@@ -13,22 +14,21 @@ export interface ImageSource {
   bytes: number
 }
 
-/** Why an image can't be shown, as the panel says it. */
-export const GONE = 'No longer in the session log'
-export const TOO_LARGE = 'Too large to show'
-export const UNDECODABLE = "Couldn't decode this image"
-export const NO_PREVIEW = 'No preview'
-
 /** A line longer than this isn't read again (the longest measured was 2.2 MB). */
 export const MAX_LINE = 64 * 1024 * 1024
 /** Thumbnails fit 480×360: twice the panel's 240×180 box, for Retina screens. */
 export const THUMB = { width: 480, height: 360 }
+/** A request still unanswered this long after its turn came (its read hung: a network volume under
+ *  CLAUDE_CONFIG_DIR, say) answers UNREADABLE, and the next one starts; whatever it gets later is
+ *  dropped. Reading a line again took 0.1–0.9 ms (measured). */
+export const JOB_TIMEOUT_MS = 15_000
 /** Larger than this, by the header (which is what a decoder goes by), isn't decoded or shown: the
  *  largest measured was 3.4 MP. */
 const MAX_SIDE = 16_384
 const MAX_PIXELS = 40_000_000
-/** GIF and WebP can't be decoded here (nativeImage reads neither), and a JPEG turned by its EXIF
- *  orientation would come out turned back, so their thumbnail is the image itself, up to this size. */
+/** A thumbnail that is the image itself is at most this size. GIF and WebP can't be decoded here
+ *  (nativeImage reads neither), and a JPEG turned by its EXIF orientation would come out turned back,
+ *  so beyond it they have none (NO_PREVIEW); a PNG or JPEG within 480×360 is made again instead. */
 const MAX_PASSTHROUGH = 1024 * 1024
 /** JPEG thumbnails' quality: 9–27 KB at 480×360 (measured). */
 const JPEG_QUALITY = 85
@@ -42,7 +42,9 @@ interface Loaded {
 type Job = () => Promise<void>
 
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve))
-const dataUrl = (format: ClaudeImageFormat, bytes: Uint8Array) => `data:image/${format};base64,${Buffer.from(bytes).toString('base64')}`
+// A view of the bytes, not a copy: they can be megabytes, and the URL is another copy already.
+const dataUrl = (format: ClaudeImageFormat, bytes: Uint8Array) =>
+  `data:image/${format};base64,${Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('base64')}`
 const tooLarge = (size: ImageSize) => size.width > MAX_SIDE || size.height > MAX_SIDE || size.width * size.height > MAX_PIXELS
 
 /** `size` fitted into `box`, never enlarged. */
@@ -72,7 +74,8 @@ async function readLine(source: ImageSource): Promise<Buffer> {
  * Images' pixels, read again from their lines in the session log when the panel shows them: main
  * keeps none. One request at a time, a full image (or an Open) ahead of thumbnails, with a turn of
  * the event loop between two, so terminal output and other IPC go on (the longest step measured was
- * 16 ms). Nothing here throws: every request answers, with { error } when it must.
+ * 16 ms). Nothing here throws: every request answers, with { error } when it must, within
+ * JOB_TIMEOUT_MS of starting.
  */
 export class ImagePixels {
   private readonly first: Job[] = []
@@ -99,13 +102,21 @@ export class ImagePixels {
     }, { error: GONE })
   }
 
-  private queue<T>(lane: Job[], work: () => Promise<T>, failed: T): Promise<T> {
-    return new Promise<T>((resolve) => {
+  /** Runs `work` in its turn: `failed` if it throws, UNREADABLE if it hasn't finished JOB_TIMEOUT_MS
+   *  after it started (its late result is dropped: the request has its answer, the next has started). */
+  private queue<T>(lane: Job[], work: () => Promise<T>, failed: T): Promise<T | { error: string }> {
+    return new Promise((resolve) => {
       lane.push(async () => {
+        let timer: NodeJS.Timeout | undefined
+        const timedOut = new Promise<{ error: string }>((r) => {
+          timer = setTimeout(() => r({ error: UNREADABLE }), JOB_TIMEOUT_MS)
+        })
         try {
-          resolve(await work())
+          resolve(await Promise.race([work(), timedOut]))
         } catch {
           resolve(failed)
+        } finally {
+          clearTimeout(timer)
         }
       })
       void this.pump()
@@ -157,13 +168,14 @@ export class ImagePixels {
   private thumb({ bytes, format, size }: Loaded): ClaudeImageData {
     if (!size.width || !size.height) return { error: UNDECODABLE }
     if (tooLarge(size)) return { error: TOO_LARGE }
-    if (format === 'gif' || format === 'webp') return bytes.length <= MAX_PASSTHROUGH ? { url: dataUrl(format, bytes) } : { error: NO_PREVIEW }
-    // nativeImage ignores a JPEG's EXIF orientation and Chromium honours it: one made here would come
-    // out turned back (sideways, upside down or mirrored), so the renderer gets the image itself.
-    if (format === 'jpeg' && jpegOrientation(bytes) !== 1) {
-      return bytes.length <= MAX_PASSTHROUGH ? { url: dataUrl(format, bytes) } : { error: TOO_LARGE }
+    // nativeImage reads neither GIF nor WebP, and ignores a JPEG's EXIF orientation, which Chromium
+    // honours: one made here would come out turned back (sideways, upside down or mirrored). So the
+    // renderer gets the image itself, which the viewer and Open still show when it's too big for that.
+    if (format === 'gif' || format === 'webp' || (format === 'jpeg' && jpegOrientation(bytes) !== 1)) {
+      return bytes.length <= MAX_PASSTHROUGH ? { url: dataUrl(format, bytes) } : { error: NO_PREVIEW }
     }
-    if (size.width <= THUMB.width && size.height <= THUMB.height) return { url: dataUrl(format, bytes) }
+    // Small enough to be its own thumbnail, unless its bytes aren't (metadata, no compression).
+    if (size.width <= THUMB.width && size.height <= THUMB.height && bytes.length <= MAX_PASSTHROUGH) return { url: dataUrl(format, bytes) }
     const image = nativeImage.createFromBuffer(bytes)
     if (image.isEmpty()) return { error: UNDECODABLE }
     const fit = fitInto(image.getSize(), THUMB)

@@ -27,6 +27,12 @@ export interface AgentInfo {
   failed: boolean
 }
 
+/** Where a listed image's line is in the log, and the size it was listed with (ClaudeImage.bytes):
+ *  what finds it in that line again (findImageData compares the size before hashing a candidate). */
+export interface ImagePlace extends LinePlace {
+  bytes: number
+}
+
 type ToolItem = Extract<ClaudeFeedItem, { kind: 'tool' }>
 type PromptItem = Extract<ClaudeFeedItem, { kind: 'prompt' }>
 
@@ -64,9 +70,9 @@ export class SessionState {
   private items: ClaudeFeedItem[] = []
   /** Each tool call's feed item, by tool_use id, so its result updates it in place. */
   private readonly tools = new Map<string, ToolItem>()
-  /** Where each listed image's line is in the log, by item and image id: its pixels are read from
-   *  there again. Gone with the item; never part of a snapshot. */
-  private readonly places = new WeakMap<ClaudeFeedItem, Map<string, LinePlace>>()
+  /** Where each listed image's line is in the log, and its listed size, by item and image id: its
+   *  pixels are read from there again. Gone with the item; never part of a snapshot. */
+  private readonly places = new WeakMap<ClaudeFeedItem, Map<string, ImagePlace>>()
   /** The line of the entry being ingested, while it is. */
   private ingesting: LinePlace | null = null
   /** Sub-agents by the id of the Agent/Task tool call that started them. */
@@ -129,9 +135,9 @@ export class SessionState {
     }
   }
 
-  /** Where the line holding image `id` is, for an item still in the feed that lists it; null when
-   *  no item does (it left the feed) or its line's place wasn't given. */
-  imagePlace(id: string): LinePlace | null {
+  /** Where the line holding image `id` is, and the size that item lists it with, for an item still in
+   *  the feed that lists it; null when no item does (it left the feed) or its line's place wasn't given. */
+  imagePlace(id: string): ImagePlace | null {
     const feed = this.feed
     for (let i = feed.length - 1; i >= 0; i--) {
       const place = this.places.get(feed[i])?.get(id)
@@ -287,7 +293,7 @@ export class SessionState {
   }
 
   /** Lists `images` on `item`: at most MAX_IMAGES, the rest counted. Each one listed remembers the
-   *  line being ingested, where its pixels are read from again. */
+   *  line being ingested, where its pixels are read from again, and its listed size (its own copy). */
   private attach(item: PromptItem | ToolItem, images: ClaudeImage[]): void {
     if (!images.length) return
     const listed = item.images ?? []
@@ -301,7 +307,7 @@ export class SessionState {
       listed.push(image)
       if (this.ingesting) {
         if (!places) this.places.set(item, (places = new Map()))
-        places.set(image.id, this.ingesting)
+        places.set(image.id, { offset: this.ingesting.offset, length: this.ingesting.length, bytes: image.bytes })
       }
     }
     item.images = listed

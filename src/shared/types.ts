@@ -419,8 +419,9 @@ export interface DeckApi {
     /** Follow one session (by id), or the newest again (null). */
     follow(folder: string, sessionId: string | null): Promise<void>
     /** Image `id` of the session `folder` follows, read again from its log: 'thumb' fits 480×360 (a
-     *  small PNG or JPEG is itself), 'full' is the image itself. { error } says why there's none:
-     *  "No longer in the session log", "Too large to show", "Couldn't decode this image", "No preview". */
+     *  small PNG or JPEG is itself), 'full' is the image itself. { error } says why there's none, in
+     *  the words of claude-images.ts: "No longer in the session log", "Too large to show", "Couldn't
+     *  decode this image", "No preview", "Couldn't read the session log". */
     image(folder: string, id: string, size: 'thumb' | 'full'): Promise<ClaudeImageData>
     /** Opens a copy of image `id` in the default image app (the copy is removed when Deck quits):
      *  null, or why it couldn't. */

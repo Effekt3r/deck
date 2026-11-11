@@ -1,5 +1,5 @@
 import { basename, resolve } from 'node:path'
-import type { ClaudeFeedItem, ClaudeImage, ClaudeResume, ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
+import type { ClaudeResume, ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
 import { pathKey } from '../projects/config'
 import { cut } from './describe'
 import type { SessionFile } from './locator'
@@ -149,16 +149,6 @@ const unref = (t: NodeJS.Timeout) => {
 }
 const nextTurn = () => new Promise<void>((resolve) => setImmediate(resolve))
 
-/** Image `id` as the newest item listing it has it: its size is what the line is searched for. */
-function listedImage(feed: readonly ClaudeFeedItem[], id: string): ClaudeImage | undefined {
-  for (let i = feed.length - 1; i >= 0; i--) {
-    const item = feed[i]
-    const image = item.kind === 'prompt' || item.kind === 'tool' ? item.images?.find((im) => im.id === id) : undefined
-    if (image) return image
-  }
-  return undefined
-}
-
 /**
  * Who follows which folder's Claude session: one watcher per folder however many clients
  * subscribe; snapshots are pushed only when they changed. Follows the newest session (switching
@@ -235,14 +225,22 @@ export class ClaudeSubscriptions {
 
   /** Where image `id` of the session `folder` follows is in its log: the line to read it from again,
    *  and the size it was listed with. Only an image an item of that session's feed lists; null
-   *  otherwise, or when nobody follows the folder. */
+   *  otherwise, or when nobody follows the folder. Ask once settled() has resolved. */
   imageSource(folder: string, id: string): ImageSource | null {
     const w = this.folders.get(folderKey(folder))
     const log = w && !w.closed ? w.log : null
-    if (!log) return null
-    const place = log.state.imagePlace(id)
-    const image = place ? listedImage(log.state.feed, id) : undefined
-    return place && image ? { path: log.path, offset: place.offset, length: place.length, bytes: image.bytes } : null
+    const place = log?.state.imagePlace(id)
+    return log && place ? { path: log.path, offset: place.offset, length: place.length, bytes: place.bytes } : null
+  }
+
+  /** Resolves once the update a subscribe of `folder` is waiting for has run, so the session's log is
+   *  open and read: a tab coming back to the front shows its last snapshot, and asks for its images,
+   *  before its subscribe has been answered, and until that update has run imageSource() finds
+   *  nothing. At once when nobody follows the folder or no subscribe is waiting; never later than
+   *  that subscribe's answer, and never rejects (run() doesn't). */
+  async settled(folder: string): Promise<void> {
+    const w = this.folders.get(folderKey(folder))
+    if (w && !w.closed && w.pending > 0 && w.running) await w.running
   }
 
   /** Follow one session of a subscribed folder (an id from sessions()), or the newest again (null).

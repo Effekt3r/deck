@@ -1,13 +1,15 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { GONE, NO_PREVIEW, TOO_LARGE, UNDECODABLE, UNREADABLE } from '@shared/claude-images'
 import { imageId } from './images'
-import { GONE, type ImageSource, ImagePixels, MAX_LINE, NO_PREVIEW, THUMB, TOO_LARGE, UNDECODABLE } from './pixels'
+import { type ImageSource, ImagePixels, JOB_TIMEOUT_MS, MAX_LINE, THUMB } from './pixels'
 import { gifBytes, imageBlock, jpegBytes, makeFolder, pngBytes, pngHeaderBytes, removeClaudeHomes, webpBytes } from './test-log'
 
 /** A stand-in for Electron's nativeImage: it "decodes" an image to its header's size; its PNG and JPEG
- *  are text naming their size, so a test can read what was made. `fail` makes every decode empty. */
-const native = vi.hoisted(() => ({ fail: false, decoded: 0 }))
+ *  are text naming their size, so a test can read what was made. `fail` makes every decode empty, and
+ *  `throws` makes it throw. */
+const native = vi.hoisted(() => ({ fail: false, throws: false, decoded: 0 }))
 vi.mock('electron', async () => {
   const { imageSize, sniffFormat } = await import('./images')
   interface Fake {
@@ -28,6 +30,7 @@ vi.mock('electron', async () => {
     nativeImage: {
       createFromBuffer: (bytes: Buffer) => {
         native.decoded++
+        if (native.throws) throw new Error('the decoder crashed')
         const format = sniffFormat(bytes)
         const size = format && !native.fail ? imageSize(format, bytes) : { width: 0, height: 0 }
         return fake(size.width, size.height)
@@ -38,6 +41,7 @@ vi.mock('electron', async () => {
 
 beforeEach(() => {
   native.fail = false
+  native.throws = false
   native.decoded = 0
 })
 afterAll(removeClaudeHomes)
@@ -119,7 +123,7 @@ describe('ImagePixels: thumbnails and full images', () => {
     expect(native.decoded).toBe(0)
   })
 
-  it('a JPEG turned by its EXIF orientation is its own thumbnail up to 1 MiB, else Too large to show; its full image either way', async () => {
+  it('a JPEG turned by its EXIF orientation is its own thumbnail up to 1 MiB, else No preview; its full image either way', async () => {
     const pixels = new ImagePixels()
     // nativeImage ignores the orientation, so a thumbnail made from it would come out turned back.
     for (const orientation of [6, 3]) {
@@ -129,12 +133,25 @@ describe('ImagePixels: thumbnails and full images', () => {
     }
     const big = turnedJpeg(6, 1600, 1200, 1024 * 1024)
     const large = logWith(big, 'image/jpeg')
-    expect(await pixels.get(large.source, large.id, 'thumb')).toEqual({ error: TOO_LARGE })
+    expect(await pixels.get(large.source, large.id, 'thumb')).toEqual({ error: NO_PREVIEW }) // it still opens upright
     expect(await pixels.get(large.source, large.id, 'full')).toEqual({ url: `data:image/jpeg;base64,${b64(big)}` })
     expect(native.decoded).toBe(0)
     // Orientation 1 is the picture as stored: fitted as any other JPEG.
     const upright = logWith(turnedJpeg(1, 1600, 1200), 'image/jpeg')
     expect(decode(await pixels.get(upright.source, upright.id, 'thumb'))).toEqual({ type: 'jpeg', text: 'jpeg 480x360 q85' })
+  })
+
+  it('a PNG or JPEG within 480×360 whose bytes are over 1 MiB is made again, at its own size', async () => {
+    const pixels = new ImagePixels()
+    const cases = [
+      [Buffer.concat([pngBytes(320, 200), Buffer.alloc(1024 * 1024)]), { type: 'png', text: 'png 320x200' }],
+      [jpegBytes(400, 300, { app1Bytes: 1024 * 1024 }), { type: 'jpeg', text: 'jpeg 400x300 q85' }],
+    ] as const
+    for (const [bytes, made] of cases) {
+      const { source, id } = logWith(bytes)
+      expect(decode(await pixels.get(source, id, 'thumb'))).toEqual(made)
+    }
+    expect(native.decoded).toBe(2)
   })
 
   it('more than 16,384 px a side or 40 MP is Too large to show, before anything is decoded', async () => {
@@ -155,6 +172,15 @@ describe('ImagePixels: thumbnails and full images', () => {
     const broken = logWith(Buffer.from([0xff, 0xd8, 0xff, 0xda, 0, 8, 1, 2, 3, 4, 5, 6]))
     expect(await pixels.get(broken.source, broken.id, 'thumb')).toEqual({ error: UNDECODABLE })
     expect(await pixels.get(broken.source, broken.id, 'full')).toEqual({ error: UNDECODABLE })
+  })
+
+  it("a decoder that throws is Couldn't decode this image, and the next request still runs", async () => {
+    const pixels = new ImagePixels()
+    const png = logWith(pngBytes(1440, 900))
+    native.throws = true
+    expect(await pixels.get(png.source, png.id, 'thumb')).toEqual({ error: UNDECODABLE })
+    native.throws = false
+    expect(decode(await pixels.get(png.source, png.id, 'thumb'))).toEqual({ type: 'png', text: 'png 480x300' })
   })
 
   it('a line that no longer holds the image, a missing log or a line cut short is No longer in the session log', async () => {
@@ -188,6 +214,13 @@ describe('ImagePixels: Open', () => {
     expect(got).toMatchObject({ format: 'png' })
     expect('bytes' in got && Buffer.compare(got.bytes, bytes)).toBe(0)
     expect(await new ImagePixels().bytes(source, '0123456789abcdef')).toEqual({ error: GONE })
+  })
+
+  it('bytes(): a line too long to read again is refused before it is read', async () => {
+    const read = vi.fn(async () => Buffer.alloc(0))
+    const got = await new ImagePixels(read).bytes({ path: 'x', offset: 0, length: MAX_LINE + 1, bytes: 1 }, '0123456789abcdef')
+    expect(got).toEqual({ error: TOO_LARGE })
+    expect(read).not.toHaveBeenCalled()
   })
 })
 
@@ -230,6 +263,40 @@ describe('ImagePixels: the queue', () => {
     expect(broken).toEqual({ error: GONE })
     expect(opened).toMatchObject({ format: 'png' })
     expect(full).toHaveProperty('url')
+  })
+
+  it('a read that never finishes answers after JOB_TIMEOUT_MS, the next request runs, and the late result is dropped', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) // setImmediate, between two jobs, stays real
+    try {
+      const lines = new Map<string, Buffer>()
+      let finish: (line: Buffer) => void = () => {}
+      const pixels = new ImagePixels((source) => source.path === 'hung'
+        ? new Promise<Buffer>((resolve) => { finish = resolve }) // a hung network volume
+        : Promise.resolve(lines.get(source.path)!))
+      const add = (name: string, bytes: Uint8Array) => {
+        const line = Buffer.from(JSON.stringify({ message: { content: [imageBlock(bytes)] } }))
+        lines.set(name, line)
+        return { source: { path: name, offset: 0, length: line.length, bytes: bytes.length }, id: imageId(b64(bytes)) }
+      }
+      const a = add('a', pngBytes(8, 8))
+      const b = add('b', pngBytes(9, 8))
+      const answered: string[] = []
+      const hung = pixels.bytes({ ...a.source, path: 'hung' }, a.id).then((r) => (answered.push('hung'), r))
+      const next = pixels.get(b.source, b.id, 'thumb').then((r) => (answered.push('next'), r))
+      await vi.advanceTimersByTimeAsync(JOB_TIMEOUT_MS - 1)
+      expect(answered).toEqual([])
+      await vi.advanceTimersByTimeAsync(1)
+      expect(await hung).toEqual({ error: UNREADABLE })
+      expect(await next).toHaveProperty('url')
+      expect(answered).toEqual(['hung', 'next'])
+      // The read comes back after all: its answer has gone already, so it is dropped.
+      finish(lines.get('a')!)
+      await vi.advanceTimersByTimeAsync(0)
+      expect(await hung).toEqual({ error: UNREADABLE })
+      expect(vi.getTimerCount()).toBe(0) // every job's timer is cleared or has run
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a request after the queue ran dry starts it again', async () => {

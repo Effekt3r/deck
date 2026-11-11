@@ -575,6 +575,27 @@ describe('ClaudeSubscriptions', () => {
     expect(hub.imageSource(FOLDER, id)).toBeNull() // nobody follows the folder now
   })
 
+  it('settled(): an image asked for while a subscribe is still reading the log is found once it has', async () => {
+    const { hub, deps, session, client } = setup()
+    const shot = pngBytes(12, 8)
+    const id = imageId(Buffer.from(shot).toString('base64'))
+    session('s1', (l) => l.prompt('look', { images: [shot] }))
+    await hub.settled(FOLDER) // nobody follows the folder: at once
+    const subscribed = hub.subscribe(client(1), FOLDER) // a tab coming back to the front
+    expect(hub.imageSource(FOLDER, id)).toBeNull() // its log isn't open yet
+    await hub.settled(FOLDER)
+    expect(hub.imageSource(FOLDER, id)).toMatchObject({ bytes: shot.length })
+    await subscribed
+    hub.unsubscribe(1, FOLDER)
+    // A first update that fails still settles, and never rejects.
+    vi.mocked(deps.scan).mockRejectedValueOnce(new Error('EIO'))
+    const failing = hub.subscribe(client(2), FOLDER)
+    await expect(hub.settled(FOLDER)).resolves.toBeUndefined()
+    expect(hub.imageSource(FOLDER, id)).toBeNull()
+    await failing
+    hub.unsubscribe(2, FOLDER)
+  })
+
   it('imageSource(): a rewritten log gives the same image its new place', async () => {
     const { hub, session, rewrite, change, client } = setup()
     const shot = pngBytes(12, 8)

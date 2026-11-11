@@ -204,6 +204,40 @@ describe('claude IPC', () => {
     emit(wc, IPC.claudeUnsubscribe, folder)
   })
 
+  it('claude:image waits for a subscribe still reading the log: a tab coming back asks at once', async () => {
+    const wc = new FakeContents()
+    const folder = makeFolder()
+    const png = pngBytes(16, 16)
+    sessionLog(home, folder).prompt('look', { images: [png] })
+    const snapshot = (await invoke(wc, IPC.claudeSubscribe, folder)) as ClaudeSnapshot
+    const { id } = (snapshot.feed[0] as { images: ClaudeImage[] }).images[0]
+    emit(wc, IPC.claudeUnsubscribe, folder) // the tab goes to the back
+    const again = invoke(wc, IPC.claudeSubscribe, folder) // and comes back, showing its last snapshot
+    expect(await invoke(wc, IPC.claudeImage, folder, id, 'thumb')).toEqual({ url: `data:image/png;base64,${Buffer.from(png).toString('base64')}` })
+    await again
+    emit(wc, IPC.claudeUnsubscribe, folder)
+  })
+
+  it("claude:open-image without a way to save a copy says so, before it looks for the image", async () => {
+    const handlers = new Map(ipc.handlers)
+    const listeners = new Map(ipc.listeners)
+    try {
+      registerClaudeIpc({ env: { CLAUDE_CONFIG_DIR: home } }) // no saveImage
+      const wc = new FakeContents()
+      const folder = makeFolder()
+      sessionLog(home, folder).prompt('look', { images: [pngBytes(30, 20)] })
+      const snapshot = (await invoke(wc, IPC.claudeSubscribe, folder)) as ClaudeSnapshot
+      const { id } = (snapshot.feed[0] as { images: ClaudeImage[] }).images[0]
+      const cant = { error: "Deck can't save a copy to open." }
+      expect(await invoke(wc, IPC.claudeOpenImage, folder, id)).toEqual(cant)
+      expect(await invoke(wc, IPC.claudeOpenImage, folder, '0123456789abcdef')).toEqual(cant) // not looked up
+      emit(wc, IPC.claudeUnsubscribe, folder)
+    } finally {
+      for (const [channel, fn] of handlers) ipc.handlers.set(channel, fn)
+      for (const [channel, fn] of listeners) ipc.listeners.set(channel, fn)
+    }
+  })
+
   it('a destroyed or reloading webContents loses its subscriptions', async () => {
     const folder = makeFolder()
     const log = sessionLog(home, folder).prompt('go')

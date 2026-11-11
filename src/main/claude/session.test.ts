@@ -553,18 +553,28 @@ describe('SessionState: images', () => {
     expect(imagesOn(s.feed[0])?.[0].id).toBe(imagesOn(s.feed[1])?.[0].id)
   })
 
-  it("imagePlace: the line holding an image, found by id; null for an id no item lists, or a place that wasn't given", () => {
+  it("imagePlace: the line holding an image and its listed size, found by id; null for an id no item lists, or a place that wasn't given", () => {
     const log = newLog().prompt('first', { images: [a] }).readImage('t1', join(FOLDER, 'b.png'), b)
     const s = parsePlaced(log)
     const bytes = readFileSync(log.path)
     for (const image of [a, b]) {
       const place = s.imagePlace(id(image))
-      expect(place).not.toBeNull()
+      expect(place).toMatchObject({ bytes: image.length })
       const line = bytes.toString('utf8', place!.offset, place!.offset + place!.length)
       expect(line).toContain(Buffer.from(image).toString('base64'))
     }
     expect(s.imagePlace('0123456789abcdef')).toBeNull()
     expect(parse(log).imagePlace(id(a))).toBeNull() // ingested without places
+  })
+
+  it('imagePlace: the place ingest() was given is copied, never kept', () => {
+    const log = newLog().prompt('look', { images: [a] })
+    const [line] = readLines(log.path)
+    const given = { offset: line.offset, length: line.length, entry: line.entry }
+    const s = new SessionState(FOLDER)
+    s.ingest(line.entry, given)
+    given.offset = 999
+    expect(s.imagePlace(id(a))).toEqual({ offset: line.offset, length: line.length, bytes: a.length })
   })
 
   it('a place goes with its item when the item leaves the feed', () => {

@@ -1169,7 +1169,7 @@ their snippets were written before it:
   upright (swapped) size. `jpegOrientation(bytes)` (1 when absent) is exported.
 - Task 10: a JPEG whose `jpegOrientation` isn't 1 is passed through as is for its thumbnail (as GIF and
   WebP are, under the same 1 MiB limit), since Chromium honours EXIF orientation and `nativeImage`
-  doesn't; beyond the limit it gets the "Too large to show" placeholder like them.
+  doesn't; beyond the limit it says "No preview", like them (it still opens upright in the viewer).
 - The tail treats a changed inode like a shrink (a replaced log is read again from the start); the
   docs task's "Rewritten logs" line says so.
 - Ids are `digest().toString('hex', 0, 8)` (16 hex characters, as before).

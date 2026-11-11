@@ -1,11 +1,12 @@
 import { isAbsolute } from 'node:path'
 import { ipcMain, shell, type WebContents } from 'electron'
 import { IPC } from '@shared/channels'
+import { GONE } from '@shared/claude-images'
 import type { ClaudeImageData, ClaudeResume, ClaudeSessionSummary, ClaudeSnapshot } from '@shared/types'
 import type { TempImageExt } from '../clipboard/temp'
 import { IMAGE_EXT } from './images'
 import { scanFolder } from './locator'
-import { GONE, ImagePixels } from './pixels'
+import { ImagePixels } from './pixels'
 import { agentSteps } from './subagents'
 import { type Client, ClaudeSubscriptions } from './subscriptions'
 import { JsonlTail } from './tail'
@@ -86,19 +87,23 @@ export function registerClaudeIpc(opts: ClaudeIpcOptions = {}): void {
     if (!isFolder(folder) || !(sessionId === null || isSessionId(sessionId))) return
     await hub.follow(folder, sessionId).catch(() => {})
   })
+  // A tab coming back to the front asks for its images before its subscribe has been answered: each
+  // waits for that subscribe's read (settled()), or the image isn't found in a log not open yet.
   ipcMain.handle(IPC.claudeImage, async (_e, folder: unknown, id: unknown, size: unknown): Promise<ClaudeImageData> => {
     if (!isFolder(folder) || !isImageId(id) || !isSize(size)) return { error: GONE }
+    await hub.settled(folder)
     const source = hub.imageSource(folder, id)
     if (!source) return { error: GONE }
     return pixels.get(source, id, size) // never rejects
   })
   ipcMain.handle(IPC.claudeOpenImage, async (_e, folder: unknown, id: unknown): Promise<{ error: string } | null> => {
     if (!isFolder(folder) || !isImageId(id)) return { error: GONE }
+    if (!opts.saveImage) return { error: "Deck can't save a copy to open." } // before reading anything
+    await hub.settled(folder)
     const source = hub.imageSource(folder, id)
     if (!source) return { error: GONE }
     const image = await pixels.bytes(source, id)
     if ('error' in image) return image
-    if (!opts.saveImage) return { error: "Deck can't save a copy to open." }
     let file: string
     try {
       // Named by the bytes' own format, so only an image viewer ever opens it.
