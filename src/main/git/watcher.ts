@@ -84,7 +84,12 @@ export function watchRepo(
     if (probing) return
     probing = true
     try {
-      const [before, now] = await Promise.all([last, probe().catch(() => null)])
+      const base = last
+      const [before, now] = await Promise.all([base, probe().catch(() => null)])
+      // A file event moved the baseline while this probe ran. The event's probe started later, so
+      // it stays: putting this older result back would make the next poll rebuild for the event's
+      // change a second time. Anything newer still differs from it at the next poll.
+      if (last !== base) return
       last = Promise.resolve(now)
       if (now === null || now !== before) fire()
     } finally {
