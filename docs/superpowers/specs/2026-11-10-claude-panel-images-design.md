@@ -122,7 +122,9 @@ runs on 12 images from these logs, with the images kept in memory only:
   - "No longer in the session log";
   - "Too large to show";
   - "Couldn't decode this image";
-  - "No preview" (a large GIF or WebP; it still opens).
+  - "No preview" (a large GIF, WebP or turned JPEG; it still opens);
+  - "Couldn't read the session log" (its line didn't come back within 15 s; see
+    [After review](#after-review-2026-11-11)).
 - **Tooltip:** what the image is and its size:
   - "Image #3 · 1440 × 900 · PNG · 212 KB";
   - "Read · docs/shot.png · 923 × 2000 · PNG · 284 KB".
@@ -163,8 +165,12 @@ A click on a thumbnail opens it large, inside Deck.
   - the copy goes in Deck's temp image folder and is removed when Deck quits;
   - if it fails, the caption line says why.
 - **Closing:**
-  - Esc, ×, or a click on the backdrop;
+  - Esc, ×, or a single click that started and ended on the backdrop: a double-click on a thumbnail
+    (whose second click lands on the viewer) and a drag between the backdrop and the image or caption
+    leave it open;
   - it also closes when the tab leaves the front or the panel shows another session;
+  - and when the keyboard goes elsewhere in Deck (Cmd+F's search), leaving it there: up without the
+    keyboard, the next Esc would reach the terminal (Claude's interrupt);
   - the keyboard goes back where it was when the viewer opened: the terminal after a click, the
     thumbnail after Enter.
 - **Keyboard:** Tab moves between the viewer's buttons and stays inside. The viewer takes only Esc,
@@ -228,8 +234,8 @@ The parser's rules, in `session.ts` and in `claude_activity_pane.py`:
   - a hash and a header read per image: 0.3 ms for the largest here;
   - the busiest session's 106 images (24 MB of base64) add about 13 ms to its first read, which runs
     1 MB at a time with other work in between.
-- **Rewritten logs:** a log that's rewritten (it shrank) is parsed again from the start, as now. The
-  places are new and the ids stay the same.
+- **Rewritten logs:** a log that's rewritten (it shrank) or replaced by another file (another inode,
+  e.g. renamed over it) is parsed again from the start. The places are new and the ids stay the same.
 
 ### The snapshot
 
@@ -252,11 +258,17 @@ The parser's rules, in `session.ts` and in `claude_activity_pane.py`:
   - only in the folder's followed log, the one the panel's snapshot came from. The renderer never
     names a file;
   - it finds the item holding the id and reads that line again, at most 64 MiB;
-  - it parses the line and takes the image block whose SHA-1 is the id, so a log rewritten meanwhile
+  - it parses the line and takes the image block whose decoded size is the one listed and whose SHA-1
+    is the id (the size first: it's cheap and rules out most blocks), so a log rewritten meanwhile
     can't hand back another image ("No longer in the session log").
+- **Waiting for the log:** both handlers first wait for an update a subscribe of the folder is waiting
+  on. A tab coming back to the front asks for its thumbnails before its subscribe is answered, when its
+  log may not be read yet.
 - **One at a time:** requests are queued, a full image ahead of thumbnails. Between two, main yields
   (`setImmediate`), so terminal output and other IPC go on. The longest single step measured was
-  16 ms.
+  16 ms. A request still unanswered 15 s after it started (its read hung: a network volume under
+  `CLAUDE_CONFIG_DIR`, say) answers "Couldn't read the session log" and the next starts; whatever it
+  gets later is dropped.
 - **Thumbnails:**
   - **PNG and JPEG within 480×360** (twice the 240×180 box): the image itself;
   - **larger ones:** decoded with `nativeImage`, resized to fit 480×360, then encoded:
@@ -264,10 +276,11 @@ The parser's rules, in `session.ts` and in `claude_activity_pane.py`:
     - JPEG sources as JPEG at quality 85: 3–6 ms, 9–27 KB. As PNG they cost 13–15 ms and 61–89 KB;
   - **GIF and WebP:** `nativeImage` can't decode them, so the thumbnail is the image itself when it is
     at most 1 MiB, else "No preview". An animated GIF moves in its thumbnail. None were in the logs.
-  - **A rotated JPEG (EXIF orientation 5–8):** already shown upright by the width/height swap above,
-    but that's a listing fact, not a pixel rotation — `nativeImage` doesn't honour EXIF orientation,
-    only Chromium does. So its bytes are passed through rather than resized with `nativeImage`, which
-    would hand back a sideways thumbnail.
+  - **A turned JPEG (any EXIF orientation but 1):** its size is listed upright (5–8 swap width and
+    height, above), but `nativeImage` ignores EXIF orientation, which Chromium honours, so a thumbnail
+    made with it would come out turned back: sideways, upside down or mirrored. So its bytes are
+    passed through, as GIF and WebP are, up to 1 MiB; a larger one is "No preview" and still opens
+    upright in the viewer.
   - **Size guard:** more than 16,384 px a side or 40 MP (from the header, which is what the decoder
     uses) is "Too large to show", before anything is decoded. The largest here was 3.4 MP.
 - **Full images:**
@@ -288,14 +301,16 @@ The parser's rules, in `session.ts` and in `claude_activity_pane.py`:
 - **Asking late:** a thumbnail is asked for when its item comes within one feed-height of the visible
   part, through one `IntersectionObserver` per feed with the feed's scroller as its root. Opening a
   session asks only for the images near the end, scrolling up asks for more, and a hidden tab asks for
-  nothing.
+  nothing. Nor does a window behind other windows: Chromium draws it no frames, and the observer runs
+  with them, so its thumbnails come once it's seen.
 - **Cache:**
   - thumbnails by id, least recently used out first, up to 24 MB of URL text (about 1,000 thumbnails
     of the sizes measured);
   - the cache belongs to the module, like the markdown cache, so a tab switch or another session
     reuses it;
   - a request already in flight is shared;
-  - failures aren't kept: a thumbnail asks again when it's mounted again.
+  - failures aren't kept: a thumbnail asks again when it's mounted again, or when its panel is shown
+    again (its tab comes to the front, or the subscribe answers again).
 - **No cache in main:** the window's one renderer has it, and a thumbnail costs at most 16 ms to make
   again.
 - **Pure helpers:**
@@ -512,7 +527,13 @@ One plan and one pull request, in this order, each step tested before the next:
 - **Cost:**
   - a long session's thumbnails cost main up to 16 ms each, one at a time;
   - opening the busiest window here, scrolled through, comes to about 0.3 s of main's time, spread
-    out.
+    out;
+  - the size guard still lets a 20–40 MP PNG be decoded for its thumbnail, on main's thread: an
+    estimated 100–300 ms stall for every terminal (the largest here was 3.4 MP).
+- **A read that hangs** (a network volume) holds the queue: every image asked for behind it waits up to
+  its 15 s, then it says "Couldn't read the session log".
+- **The renderer's memory:** 24 MB is the cache's limit, not the renderer's. A mounted thumbnail keeps
+  the URL it shows after the cache has dropped it, and inactive tabs stay mounted.
 - **A rewritten log:** an image whose line moved shows "No longer in the session log" until the panel
   is shown again.
 - **Open's copy:** removed at quit. On Windows an app that still has it open keeps it until the next
@@ -530,3 +551,103 @@ One plan and one pull request, in this order, each step tested before the next:
 - Images Claude makes: Claude Code's replies carry none.
 - Pictures in the WezTerm prototype, which shows counts.
 - Thumbnails kept between runs.
+
+## Decided while planning (2026-11-11)
+
+- An image beside several `tool_result`s in one entry goes with the last of them.
+- `SessionState` takes `maxFeed` (600 by default), so the replay keeps every item.
+- `imageSource()` answers from the folder's followed log for whichever renderer asks: a tab coming to
+  the front may ask before its subscribe has been answered. Still only images that session lists.
+- Open has no pixel limit: it's how an image that is "Too large to show" can still be seen.
+- A header that gives no size even over all of the bytes is "Couldn't decode this image".
+- Bad IPC arguments answer "No longer in the session log", as an unknown id does.
+- The images switch is App's (`deck.claudeImages`), so it hides images in every tab at once; ✻ stays
+  per panel.
+- Row keys moved from `Feed` to `ClaudePanel`: the viewer names an image `<row key>:<index>`, so the
+  same picture twice is two entries.
+- The prototype now also cleans a queued string prompt of `<pasted_content>`, as the TypeScript parser
+  does.
+- Sizes are shown in powers of 1,000 (212 KB), as Finder does.
+
+## After review (2026-11-11)
+
+Code reviews of the build changed these; the sections above say what was built:
+- **Sizes as the decoders read them:** a JPEG's size comes from a libjpeg-style marker walk, a GIF's is
+  its screen grown to cover its first frame, and a JPEG with an EXIF orientation of 5–8 is listed
+  upright.
+- **Turned JPEGs** are their own thumbnail, as GIF and WebP are, up to 1 MiB, else "No preview":
+  `nativeImage` ignores EXIF orientation.
+- **Finding an image again:** main keeps each image's listed byte count with its place, and compares a
+  block's decoded length before hashing it.
+- **A replaced log** (another inode) is read again from the start, like one that shrank.
+- **Waiting for the log:** a tab coming back to the front asked for its thumbnails before its subscribe
+  was answered, and got "No longer in the session log". Both handlers now wait for that update.
+- **A read that hangs** answers a fifth reason, "Couldn't read the session log", 15 s after its request
+  started, and the queue moves on. The reasons are in `src/shared/claude-images.ts`.
+- **Asking again:** a thumbnail whose answer was an error asks again when its panel is shown again, so
+  a moved image's message lasts until then, as Known limits says, and not until the tile remounts.
+- **The viewer's backdrop:** only a single click that started and ended there closes the viewer. A
+  double-click on a thumbnail opened it under the first click and closed it with the second, and a drag
+  that ended on the backdrop (selecting the caption, say) closed it.
+- **The viewer's keyboard:** the viewer closes when the keyboard goes elsewhere in Deck (Cmd+F's
+  search) and leaves it there: up without the keyboard, the next Esc would reach the terminal and
+  interrupt Claude. A button that turns disabled while it has the keyboard (› onto the last image, Open
+  while it works) drops it to the page, so the viewer takes it back.
+- **Known limits** gained the large PNG decode, the read that hangs and the renderer's memory.
+
+## Checked in the app (2026-11-11)
+
+A dev build on macOS (a 1400×900 window at 1× scale, the right pane at its default 380 px) with its
+own user data and a temp `CLAUDE_CONFIG_DIR` holding one crafted log: synthetic PNGs, and JPEGs made
+from them with `sips`. Never a real log, and no prompt went to Claude. Clicks and keys were trusted
+input over the DevTools protocol, and `shell.openPath` was swapped in main for a recorder, so nothing
+opened.
+
+- **The feed:** the 8 thumbnails had the boxes this design gives (240×150, 83×180, 240×160, 240×180,
+  240×150, 240×180, 64×64, and broken.jpg's 231×180 saying "Couldn't decode this image"), the
+  image-only prompt showed no "[image]", and the feed's height didn't change as pictures arrived, also
+  while 111 and then 119 more loaded during a scroll (25,114 and 48,399 px before and after). At the
+  pane's 260 px minimum (208 px rows) every tile kept its shape, within 0.31% (the boxes' rounding).
+- **The viewer:** below the tab bar, 1440×900 fitted to 1238×774, "1 of 8" with ‹ disabled; → stepped
+  to "7 of 8" (the reason in the image's place) and stopped at "8 of 8"; Esc gave the keyboard back to
+  the terminal, or to the thumbnail after Enter. Tab went round its four buttons. A double-click on a
+  thumbnail, and drags from the caption or the image onto the backdrop, left it open; a click on the
+  backdrop closed it. Esc still closed it after › onto the last image (with the mouse and with Enter),
+  after Open, and while Open was busy. The menu's Find (what Cmd+F does) closed it and left the keyboard
+  in the terminal's search; Esc then closed the search, and the shell received no key at all. A 120-image
+  append while it showed "9 of 9" made it "9 of 129". Clicking the Projects tab closed it.
+- **Open:** `Deck clipboard/<8 hex>/image-<16 hex>.jpg`, the folder 0700 and the file 0600, a 1600×1200
+  JPEG. A failing open said "Couldn't open the copy: …" in the caption line. Quitting removed the copies
+  and the instance's folder, and left another instance's folder alone.
+- **Hiding:** the switch turned the 7 image items into "▣ N images" ("▣ 2 images" opened the viewer on
+  Image #1), did the same in a second tab, and was remembered across a restart.
+- **A moved line:** a line blanked in place gave its tile "No longer in the session log"; after the log
+  was renamed over with every line moved (main read its 66 MB again), the tile kept the message until
+  its tab came back to the front, then showed its picture.
+- **Cost:** main made a thumbnail of these PNGs (500 to 619 × 382 px) for 3.3 ms of CPU (120 asked one
+  at a time: 400 ms; round trips 2.5 ms median, 4.1 ms at most). Scrolling a feed from end to start,
+  main spent 691 ms on 111 thumbnails over 14 s (4.9% of a core), and 693 ms on 119 over 25 s (2.8%).
+  The renderer was at 158 MB with 128 thumbnails loaded and 169 MB with 247. These synthetic thumbnails
+  were about 1 KB each, a fraction of real screenshots', so that's mostly decoded pixels, not the cache.
+- **Two fixes came of it**, each with its own commit:
+  - a press on the backdrop released on the image closed the viewer: the click goes to the nearest
+    common ancestor of where it started and ended, the backdrop whenever either end is on it, so where
+    it ended now comes from pointerup;
+  - turning images on, the first time after a start, left the feed paused 1,001–1,451 px above the end:
+    scroll anchoring kept a row in place, and its scroll event came before the ResizeObserver that
+    follows the end. The switch now goes to the end in the same layout effect as thinking's.
+- **Seen too:** a window behind other windows draws no frames, so its thumbnails wait until it's seen;
+  they came as soon as frames did.
+
+Not checked: Franco's own sessions; real mouse clicks (a press leaving the keyboard in the terminal,
+thumbnails that can't be dragged, selecting the feed's text around them); Preview showing Open's copy; a
+portrait photo from a phone, whose EXIF orientation is unverified; Windows (`docs/TESTING.md`
+18z–18ab).
+
+## Release notes (for the next version's CHANGELOG)
+
+- **Images in the Claude panel:** pasted images show under their prompt, and what a tool's result
+  held (an image Claude read, a browser screenshot) under its call, as thumbnails. Click one to see it
+  large; ← and → step through the session's images, and **Open** shows a copy in your image app. The
+  picture button in the panel's header hides them in every tab, say before you share your screen. Deck
+  reads them from Claude's session log: nothing goes over the network.

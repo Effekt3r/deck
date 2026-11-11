@@ -51,20 +51,25 @@ The device panel, step 1 (Android: spec `…/2026-11-03-device-panel-design.md`,
 emulator a tab's project runs on, live at the top of the right pane. Checked with two phones on macOS
 (2026-11-04); the hands-on checks and Windows are still to do. Simulators and iPhones are steps 2 and 3.
 
+Images in the Claude panel (spec `…/2026-11-10-claude-panel-images-design.md`, plan
+`docs/superpowers/plans/2026-11-11-claude-panel-images.md`, built 2026-11-11): pasted images and the
+images tool results held, as thumbnails in the feed, with a viewer, Open and a switch that hides them.
+Checked on macOS with a crafted log (2026-11-11); Franco's own sessions and Windows are still to do.
+
 | Path | Role |
 |---|---|
-| `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, and `quote.ts` (shell quoting, and `quoteImagePath` for Claude Code's image paths; used by main and the renderer); the only thing main and renderer share |
+| `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, `quote.ts` (shell quoting, and `quoteImagePath` for Claude Code's image paths; used by main and the renderer) and `claude-images.ts` (why the Claude panel can't show an image: the reasons main answers); the only thing main and renderer share |
 | `src/preload/index.ts` | exposes `window.deck`; sandboxed, requires only `electron` |
 | `src/main/index.ts` | lifecycle, single instance + `--open <folder>`, IPC wiring; `window.ts`, `menu.ts` (platform shortcuts → `MenuCommand`) |
 | `src/main/shell/` | `shellLaunch()` (which shell/args/env, pure), zsh `ZDOTDIR` wrappers + `deck.zsh`, PowerShell `deck.ps1`, installed to userData |
 | `src/main/pty/` | node-pty sessions, output batching, startup command typed when the line editor is ready |
 | `src/main/projects/` | `projects.json` (userData), scan, `.git/HEAD` branch, dirty counts, native context menu |
 | `src/main/git/` | the git runner (the only way Deck runs git), header summary, merge target, graph log, commit details, watcher + poll probe, merge-target overrides, `git:*` subscriptions |
-| `src/main/claude/` | session-log locator, incremental tail, the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions |
+| `src/main/claude/` | session-log locator, incremental tail (with each line's place), the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions, images (`images.ts`: formats, sizes, ids, lookups; `pixels.ts`: thumbnails and full images read again from the log) |
 | `src/main/clipboard/` | reads the clipboard (files, text, images; concealed copies skipped), decides what the card offers, saves pasted images for Claude |
 | `src/main/usage/` | Claude's plan usage: the status line command and script, Claude Code's settings (connect/disconnect), reading and merging reports, `usage.json` |
 | `src/main/devices/` | the device panel's main side: `android/` (finding and running adb, `track-devices` and identities, scrcpy's protocol, input checks and sessions), `streams.ts` (viewers, grace, retries), `project.ts` (a folder's project, Android app or not), `picks.ts` (`devices.json`), `ipc.ts` (wiring, lock and sleep) |
-| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker), `clipboard/` (card, hook), `usage/` (card, donut, view), `device/` (below) |
+| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker, images: thumbnails, viewer), `clipboard/` (card, hook), `usage/` (card, donut, view), `device/` (below) |
 | `src/renderer/src/device/` | the device panel: which device a tab shows (`pick.ts`), the screen (WebCodecs, canvas, input: `codec.ts`, `fit.ts`, `keys.ts`), the menu, `useDevices.ts` |
 | `resources/` | `scrcpy-server.json` (the server's version, URL, size, SHA-256) and `THIRD-PARTY-NOTICES.txt`; the server itself is downloaded at install (`scripts/fetch-scrcpy-server.mjs`), never committed |
 
@@ -130,6 +135,74 @@ Things that aren't obvious from the code:
   - **Config dir:** `CLAUDE_CONFIG_DIR` is read from the main process's
     environment, so one set only in shell profiles isn't seen when Deck starts
     from Finder.
+  - **Images** (`images.ts`, `pixels.ts`; the renderer's `claude/images.ts`, `useThumbnail.ts`,
+    `ImageTiles.tsx`, `ImageViewer.tsx`; why one can't be shown: `src/shared/claude-images.ts`):
+    - **Which item:** a prompt's image blocks go on the prompt item its entry added (an entry with no
+      text is "[image]"), numbered by `imagePasteIds`; a `tool_result`'s images on its tool's item,
+      error or not; an image beside a `tool_result` in one entry (an AskUserQuestion answer) on that
+      tool's item, with no "[image]" prompt; a queued prompt's on its prompt. Never `toolUseResult`
+      (Read repeats the image there), sidechain lines or other origins. At most 10 per item, the rest
+      counted (`moreImages`). The bytes decide the format: base64 PNG, JPEG, GIF and WebP up to 16 MiB
+      of text.
+    - **Main keeps no pixels:** an image is listed by id (the first 16 hex digits of the SHA-1 of its
+      base64), format, size, bytes and paste number. Its size is its header's, read as the decoders
+      read it: a JPEG's first SOF by a libjpeg-style marker walk (within its first 96 KiB), a GIF's
+      screen grown to cover its first frame; a JPEG turned by EXIF orientation 5–8 is listed upright.
+      Its line's place (byte offset and length, from `JsonlTail`) and its byte count sit in a `WeakMap`
+      beside its item and never reach a snapshot.
+    - **Reading one again:** `claude:image` reads the line again (at most 64 MiB) and finds the image
+      by its decoded length, then its hash, so a rewritten log can't hand back another. It answers a
+      `data:` URL: the image itself, or a 480×360 thumbnail made with `nativeImage` (PNG as PNG, JPEG
+      as JPEG at 85). `nativeImage` reads neither GIF nor WebP and ignores EXIF orientation, which
+      Chromium honours, so those and a JPEG whose orientation isn't 1 are their own thumbnail up to
+      1 MiB, else "No preview" (they still open, upright). Over 16,384 px a side or 40 MP by the
+      header: "Too large to show". Only images the folder's followed session lists, for whichever
+      renderer asks.
+    - **One at a time:** full images and Open ahead of thumbnails, `setImmediate` between two. A job
+      still running 15 s after it started (a read hung on a network volume) answers "Couldn't read the
+      session log" and the next one starts. Both handlers first wait for an update a subscribe of the
+      folder is waiting on (`hub.settled()`): a tab coming back to the front asks for its thumbnails
+      before its subscribe is answered, and they'd be "No longer in the session log" in a log not read
+      yet.
+    - **Renderer:** a thumbnail is asked for within one feed-height of view (`NearView`, one
+      IntersectionObserver per feed). A hidden tab asks for nothing, and so does a window behind other
+      windows: Chromium draws it no frames, and IntersectionObserver runs with them (seen 2026-11-11:
+      they arrived as soon as frames did). Cached by id up to 24 MiB of URLs, failures not kept; a
+      failed tile asks again when its panel is shown again (`showings`: the subscribe's answers). Boxes
+      are sized from the snapshot, so the feed doesn't jump. Row keys live in ClaudePanel; the viewer
+      names an image `<row key>:<index>`.
+    - **Viewer:** rendered into `<body>`, over the window below the tab bar; ClaudePanel holds its
+      state and closes it when the tab leaves the front or the panel shows another session. Only a
+      single click that started and ended on the backdrop closes it, by pointerdown's and pointerup's
+      targets: the click itself goes to their nearest common ancestor, the backdrop whenever either end
+      is on it. So a double-click on a thumbnail (the viewer opens under its first click) and drags
+      between the backdrop and the image or caption leave it open. When the keyboard goes elsewhere in
+      Deck (Cmd+F's search), it closes and leaves the keyboard there: up without it, the next Esc would
+      reach the terminal (Claude's interrupt). A button that turns disabled with the keyboard (› onto
+      the last image, Open while it works) drops it to the page, and the viewer takes it back.
+    - **Open** saves `image-<hash>.<ext>` (the sniffed format) beside the clipboard's pasted images and
+      opens it with `shell.openPath`; cleared at quit and start.
+    - **The switch** (`deck.claudeImages`) is App's, so it hides images in every tab at once. Like
+      thinking's, it's in the feed's "after every change" layout effect: showing images grows most
+      rows, and scroll anchoring's scroll event can come before the ResizeObserver that follows the
+      end and pause the feed (it did, the first time after a start).
+    - **Cost** (2026-11-11, dev build, crafted log of synthetic PNGs): 3.3 ms of main's CPU per
+      thumbnail made (120 asked one at a time); scrolling a feed from end to start, 691 ms for 111 over
+      14 s (4.9% of a core) and 693 ms for 119 over 25 s (2.8%); the renderer at 158–169 MB with
+      128–247 thumbnails loaded.
+    - **Known limits:** the size guard lets a 20–40 MP PNG be decoded for its thumbnail on main's
+      thread, an estimated 100–300 ms stall (the largest in the logs was 3.4 MP); a hung read holds the
+      queue for its 15 s; 24 MiB is the cache's limit, not the renderer's: mounted tiles (inactive tabs
+      stay mounted) keep the thumbnails they show after the cache has dropped them.
+    - **Checked in the app** (2026-11-11, macOS, the crafted log, trusted input over CDP and
+      `shell.openPath` swapped in main): the boxes and no jump; the viewer's keys, backdrop,
+      double-click and drags, and where the keyboard goes back; Find closing it with no key reaching
+      the shell; new images joining its count; Open's copy (0600 in a 0700 folder) gone at quit; hiding
+      in every tab, remembered across a restart; a moved line's "No longer in the session log" clearing
+      when its tab came back; tiles keeping their shape at the pane's 260 px minimum. It found the
+      backdrop drag and the switch pausing the feed, both fixed. **Not yet:** Franco's own sessions,
+      real mouse clicks, Preview, a portrait phone photo's EXIF orientation, Windows
+      (`docs/TESTING.md` 18z–18ab).
 - Clipboard (`src/main/clipboard/`):
   - **Electron 45's clipboard is async and web-like:** `read()` returns one item whose
     `types` are MIME types plus raw platform formats (`electron application/osclipboard;format="…"`).
@@ -571,6 +644,13 @@ excludes every `build` folder.
   wrote it: `human` (absent in older logs), `task-notification`, `peer` (another
   session/agent), `auto-continuation`, `coordinator`. Only `human` is a prompt;
   human prompts can start with `<pasted_content …>`.
+- Images: `image` blocks with `source {type: "base64", media_type, data}`, base64 in the line. A
+  pasted image is a block in its prompt's content, numbered by the entry's `imagePasteIds` (one per
+  image block, in order; a queued prompt has them in its attachment). Read's result holds the image and
+  its `toolUseResult.file.base64` holds it again, so the line is about twice the image; MCP tools repeat
+  theirs in `toolUseResult` too. An image pasted into an AskUserQuestion answer is a block after the
+  `tool_result` in the same entry. Measured 2026-11-10: 1,087 images, all PNG or JPEG, at most 512 KB
+  and 3.4 MP; lines up to 2.2 MB.
 - Turn end: `end_turn`, then `system` `stop_hook_summary` + `turn_duration`.
   Other `system` subtypes: `compact_boundary`, `informational` (usage limits),
   `local_command`, `bridge_status`, `away_summary`, `scheduled_task_fire`,
@@ -602,6 +682,8 @@ excludes every `build` folder.
   activity pane live through prompt → thinking → Bash → reply → idle → exited.
   The parser was replayed over all 145 local session logs: no exceptions, and no
   turn, agent or background task left open in finished sessions.
+  The image rules were replayed the same way through both parsers (2026-11-11: 678 logs, every one
+  matching; 48 images on prompts, 942 on tool calls, 1 "[image]" prompt).
 - **Not yet tested:** anything on Windows; `TodoWrite`/`TaskCreate` logs; the
   "waiting on you?" guess outside bypass mode.
 
@@ -707,7 +789,8 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
   network share: the same exposure as the git panel's.
 - **Security (M4):**
   - Check the IPC sender frame (`clipboard:paste` hands password-manager text to the renderer;
-    `devices:input` taps and types on a phone).
+    `devices:input` taps and types on a phone; `claude:image` and `claude:open-image` read images
+    from Claude's session logs).
   - Load the renderer from a custom protocol, not `file://`.
   - Deny permission requests.
   - Set Electron fuses, after moving node-pty into a `utilityProcess` (its Windows
@@ -752,6 +835,15 @@ global there). Hide, show or quit the dev build from there:
 or `process.mainModule.require('electron').app.quit()`. Run from Claude Code,
 `osascript -e 'tell application "System Events" to …'` (e.g. `set visible of process "Electron"`)
 hangs waiting for macOS's Automation permission (2026-11-04).
+
+Three more for scripted checks (2026-11-11). A dev window behind other windows draws no frames (the
+page is hidden), so IntersectionObserver, ResizeObserver and requestAnimationFrame wait (the Claude
+panel's thumbnails don't arrive): `BrowserWindow.getAllWindows()[0].webContents.setBackgroundThrottling(false)`
+from `--inspect` keeps frames coming without raising the window over Franco's. CDP's
+`Input.dispatchKeyEvent` never reaches the macOS menu (Cmd+F does nothing), so click the item from
+main: find it by label in `Menu.getApplicationMenu().items` and call `.click()`, which is what the
+accelerator does. And set `shell.openPath` there to a recorder before pressing anything that opens a
+file: the bundle looks it up at every call, so nothing opens in Preview.
 
 Single instance: if the running Deck doesn't acknowledge a second launch within about
 20 s (Chromium's ProcessSingleton), the second launch kills it and takes over. It was seen

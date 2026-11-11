@@ -152,6 +152,17 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
      the panel isn't there (nothing to show without adb; View → Device Panel says Deck can't find adb).
      Rename the folder back, click another window, then Deck: the phone's screen appears without a
      restart.
+18z. Claude panel images: open Deck in a folder whose Claude session has images (one where you pasted a
+     screenshot into a prompt, or Claude read an image file). Thumbnails show under the prompt and under
+     the Read call. Click one: the viewer covers the window below the tab bar; ← and → step, Esc
+     closes, and typing goes to the terminal again. Double-click a thumbnail: the viewer stays open.
+     With the viewer open, press Ctrl+Shift+F: the viewer closes and the terminal's search has the
+     keyboard; Esc closes the search, and typing goes to the terminal again.
+18aa. In the viewer, click **Open**: Photos shows the image. Close Photos and quit Deck: the copy in
+     `%TEMP%\Deck clipboard\<8 characters>\image-….png` is gone. Again, leaving Photos open while
+     quitting: the copy stays until Deck's next start removes it.
+18ab. The picture button in the Claude panel's header turns every tab's thumbnails into "▣ N images";
+     click it again to show them.
 
 **Restart**
 
