@@ -1,4 +1,4 @@
-/* Claude panel: header, to-do, agents, feed (with markdown replies), session menu. */
+/* Claude panel: header, to-do, agents, feed (with markdown replies and images), session menu, image viewer. */
 
 .claude-panel {
   --green: #9ece6a;
@@ -85,7 +85,8 @@
 }
 .cp-icon-button:hover { background: rgb(244 245 251 / 0.08); color: var(--text); }
 .cp-thinking[aria-pressed='true'] { color: var(--violet); }
-.cp-thinking[aria-pressed='false']::after {
+.cp-images[aria-pressed='true'] { color: var(--teal); }
+.cp-thinking[aria-pressed='false']::after, .cp-images[aria-pressed='false']::after {
   content: '';
   position: absolute;
   left: 5px;
@@ -363,6 +364,43 @@
 .fi-notice { margin: 3px 0; color: var(--faint); font-size: 11.5px; line-height: 19px; }
 .fi-notice.error { color: var(--red); }
 .fi-notice.error .fi-gutter { color: var(--red); }
+
+/* Images under a prompt's text or a tool's line (and its error): thumbnails in boxes sized from the
+   start (ImageTiles sets width and aspect-ratio), narrowed to the row, never dragged or selected. */
+.fi-images { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px; min-width: 0; margin-top: 6px; user-select: none; }
+.fi-tool .fi-images { grid-column: 2; margin: 3px 0 5px; }
+.fi-thumb {
+  position: relative;
+  display: block;
+  max-width: 100%;
+  height: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--field); /* shows through transparent parts */
+  color: var(--faint);
+}
+.fi-thumb:hover { border-color: var(--line-strong); }
+.fi-thumb img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; }
+.fi-thumb.failed { display: grid; place-items: center; opacity: 0.7; }
+.fi-images-more { align-self: center; color: var(--faint); font-size: 11px; }
+.fi-images-hidden {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  margin-top: 5px;
+  padding: 0 7px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: none;
+  color: var(--faint);
+  font-size: 11px;
+  user-select: none;
+}
+.fi-tool .fi-images-hidden { grid-column: 2; justify-self: start; margin: 2px 0 4px; }
+.fi-images-hidden:hover:not(:disabled) { border-color: var(--line-strong); color: var(--text); }
 
 /* Clamped text with "more": the button sits on the last line, over a fade. */
 .fi-clamp { position: relative; min-width: 0; }

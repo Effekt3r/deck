@@ -21,6 +21,15 @@ export const SettingsIcon = () => (
   </Svg>
 )
 
+/** A picture: the Claude panel's images button, and a thumbnail that can't be shown. */
+export const PictureIcon = ({ size = 13 }: { size?: number }) => (
+  <Svg size={size}>
+    <rect x="2" y="3" width="12" height="10" rx="1.5" />
+    <circle cx="6" cy="6.5" r="1.2" />
+    <path d="M2.5 12l3.5-3.5 2.5 2.5 2-2 3 3" />
+  </Svg>
+)
+
 /** A section's fold marker (panel.css: .cp-caret turns it while folded). */
 export const Caret = () => (
   <svg className="cp-caret" width="9" height="9" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
