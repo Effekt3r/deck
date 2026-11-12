@@ -54,6 +54,11 @@ const isPng = (data: Uint8Array): boolean => PNG_SIGNATURE.every((byte, i) => da
 /** System Settings › Privacy & Security › Camera, where Deck is let use the camera (an iPhone's
  *  screen is one to macOS). */
 const CAMERA_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Camera'
+/** The iPhone helper's first list comes 3 s after it starts. iOS waits for it this long at most, as
+ *  adb's first list is capped: else a helper whose list never comes would keep iOS tabs "Looking for
+ *  devices…" for LineTracker's 20 s first-list deadline, hiding even a simulator listed and picked,
+ *  at every start of watching. */
+const IPHONE_FIRST_LIST_MS = 6000
 
 /** The device panel's main side: Android devices adb sees and, on macOS, booted simulators
  *  idb-companion sees and iPhones on a cable (each looked for only while a tab needs them), each
@@ -79,6 +84,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   let android: AndroidState = { pending: true, devices: [], problem: null }
   let ios: IosState = { pending: false, devices: [], problem: null }
   let iphones: IphoneState = { pending: false, devices: [], problem: null }
+  /** Ends iOS's wait for the helper's first list; cleared once it lists or fails. */
+  let iphoneWait: ReturnType<typeof setTimeout> | null = null
   /** iPhones show on macOS, with the helper. */
   const iphoneHelper = opts.platform === 'darwin' ? opts.iphoneHelper : null
   /** Bumped by every start and stop, so a slow look can't start watching late. */
@@ -196,17 +203,31 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     simulators.start()
   }
 
+  const endIphoneWait = () => {
+    if (iphoneWait) clearTimeout(iphoneWait)
+    iphoneWait = null
+  }
+
   /** iPhones: macOS, with the helper, which lists the screens on offer 3 s after it starts, then on
    *  each change. Quiet when it fails: the list then has no iPhones (a run that had listed keeps its
-   *  list while the helper is started again), and the reason goes to main's log. */
+   *  list while the helper is started again), and the reason goes to main's log. A first list that's
+   *  late stops holding iOS at IPHONE_FIRST_LIST_MS, and still counts when it comes. */
   const watchIphones = (helper: string) => {
+    // Before start(): a helper that can't be spawned at all fails inside it, and clears this.
+    iphoneWait = setTimeout(() => {
+      iphoneWait = null
+      iphones = { ...iphones, pending: false }
+      update()
+    }, IPHONE_FIRST_LIST_MS)
     iphoneTracker = new IphoneTracker({
       list: () => iphoneIo(helper).list(),
       publish: (devices) => {
+        endIphoneWait()
         iphones = { pending: false, devices, problem: null }
         update()
       },
       failed: (why, listed) => {
+        endIphoneWait()
         console.error('devices: the iPhone helper stopped:', why)
         if (listed) return
         iphones = { pending: false, devices: [], problem: null }
@@ -233,6 +254,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     simulators = null
     iphoneTracker?.stop()
     iphoneTracker = null
+    endIphoneWait()
     // No push: every tab that watched has already stopped listening (it calls off() before unwatch).
     list = null
   }
@@ -362,6 +384,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       simulators = null
       iphoneTracker?.stop()
       iphoneTracker = null
+      endIphoneWait()
       // Now, not after the companions it just signalled have exited: quitting mustn't wait out their
       // 2 s kill escalation, and unlinking a socket one still holds open is harmless.
       removeSocketDir(opts.socketDir)

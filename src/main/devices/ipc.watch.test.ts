@@ -12,12 +12,15 @@ const ipc = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   listeners: new Map<string, (...args: unknown[]) => void>(),
 }))
+/** What System Settings' camera page was opened with. */
+const openExternal = vi.hoisted(() => vi.fn())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: (...args: unknown[]) => unknown) => ipc.handlers.set(channel, fn),
     on: (channel: string, fn: (...args: unknown[]) => void) => ipc.listeners.set(channel, fn),
   },
   powerMonitor: { on: () => {} },
+  shell: { openExternal },
 }))
 
 /** What each test controls: findAdb/findIdb/anySimulatorBooted's answers (by default, never found),
@@ -91,6 +94,7 @@ function setup(platform: 'darwin' | 'linux' = 'darwin', iphoneHelper: string | n
   h.findAdb = async () => null
   h.findIdb = async () => null
   h.booted = async () => false
+  openExternal.mockClear()
   const sent: unknown[][] = []
   const webContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: (c: string, ...a: unknown[]) => sent.push([c, ...a]) })
   const win = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents }) as unknown as BrowserWindow
@@ -113,6 +117,7 @@ function setup(platform: 'darwin' | 'linux' = 'darwin', iphoneHelper: string | n
     watch: () => ipc.listeners.get(IPC.devicesWatch)!({}),
     unwatch: () => ipc.listeners.get(IPC.devicesUnwatch)!({}),
     focus: () => win.emit('focus'),
+    reload: () => webContents.emit('did-start-loading'),
     list: () => ipc.handlers.get(IPC.devicesList)!({}) as DeviceList | null,
     view: (id: string) => ipc.listeners.get(IPC.devicesView)!({}, id),
     unview: (id: string) => ipc.listeners.get(IPC.devicesUnview)!({}, id),
@@ -120,7 +125,7 @@ function setup(platform: 'darwin' | 'linux' = 'darwin', iphoneHelper: string | n
   }
 }
 afterEach(() => current?.dispose())
-// Only the booted-vs-listed test below turns these on; harmless (a no-op) for every other test.
+// The tests that fake timers turn them on themselves; harmless (a no-op) for every other test.
 afterEach(() => vi.useRealTimers())
 
 describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () => {
@@ -428,6 +433,74 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     }
   })
 
+  it('a helper that had listed keeps its iPhones listed when it stops, while it starts again', async () => {
+    const t = setup('darwin', '/fake/iphone-screen')
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      t.watch()
+      await tick()
+      iphoneLists()[0].fp.stdout.write(SCREENS)
+      await tick()
+      const pushes = t.pushes().length
+      iphoneLists()[0].fp.exit(1)
+      await tick()
+      expect(logged).toHaveBeenCalledWith('devices: the iPhone helper stopped:', 'iphone-screen stopped (exit code 1).')
+      expect(t.list()).toEqual({ devices: [IPHONE], problem: 'no-adb', iosProblem: null, pending: [] })
+      expect(t.pushes()).toHaveLength(pushes)
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  it("a helper whose first list doesn't come holds iOS 6 s at most; the list still counts when it comes", async () => {
+    vi.useFakeTimers()
+    const t = setup('darwin', '/fake/iphone-screen')
+    h.findIdb = async () => IDB
+    t.watch()
+    await vi.advanceTimersByTimeAsync(0)
+    notifiers()[0].fp.stdout.write(LINE)
+    await vi.advanceTimersByTimeAsync(5999)
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: ['ios'] })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    iphoneLists()[0].fp.stdout.write(SCREENS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.list()).toEqual({ devices: [IPHONE, SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+  })
+
+  it('an unwatch ends that wait: the next watch waits its own 6 s', async () => {
+    vi.useFakeTimers()
+    const t = setup('darwin', '/fake/iphone-screen')
+    t.watch()
+    await vi.advanceTimersByTimeAsync(4000)
+    t.unwatch()
+    t.watch()
+    await vi.advanceTimersByTimeAsync(5999) // well past the first watch's 6 s
+    expect(t.list()?.pending).toEqual(['ios'])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.list()?.pending).toEqual([])
+  })
+
+  it('dispose stops the iPhone helper and its wait: nothing is pushed after', async () => {
+    vi.useFakeTimers()
+    const t = setup('darwin', '/fake/iphone-screen')
+    t.watch()
+    await vi.advanceTimersByTimeAsync(0)
+    const pushes = t.pushes().length
+    t.devices.dispose()
+    expect(iphoneLists()[0].fp.killed()).toBe(true)
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(t.pushes()).toHaveLength(pushes)
+  })
+
+  it('a reload stops the iPhone helper', async () => {
+    const t = setup('darwin', '/fake/iphone-screen')
+    t.watch()
+    await tick()
+    t.reload()
+    expect(iphoneLists()[0].fp.killed()).toBe(true)
+  })
+
   it('no helper (null), or not macOS: no iPhones are looked for', async () => {
     const mac = setup('darwin', null)
     mac.watch()
@@ -493,5 +566,11 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
       t.unview(IPHONE.id)
       spy.mockRestore()
     }
+  })
+
+  it("opens System Settings' camera page, and only that, whatever the page sends with the call", () => {
+    setup('darwin')
+    ipc.listeners.get(IPC.devicesCameraSettings)!({}, 'https://example.com/')
+    expect(openExternal.mock.calls).toEqual([['x-apple.systempreferences:com.apple.preference.security?Privacy_Camera']])
   })
 })

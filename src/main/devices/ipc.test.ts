@@ -27,12 +27,15 @@ const power = vi.hoisted(() => {
     },
   }
 })
+/** This file's registration is 'linux', where nothing is ever opened. */
+const openExternal = vi.hoisted(() => vi.fn())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: (...args: unknown[]) => unknown) => ipc.handlers.set(channel, fn),
     on: (channel: string, fn: (...args: unknown[]) => void) => ipc.listeners.set(channel, fn),
   },
   powerMonitor: power,
+  shell: { openExternal },
 }))
 
 const root = mkdtempSync(join(tmpdir(), 'deck-devices-ipc-'))
@@ -148,6 +151,8 @@ describe('registerDeviceIpc', () => {
 
   it("System Settings' camera page is macOS's: elsewhere the call does nothing", () => {
     expect(() => emit(IPC.devicesCameraSettings)).not.toThrow()
+    expect(() => emit(IPC.devicesCameraSettings, 'https://example.com/')).not.toThrow()
+    expect(openExternal).not.toHaveBeenCalled()
   })
 
   it('ignores input it cannot use and views of nothing', () => {
