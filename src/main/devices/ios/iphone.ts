@@ -15,16 +15,30 @@ const PREFIX = 'iphone:'
 const MAX_SIDE = 1600
 const MAX_FPS = 60
 
-/** The capture device ID in a device id, or null for another kind of device. */
-export const screenIdOf = (id: string): string | null => (id.startsWith(PREFIX) ? id.slice(PREFIX.length) : null)
-
 /** An ID goes into the helper's argv, so only this shape is trusted: a real one is a UUID; this is
  *  generous rather than exact, and never starts with "-". */
 const ID_SHAPE = /^[A-Za-z0-9][A-Za-z0-9-]{0,127}$/
 
+/** The capture device ID in a device id, or null for another kind of device, or an id that isn't a
+ *  screen's shape (so it's never trusted into the helper's argv just because `has()` hasn't been
+ *  asked yet). */
+export const screenIdOf = (id: string): string | null => {
+  if (!id.startsWith(PREFIX)) return null
+  const screenId = id.slice(PREFIX.length)
+  return ID_SHAPE.test(screenId) ? screenId : null
+}
+
+/** `readScreenList`'s result: the screens on offer, and how many entries in the line were dropped
+ *  (not an object, no string `id`, or an id that isn't a screen's shape) — never a repeated id, which
+ *  keeps its first entry silently. */
+export interface ScreenList {
+  screens: IphoneScreen[]
+  skipped: number
+}
+
 /** One line of `iphone-screen list`, `{"devices":[{"id","name"}]}`: every screen on offer. null: a
  *  line that isn't a list. */
-export function readScreenList(line: string): IphoneScreen[] | null {
+export function readScreenList(line: string): ScreenList | null {
   let raw: unknown
   try {
     raw = JSON.parse(line)
@@ -34,13 +48,21 @@ export function readScreenList(line: string): IphoneScreen[] | null {
   const devices = typeof raw === 'object' && raw !== null ? (raw as { devices?: unknown }).devices : undefined
   if (!Array.isArray(devices)) return null
   const screens = new Map<string, IphoneScreen>()
+  let skipped = 0
   for (const item of devices) {
-    if (typeof item !== 'object' || item === null) continue
+    if (typeof item !== 'object' || item === null) {
+      skipped++
+      continue
+    }
     const { id, name } = item as Record<string, unknown>
-    if (typeof id !== 'string' || !ID_SHAPE.test(id)) continue
+    if (typeof id !== 'string' || !ID_SHAPE.test(id)) {
+      skipped++
+      continue
+    }
+    if (screens.has(id)) continue // a repeated id keeps its first entry, not its last
     screens.set(id, { id, name: typeof name === 'string' && name.trim() ? name.trim() : 'iPhone' })
   }
-  return [...screens.values()]
+  return { screens: [...screens.values()], skipped }
 }
 
 /** The screens, by name, as devices: on a cable, view only. */
@@ -60,18 +82,31 @@ export interface IphoneTrackerDeps {
 }
 
 /** Follows the iPhone screens with the helper's `list`, restarted and timed out as LineTracker does
- *  (tracker.ts). Each line lists every screen on offer, the first 3 s after the start. */
+ *  (tracker.ts). Each line lists every screen on offer, the first 3 s after the start. A line that
+ *  drops entries (an id Deck doesn't recognise) is logged once per run: otherwise a helper that kept
+ *  sending the same unrecognised id would repeat it forever. */
 export class IphoneTracker {
   private offered = new Set<string>()
-  private readonly tracker: LineTracker<IphoneScreen[]>
+  /** Reset at the start of every run, so a new run that still drops entries gets its own warning. */
+  private warnedSkipped = false
+  private readonly tracker: LineTracker<ScreenList>
 
   constructor(deps: IphoneTrackerDeps) {
     this.tracker = new LineTracker({
       name: 'iphone-screen',
-      spawn: () => deps.list(),
+      spawn: () => {
+        this.warnedSkipped = false
+        return deps.list()
+      },
       parse: (line) => readScreenList(line),
-      publish: (screens) => {
+      publish: ({ screens, skipped }) => {
         this.offered = new Set(screens.map((s) => s.id))
+        // Said once per run, not on every line: if macOS ever changed the id's format, every iPhone
+        // would otherwise vanish behind a valid-looking empty list with nothing in the log to explain it.
+        if (skipped > 0 && !this.warnedSkipped) {
+          this.warnedSkipped = true
+          console.warn(`devices: iphone-screen: skipped ${skipped} screens with an id Deck doesn't recognise`)
+        }
         deps.publish(iphoneDevices(screens))
       },
       failed: (why, listed) => {

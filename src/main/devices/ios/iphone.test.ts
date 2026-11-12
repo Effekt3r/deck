@@ -8,18 +8,18 @@ const B = 'B0B0B0B0-1111-2222-3333-444444444444'
 const list = (...devices: unknown[]) => `${JSON.stringify({ devices })}\n`
 
 describe('readScreenList', () => {
-  it('reads every screen on offer, once each, and says when a line is no list', () => {
+  it('reads every screen on offer, keeping the first entry on a repeated id, and says when a line is no list', () => {
     expect(readScreenList(list({ id: A, name: "Franco's iPhone" }, { id: B, name: 'iPad' }, { id: A, name: 'again' })))
-      .toEqual([{ id: A, name: 'again' }, { id: B, name: 'iPad' }])
-    expect(readScreenList(list())).toEqual([])
+      .toEqual({ screens: [{ id: A, name: "Franco's iPhone" }, { id: B, name: 'iPad' }], skipped: 0 })
+    expect(readScreenList(list())).toEqual({ screens: [], skipped: 0 })
     expect(readScreenList('not json')).toBeNull()
     expect(readScreenList('[]')).toBeNull()
     expect(readScreenList('null')).toBeNull()
   })
 
-  it('skips IDs that could pass for an option or a path, and names a nameless screen', () => {
+  it('skips IDs that could pass for an option or a path, counting them, and names a nameless screen', () => {
     expect(readScreenList(list({ id: '--max-size' }, { id: '../x' }, { id: 'a b' }, { id: 7 }, null, { id: A, name: ' ' })))
-      .toEqual([{ id: A, name: 'iPhone' }])
+      .toEqual({ screens: [{ id: A, name: 'iPhone' }], skipped: 5 })
   })
 })
 
@@ -31,6 +31,7 @@ describe('iphoneDevices', () => {
     ])
     expect(screenIdOf(`iphone:${A}`)).toBe(A)
     expect(screenIdOf('simulator:U1')).toBeNull()
+    expect(screenIdOf('iphone:--max-size')).toBeNull()
   })
 })
 
@@ -85,6 +86,40 @@ describe('IphoneTracker', () => {
     expect(failures[1]).toEqual(['{"error":"capture","message":"CoreMediaIO failed."}', false])
     expect(tracker.has(A)).toBe(false)
     tracker.stop()
+  })
+
+  it('a helper that cannot start at all (a missing binary) reports failure and offers no screens', async () => {
+    const failures: [string, boolean][] = []
+    const tracker = new IphoneTracker({
+      list: () => fakeProcess({ spawnError: new Error('spawn /Deck.app/Contents/Resources/iphone-screen ENOENT') }).proc,
+      publish: () => {},
+      failed: (why, listed) => failures.push([why, listed]),
+    })
+    tracker.start()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(failures).toEqual([['spawn /Deck.app/Contents/Resources/iphone-screen ENOENT', false]])
+    expect(tracker.has(A)).toBe(false)
+    tracker.stop()
+  })
+
+  it('logs a list that drops entries once per run, not on every later line that drops its own', async () => {
+    const warnings: unknown[][] = []
+    const originalWarn = console.warn
+    console.warn = ((...args: unknown[]) => {
+      warnings.push(args)
+    }) as typeof console.warn
+    try {
+      const { tracker, spawned, published } = setup()
+      tracker.start()
+      spawned[0].stdout.write(list({ id: '--max-size' }, { id: A, name: 'iPhone' }))
+      await vi.waitFor(() => expect(published).toEqual([[`iphone:${A}`]]))
+      spawned[0].stdout.write(list({ id: '../x' }, { id: A, name: 'iPhone' }))
+      await vi.waitFor(() => expect(published).toEqual([[`iphone:${A}`], [`iphone:${A}`]]))
+      expect(warnings).toEqual([["devices: iphone-screen: skipped 1 screens with an id Deck doesn't recognise"]])
+      tracker.stop()
+    } finally {
+      console.warn = originalWarn
+    }
   })
 })
 
