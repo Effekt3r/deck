@@ -114,7 +114,9 @@ func runStream(_ arguments: [String]) -> Never {
     if line.trimmingCharacters(in: .whitespaces) == "key" { capture.requestKeyFrame() }
   }
   capture.start()
-  RunLoop.main.run()
+  // The capture owns the session and takes its frames: it lives as long as the run loop, not as long
+  // as something happens to hold it.
+  withExtendedLifetime(capture) { RunLoop.main.run() }
   _exit(0)
 }
 
@@ -123,6 +125,16 @@ private func number(_ text: String?, within range: ClosedRange<Int>) -> Int {
     fail("usage", "iphone-screen stream <id> [--max-size N] [--max-fps N]", status: 64)
   }
   return value
+}
+
+/// A capture error as a failure. macOS refusing the camera, and a pulled cable, have failures of their
+/// own: the first isn't retried, and the second says what happened.
+private func failCapture(_ error: Error?, _ message: String) -> Never {
+  switch (error as? AVError)?.code {
+  case .applicationIsNotAuthorizedToUseDevice?: fail("camera-denied")
+  case .deviceWasDisconnected?: fail("disconnected")
+  default: fail("capture", message)
+  }
 }
 
 /// One screen's capture: the camera allowed, the device found, then its frames to the encoder on a
@@ -140,7 +152,8 @@ private final class ScreenCapture: NSObject, AVCaptureVideoDataOutputSampleBuffe
   private let frames = DispatchQueue(label: "iphone-screen.frames")
   /// Where the capture starts (open()).
   private let starting = DispatchQueue(label: "iphone-screen.start")
-  /// On `frames`: the last frame encoded, and how many were.
+  /// On `frames`: the newest frame captured, the time of the last one encoded, and how many were.
+  private var newest: CVPixelBuffer?
   private var lastFrame = CMTime.invalid
   private var encoded = 0
 
@@ -168,8 +181,18 @@ private final class ScreenCapture: NSObject, AVCaptureVideoDataOutputSampleBuffe
     }
   }
 
+  /// The next frame is a key frame. A still screen most likely sends no frames, which would leave a
+  /// viewer that joins, or a decoder that fell behind, blank until something moves: so when none has
+  /// been encoded 100 ms later, the newest is encoded again as that key frame, 1 ms after the last.
   func requestKeyFrame() {
-    frames.async { self.encoder.requestKeyFrame() }
+    frames.async {
+      self.encoder.requestKeyFrame()
+      let before = self.encoded
+      self.frames.asyncAfter(deadline: .now() + 0.1) {
+        guard self.encoded == before, let frame = self.newest else { return }
+        self.encode(frame, at: CMTimeAdd(self.lastFrame, CMTime(value: 1, timescale: 1000)))
+      }
+    }
   }
 
   private func find(since: Date) {
@@ -183,8 +206,11 @@ private final class ScreenCapture: NSObject, AVCaptureVideoDataOutputSampleBuffe
     do {
       input = try AVCaptureDeviceInput(device: device)
     } catch {
-      fail("capture", "The iPhone's screen couldn't be opened: \(error.localizedDescription)")
+      failCapture(error, "The iPhone's screen couldn't be opened: \(error.localizedDescription)")
     }
+    // Deck shows the picture only, and an audio stream that's taken may also bring the phone's sound
+    // to the Mac, as QuickTime does. Not yet checked on a phone.
+    for port in input.ports where port.mediaType == .audio { port.isEnabled = false }
     guard session.canAddInput(input) else { fail("capture", "The iPhone's screen couldn't be opened.") }
     session.addInput(input)
     let output = AVCaptureVideoDataOutput()
@@ -195,7 +221,12 @@ private final class ScreenCapture: NSObject, AVCaptureVideoDataOutputSampleBuffe
     session.addOutput(output)
     NotificationCenter.default.addObserver(forName: AVCaptureSession.runtimeErrorNotification, object: session, queue: .main) { note in
       let error = note.userInfo?[AVCaptureSessionErrorKey] as? Error
-      fail("capture", "The iPhone's screen stopped: \(error?.localizedDescription ?? "no reason given").")
+      failCapture(error, "The iPhone's screen stopped: \(error?.localizedDescription ?? "no reason given").")
+    }
+    // An interrupted capture just sends no more frames: without this, the last picture would stay up
+    // with no error. macOS gives no reason.
+    NotificationCenter.default.addObserver(forName: AVCaptureSession.wasInterruptedNotification, object: session, queue: .main) { _ in
+      fail("capture", "The iPhone's screen was interrupted (another app may have taken it).")
     }
     NotificationCenter.default.addObserver(forName: AVCaptureDevice.wasDisconnectedNotification, object: device, queue: .main) { _ in
       fail("disconnected")
@@ -211,9 +242,15 @@ private final class ScreenCapture: NSObject, AVCaptureVideoDataOutputSampleBuffe
   func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
     guard let frame = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
     let time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+    newest = frame
     // --max-fps: a frame sooner than ¾ of its gap after the last is skipped, so the jitter of a
     // 60 Hz screen doesn't thin it at 60.
     if lastFrame.isValid, CMTimeGetSeconds(CMTimeSubtract(time, lastFrame)) < 0.75 / Double(maxFrameRate) { return }
+    encode(frame, at: time)
+  }
+
+  /// On `frames`. Times only ever go up: a frame captured too soon after the last is skipped (above).
+  private func encode(_ frame: CVPixelBuffer, at time: CMTime) {
     lastFrame = time
     encoded += 1
     encoder.encode(frame, at: time)
