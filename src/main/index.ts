@@ -46,6 +46,19 @@ function openFolder(folder: string | null): void {
   else pendingFolders.push(folder)
 }
 
+/** Deck's iPhone helper (macOS): in the app's resources when packaged, where `npm ci` builds it in a
+ *  dev build (scripts/build-iphone-helper.mjs). null off macOS, and without one: a Mac without
+ *  Xcode's command line tools builds none, and then shows no iPhones. */
+function iphoneHelper(): string | null {
+  if (process.platform !== 'darwin') return null
+  const path = app.isPackaged ? join(process.resourcesPath, 'iphone-screen') : join(app.getAppPath(), 'native', 'iphone-screen', 'out', 'iphone-screen')
+  try {
+    return statSync(path).isFile() ? path : null
+  } catch {
+    return null
+  }
+}
+
 function hasPwsh(): Promise<boolean> {
   const where = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'where.exe')
   return new Promise((resolve) => execFile(where, ['pwsh'], { windowsHide: true }, (err) => resolve(!err)))
@@ -139,6 +152,7 @@ async function start(): Promise<void> {
     env: process.env,
     // Keyed by this instance like the clipboard's folder, so a dev build has its own.
     socketDir: socketDirFor(app.getPath('temp'), instance, process.getuid?.() ?? 0),
+    iphoneHelper: iphoneHelper(),
     saveImage: (png) => clip.saveImage(png),
   })
 

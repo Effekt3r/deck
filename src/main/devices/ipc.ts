@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { isAbsolute } from 'node:path'
-import { type BrowserWindow, ipcMain, powerMonitor } from 'electron'
+import { type BrowserWindow, ipcMain, powerMonitor, shell } from 'electron'
 import { IPC } from '@shared/channels'
 import { quoteImagePath } from '@shared/quote'
 import type { DeviceList, DeviceProject, InsertResult, Platform } from '@shared/types'
@@ -10,13 +10,14 @@ import { adbIo, startScrcpy } from './android/scrcpy'
 import { scrcpyServer } from './android/server'
 import { androidSession } from './android/session'
 import { AndroidTracker } from './android/tracker'
+import { iphoneIo, IphoneTracker, screenIdOf, startIphone } from './ios/iphone'
 import { startSimulator } from './ios/simulator'
 import { removeSocketDir, simulatorIo } from './ios/simulator-io'
 import { SimulatorTracker, udidOf } from './ios/simulators'
 import { anySimulatorBooted, defaultSimulatorSet, findIdb, idbCandidates, type IdbTools } from './ios/tools'
 import { PicksStore } from './picks'
 import { describeProject } from './project'
-import { type AndroidState, combineLists, type IosState } from './registry'
+import { type AndroidState, combineLists, type IosState, type IphoneState } from './registry'
 import { DeviceStreams } from './streams'
 
 export interface DeviceIpcOptions {
@@ -30,6 +31,9 @@ export interface DeviceIpcOptions {
   /** Where simulators' companions put their sockets: short (macOS limits a Unix socket's path) and
    *  this instance's own; used by simulators' sessions. */
   socketDir: string
+  /** Deck's iPhone helper (macOS), or null without one: a build on a Mac without Xcode's command line
+   *  tools has none, and no iPhones. */
+  iphoneHelper: string | null
   /** Saves a PNG where Claude can read it (the clipboard card's folder); resolves with its path. */
   saveImage(png: Uint8Array): Promise<string>
 }
@@ -47,10 +51,14 @@ const MAX_SCREENSHOT_BYTES = 32 * 1024 * 1024
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
 const isPng = (data: Uint8Array): boolean => PNG_SIGNATURE.every((byte, i) => data[i] === byte)
 
+/** System Settings › Privacy & Security › Camera, where Deck is let use the camera (an iPhone's
+ *  screen is one to macOS). */
+const CAMERA_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security?Privacy_Camera'
+
 /** The device panel's main side: Android devices adb sees and, on macOS, booted simulators
- *  idb-companion sees (each looked for only while a tab needs them), each project's device, streams
- *  for the devices viewed (scrcpy for Android, idb-companion's sim-video for simulators), and
- *  screenshots for Claude. */
+ *  idb-companion sees and iPhones on a cable (each looked for only while a tab needs them), each
+ *  project's device, streams for the devices viewed (scrcpy for Android, idb-companion's sim-video
+ *  for simulators, Deck's helper for iPhones), and screenshots for Claude. */
 export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   const picks = new PicksStore(opts.picksFile)
   let win: BrowserWindow | null = null
@@ -60,6 +68,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   let watchers = 0
   let tracker: AndroidTracker | null = null
   let simulators: SimulatorTracker | null = null
+  let iphoneTracker: IphoneTracker | null = null
   /** Looked for again at each start of watching, so an SDK installed since is found. */
   let adb: string | null = null
   let idb: IdbTools | null = null
@@ -69,6 +78,9 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   let idbLook: object | null = null
   let android: AndroidState = { pending: true, devices: [], problem: null }
   let ios: IosState = { pending: false, devices: [], problem: null }
+  let iphones: IphoneState = { pending: false, devices: [], problem: null }
+  /** iPhones show on macOS, with the helper. */
+  const iphoneHelper = opts.platform === 'darwin' ? opts.iphoneHelper : null
   /** Bumped by every start and stop, so a slow look can't start watching late. */
   let generation = 0
   /** dispose() is final: once set, nothing (a focus included) starts a source again. */
@@ -87,6 +99,11 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
 
   const streams = new DeviceStreams({
     start: async (id, events, signal) => {
+      const screen = screenIdOf(id)
+      if (screen !== null) {
+        if (!iphoneHelper || !iphoneTracker?.has(screen)) throw new Error("The iPhone isn't connected.")
+        return startIphone(screen, events, iphoneIo(iphoneHelper), signal)
+      }
       const udid = udidOf(id)
       if (udid !== null) {
         if (!idb?.simVideo || !simulators?.booted(udid)) throw new Error("The simulator isn't booted.")
@@ -101,12 +118,12 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     send: (id, event) => send(IPC.devicesStream, id, event),
   })
 
-  /** The list, once some source has answered (or, with one already shown, once either source's
-   *  pending flag changes): until a first list, a tab waits rather than taking "no devices" for an
-   *  answer. Without `list !== null`, setting a settled source back to pending while the other is
-   *  already pending would leave the old list showing instead of saying so. */
+  /** The list, once some source has answered (or, with one already shown, once any source's pending
+   *  flag changes): until a first list, a tab waits rather than taking "no devices" for an answer.
+   *  Without `list !== null`, setting a settled source back to pending while the others are already
+   *  pending would leave the old list showing instead of saying so. */
   const update = () => {
-    if (watchers > 0 && (list !== null || !android.pending || !ios.pending)) publish(combineLists(android, ios))
+    if (watchers > 0 && (list !== null || !android.pending || !ios.pending || !iphones.pending)) publish(combineLists(android, ios, iphones))
   }
 
   const watchAndroid = async (mine: number, focus = false) => {
@@ -179,12 +196,34 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     simulators.start()
   }
 
+  /** iPhones: macOS, with the helper, which lists the screens on offer 3 s after it starts, then on
+   *  each change. Quiet when it fails: the list then has no iPhones (a run that had listed keeps its
+   *  list while the helper is started again), and the reason goes to main's log. */
+  const watchIphones = (helper: string) => {
+    iphoneTracker = new IphoneTracker({
+      list: () => iphoneIo(helper).list(),
+      publish: (devices) => {
+        iphones = { pending: false, devices, problem: null }
+        update()
+      },
+      failed: (why, listed) => {
+        console.error('devices: the iPhone helper stopped:', why)
+        if (listed) return
+        iphones = { pending: false, devices: [], problem: null }
+        update()
+      },
+    })
+    iphoneTracker.start()
+  }
+
   const startWatching = () => {
     const mine = ++generation
     android = { pending: true, devices: [], problem: null }
     ios = { pending: opts.platform === 'darwin', devices: [], problem: null }
+    iphones = { pending: iphoneHelper !== null, devices: [], problem: null }
     void watchAndroid(mine)
     void watchSimulators(mine)
+    if (iphoneHelper) watchIphones(iphoneHelper)
   }
   const stopWatching = () => {
     generation++
@@ -192,6 +231,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     tracker = null
     simulators?.stop()
     simulators = null
+    iphoneTracker?.stop()
+    iphoneTracker = null
     // No push: every tab that watched has already stopped listening (it calls off() before unwatch).
     list = null
   }
@@ -257,6 +298,9 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   ipcMain.on(IPC.devicesInput, (_e, id: unknown, input: unknown) => {
     if (typeof id === 'string') streams.input(id, input)
   })
+  ipcMain.on(IPC.devicesCameraSettings, () => {
+    if (opts.platform === 'darwin') void shell.openExternal(CAMERA_SETTINGS)
+  })
   ipcMain.handle(IPC.devicesScreenshot, async (_e, png: unknown): Promise<InsertResult> => {
     if (!(png instanceof Uint8Array) || png.length === 0 || png.length > MAX_SCREENSHOT_BYTES || !isPng(png)) {
       return { error: 'There was no screenshot to add.' }
@@ -316,6 +360,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       tracker = null
       simulators?.stop()
       simulators = null
+      iphoneTracker?.stop()
+      iphoneTracker = null
       // Now, not after the companions it just signalled have exited: quitting mustn't wait out their
       // 2 s kill escalation, and unlinking a socket one still holds open is harmless.
       removeSocketDir(opts.socketDir)

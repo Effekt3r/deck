@@ -74,6 +74,7 @@ const devices = registerDeviceIpc({
   home: join(root, 'home'),
   env,
   socketDir: join(root, 'sockets'),
+  iphoneHelper: '/never/run/iphone-screen', // off macOS (this registration is 'linux'): never run
   saveImage: (png) => saveImageImpl(png),
 })
 const { win, sent } = fakeWindow()
@@ -143,6 +144,10 @@ describe('registerDeviceIpc', () => {
     } finally {
       saveImageImpl = prev
     }
+  })
+
+  it("System Settings' camera page is macOS's: elsewhere the call does nothing", () => {
+    expect(() => emit(IPC.devicesCameraSettings)).not.toThrow()
   })
 
   it('ignores input it cannot use and views of nothing', () => {
