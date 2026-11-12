@@ -115,13 +115,18 @@ describe('DeviceStreams', () => {
     expect(attempts()).toBe(2)
   })
 
-  it("a later failure that isn't blocked carries no blocked field, and still goes through the retries", async () => {
+  it("a block doesn't outlive retry(): the next, ordinary failure's error carries no blocked field", async () => {
     let failing = false
     const { streams, started, sent } = setup(() => failing)
     streams.view('iphone:A1')
     await flush()
-    failing = true
-    started[0].events.end('The device stopped sending video.') // no blocked: an ordinary break
+    started[0].events.end("macOS hasn't let Deck use the camera.", 'camera')
+    expect(sent.at(-1)).toEqual(['iphone:A1', { type: 'state', state: 'error', message: "macOS hasn't let Deck use the camera.", blocked: 'camera' }])
+
+    streams.retry('iphone:A1') // Try again, once allowed
+    await flush()
+    failing = true // the retried session, and every one after, now breaks the ordinary way
+    started[1].events.end('gone') // not blocked
     expect(sent.at(-1)).toEqual(['iphone:A1', { type: 'state', state: 'reconnecting' }])
     await vi.advanceTimersByTimeAsync(1000 + 2000 + 5000)
     expect(sent.at(-1)).toEqual(['iphone:A1', { type: 'state', state: 'error', message: 'device offline' }])
