@@ -97,6 +97,22 @@ describe('DeviceStreams', () => {
     expect(started).toHaveLength(2)
   })
 
+  it('a blocked stream (the camera not allowed) says so at once, to every viewer, until retry()', async () => {
+    const { streams, started, sent, attempts } = setup()
+    streams.view('iphone:A1')
+    await flush()
+    started[0].events.end("macOS hasn't let Deck use the camera.", 'camera')
+    const blocked = { type: 'state', state: 'error', message: "macOS hasn't let Deck use the camera.", blocked: 'camera' }
+    expect(sent.at(-1)).toEqual(['iphone:A1', blocked])
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(attempts()).toBe(1) // not retried: only System Settings can change it
+    streams.view('iphone:A1') // a second tab
+    expect(sent.at(-1)).toEqual(['iphone:A1', blocked])
+    streams.retry('iphone:A1') // Try again, once allowed
+    await flush()
+    expect(attempts()).toBe(2)
+  })
+
   it('a viewer joining before the first packet gets connecting and no key-frame reset; a viewer joining while paused gets connecting', async () => {
     const { streams, started, sent } = setup()
     streams.view('android:1')
