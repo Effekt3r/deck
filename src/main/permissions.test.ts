@@ -16,17 +16,24 @@ function installed(): { request?: RequestHandler; check?: CheckHandler } {
 }
 
 describe('denyMedia', () => {
-  it('refuses the page the camera and the microphone, and nothing else', () => {
+  it('refuses the page the camera, the microphone and the screen, asked for or checked', () => {
     const handlers = installed()
     const answers: boolean[] = []
     handlers.request?.(null, 'media', (granted) => answers.push(granted))
-    handlers.request?.(null, 'clipboard-sanitized-write', (granted) => answers.push(granted))
-    expect(answers).toEqual([false, true])
+    handlers.request?.(null, 'display-capture', (granted) => answers.push(granted))
+    expect(answers).toEqual([false, false])
     expect(handlers.check?.(null, 'media')).toBe(false)
-    expect(handlers.check?.(null, 'fullscreen')).toBe(true)
+    expect(handlers.check?.(null, 'display-capture')).toBe(false)
   })
 
-  it("keeps Electron's own no to document.execCommand('paste')", () => {
-    expect(installed().check?.(null, 'deprecated-sync-clipboard-read')).toBe(false)
+  it("keeps Electron's own answer to everything else, its no to document.execCommand('paste') included", () => {
+    const handlers = installed()
+    const answers: boolean[] = []
+    handlers.request?.(null, 'clipboard-sanitized-write', (granted) => answers.push(granted))
+    handlers.request?.(null, 'fullscreen', (granted) => answers.push(granted))
+    expect(answers).toEqual([true, true])
+    expect(handlers.check?.(null, 'fullscreen')).toBe(true)
+    expect(handlers.check?.(null, 'clipboard-sanitized-write')).toBe(true)
+    expect(handlers.check?.(null, 'deprecated-sync-clipboard-read')).toBe(false)
   })
 })

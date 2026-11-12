@@ -17,9 +17,14 @@ exports.default = async function beforePack(context) {
   if (hash !== info.sha256) {
     throw new Error(`resources/scrcpy-server is missing or isn't scrcpy's server ${info.version}: run npm run fetch:scrcpy`)
   }
-  // npm ci builds it on a Mac with Xcode's command line tools (scripts/build-iphone-helper.mjs).
-  const helper = join(__dirname, '..', 'native', 'iphone-screen', 'out', 'iphone-screen')
-  if (context.electronPlatformName === 'darwin' && !existsSync(helper)) {
-    throw new Error("native/iphone-screen/out/iphone-screen is missing: run npm run build:iphone (it needs Xcode's command line tools)")
+  if (context.electronPlatformName === 'darwin') {
+    // npm ci builds the helper; built again here if a source changed since (a current one is left
+    // alone), so a package never ships a stale one. A failed build stops this one as it stops the install.
+    const { buildIphoneHelper, IPHONE_HELPER } = await import('./build-iphone-helper.mjs')
+    buildIphoneHelper()
+    // Still none: a Mac without Xcode's command line tools builds none, with only a note.
+    if (!existsSync(IPHONE_HELPER)) {
+      throw new Error("native/iphone-screen/out/iphone-screen is missing: run npm run build:iphone (it needs Xcode's command line tools)")
+    }
   }
 }
