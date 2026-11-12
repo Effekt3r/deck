@@ -1,5 +1,9 @@
+import type { ChildProcess } from 'node:child_process'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { iphoneDevices, iphoneIo, IphoneTracker, readScreenList, screenIdOf } from './iphone'
+import type { DeviceBlock } from '@shared/types'
+import { CODEC_H264 } from '../android/protocol'
+import type { StreamEvents, StreamPacket } from '../session'
+import { CAMERA_DENIED, helperFailure, iphoneDevices, iphoneIo, IphoneTracker, readScreenList, screenIdOf, startIphone } from './iphone'
 import { fakeProcess, type FakeProcess } from './test-process'
 
 // Made-up capture device IDs: the real ones are UUIDs.
@@ -102,7 +106,7 @@ describe('IphoneTracker', () => {
     tracker.stop()
   })
 
-  it('logs a list that drops entries once per run, not on every later line that drops its own', async () => {
+  it('logs a list that drops entries once per run (and again in the next), not on every later line that drops its own', async () => {
     const warnings: unknown[][] = []
     const originalWarn = console.warn
     console.warn = ((...args: unknown[]) => {
@@ -111,11 +115,18 @@ describe('IphoneTracker', () => {
     try {
       const { tracker, spawned, published } = setup()
       tracker.start()
-      spawned[0].stdout.write(list({ id: '--max-size' }, { id: A, name: 'iPhone' }))
+      spawned[0].stdout.write(list({ id: '--max-size' }, null, { id: A, name: 'iPhone' }))
       await vi.waitFor(() => expect(published).toEqual([[`iphone:${A}`]]))
       spawned[0].stdout.write(list({ id: '../x' }, { id: A, name: 'iPhone' }))
       await vi.waitFor(() => expect(published).toEqual([[`iphone:${A}`], [`iphone:${A}`]]))
-      expect(warnings).toEqual([["devices: iphone-screen: skipped 1 screens with an id Deck doesn't recognise"]])
+      expect(warnings).toEqual([["devices: iphone-screen: skipped 2 entries Deck couldn't read"]])
+      // The next run warns again.
+      spawned[0].exit(1)
+      await vi.advanceTimersByTimeAsync(0)
+      await vi.advanceTimersByTimeAsync(1000)
+      spawned[1].stdout.write(list({ id: '../x' }))
+      await vi.waitFor(() => expect(published).toHaveLength(3))
+      expect(warnings).toEqual([["devices: iphone-screen: skipped 2 entries Deck couldn't read"], ["devices: iphone-screen: skipped 1 entry Deck couldn't read"]])
       tracker.stop()
     } finally {
       console.warn = originalWarn
@@ -138,5 +149,161 @@ describe('iphoneIo', () => {
       ['/Deck.app/Contents/Resources/iphone-screen', ['list'], ['pipe', 'pipe', 'pipe']],
       ['/Deck.app/Contents/Resources/iphone-screen', ['stream', A, '--max-size', '1600', '--max-fps', '60'], ['pipe', 'pipe', 'pipe']],
     ])
+  })
+})
+
+describe('helperFailure', () => {
+  it("says the helper's failures in Deck's words; only the camera is blocked", () => {
+    expect(helperFailure('{"error":"camera-denied"}')).toEqual({ why: CAMERA_DENIED, blocked: 'camera' })
+    expect(helperFailure('{"error":"not-found"}')?.why).toBe("The iPhone didn't offer its screen. Unlock it, and check that it trusts this Mac.")
+    expect(helperFailure('{"error":"no-picture"}')).toEqual({ why: 'The iPhone sent no picture. Unlock it, and check that its screen is on.' })
+    expect(helperFailure('{"error":"disconnected"}')).toEqual({ why: 'The iPhone was disconnected.' })
+    expect(helperFailure('{"error":"capture","message":"The iPhone\'s screen stopped: busy."}')).toEqual({ why: "The iPhone's screen stopped: busy." })
+    expect(helperFailure('{"error":"encoder","message":"No H.264 encoder (VideoToolbox error -12902)."}')).toEqual({ why: 'No H.264 encoder (VideoToolbox error -12902).' })
+    expect(helperFailure('{"error":"usage"}')).toEqual({ why: 'iphone-screen failed (usage).' })
+    expect(helperFailure('2026-11-11 something else')).toBeNull()
+    expect(helperFailure('{"message":"no code"}')).toBeNull()
+  })
+})
+
+/** The helper's stream: scrcpy's, from the codec id on. */
+function codec(id = CODEC_H264): Buffer {
+  const b = Buffer.alloc(4)
+  b.writeUInt32BE(id)
+  return b
+}
+function session(width: number, height: number): Buffer {
+  const b = Buffer.alloc(12)
+  b.writeUInt32BE(0x80000000, 0)
+  b.writeUInt32BE(width, 4)
+  b.writeUInt32BE(height, 8)
+  return b
+}
+function packet(flags: bigint, data: number[]): Buffer {
+  const head = Buffer.alloc(12)
+  head.writeBigUInt64BE(flags, 0)
+  head.writeUInt32BE(data.length, 8)
+  return Buffer.concat([head, Buffer.from(data)])
+}
+
+describe('startIphone', () => {
+  function setup(options: Parameters<typeof fakeProcess>[0] = {}) {
+    const helper = fakeProcess(options)
+    const streamed: string[] = []
+    const io = {
+      list: (): ChildProcess => {
+        throw new Error('not here')
+      },
+      stream: (id: string) => {
+        streamed.push(id)
+        return helper.proc
+      },
+    }
+    const sizes: [number, number][] = []
+    const packets: StreamPacket[] = []
+    const ends: [string, DeviceBlock | undefined][] = []
+    const events: StreamEvents = {
+      size: (w, h) => sizes.push([w, h]),
+      packet: (p) => packets.push(p),
+      end: (why, blocked) => ends.push([why, blocked]),
+    }
+    const stdin: string[] = []
+    helper.stdin.on('data', (chunk: Buffer) => stdin.push(chunk.toString()))
+    return { helper, io, streamed, sizes, packets, ends, events, stdin }
+  }
+
+  it('passes the screen on as it comes, and asks for key frames on stdin; input goes nowhere', async () => {
+    const t = setup()
+    const live = await startIphone(A, t.events, t.io, new AbortController().signal)
+    expect(t.streamed).toEqual([A])
+    const bytes = Buffer.concat([codec(), session(736, 1600), packet(1n << 62n, [0, 0, 0, 1, 0x67]), packet((1n << 61n) | 16_666n, [0, 0, 0, 1, 0x65])])
+    t.helper.stdout.write(bytes.subarray(0, 9))
+    t.helper.stdout.write(bytes.subarray(9))
+    await vi.waitFor(() => expect(t.packets).toHaveLength(2))
+    expect(t.sizes).toEqual([[736, 1600]])
+    expect(t.packets).toEqual([
+      { config: true, key: false, data: new Uint8Array([0, 0, 0, 1, 0x67]) },
+      { config: false, key: true, data: new Uint8Array([0, 0, 0, 1, 0x65]) },
+    ])
+    live.keyframe()
+    live.input({ type: 'touch', action: 'down', x: 1, y: 1, width: 736, height: 1600 })
+    await vi.waitFor(() => expect(t.stdin.join('')).toBe('key\n'))
+    const closed = new Promise((resolve) => t.helper.proc.once('close', resolve))
+    live.stop()
+    expect(t.helper.killed()).toBe(true)
+    await closed
+    expect(t.ends).toEqual([]) // a stop is never reported as an end
+  })
+
+  it("ends with the camera blocked when macOS hasn't let Deck use it", async () => {
+    const t = setup()
+    await startIphone(A, t.events, t.io, new AbortController().signal)
+    t.helper.stderr.write('{"error":"camera-denied"}\n')
+    t.helper.exit(1)
+    await vi.waitFor(() => expect(t.ends).toEqual([[CAMERA_DENIED, 'camera']]))
+
+    // Its last line counts with no newline too.
+    const unended = setup()
+    await startIphone(A, unended.events, unended.io, new AbortController().signal)
+    unended.helper.stderr.write('{"error":"camera-denied"}')
+    unended.helper.exit(1)
+    await vi.waitFor(() => expect(unended.ends).toEqual([[CAMERA_DENIED, 'camera']]))
+  })
+
+  it("ends in the helper's words, else a line that reads as a failure, else how it ended", async () => {
+    const found = setup()
+    await startIphone(A, found.events, found.io, new AbortController().signal)
+    found.helper.stderr.write('{"error":"not-found"}\n')
+    found.helper.exit(1)
+    await vi.waitFor(() => expect(found.ends).toEqual([["The iPhone didn't offer its screen. Unlock it, and check that it trusts this Mac.", undefined]]))
+
+    const crashed = setup()
+    await startIphone(A, crashed.events, crashed.io, new AbortController().signal)
+    crashed.helper.stderr.write('Fatal error: Unexpectedly found nil\n')
+    crashed.helper.exit(133)
+    await vi.waitFor(() => expect(crashed.ends).toEqual([['Fatal error: Unexpectedly found nil', undefined]]))
+
+    const quiet = setup()
+    await startIphone(A, quiet.events, quiet.io, new AbortController().signal)
+    quiet.helper.exit(3)
+    await vi.waitFor(() => expect(quiet.ends).toEqual([['iphone-screen stopped (exit code 3).', undefined]]))
+  })
+
+  it('a helper that stops mid-packet: the cut packet goes nowhere, and the stream still ends', async () => {
+    const t = setup()
+    await startIphone(A, t.events, t.io, new AbortController().signal)
+    const cut = packet(1n << 61n, [0, 0, 0, 1, 0x65, 0x88])
+    t.helper.stdout.write(Buffer.concat([codec(), session(736, 1600), cut.subarray(0, cut.length - 2)]))
+    t.helper.exit(0)
+    await vi.waitFor(() => expect(t.ends).toEqual([['iphone-screen stopped.', undefined]]))
+    expect(t.sizes).toEqual([[736, 1600]])
+    expect(t.packets).toEqual([])
+  })
+
+  it('a stream that makes no sense ends it, and stops the helper', async () => {
+    const t = setup()
+    await startIphone(A, t.events, t.io, new AbortController().signal)
+    t.helper.stdout.write(Buffer.concat([codec(), session(0, 1600)]))
+    await vi.waitFor(() => expect(t.ends).toEqual([["Deck's iPhone helper sent a 0×1600 screen.", undefined]]))
+    expect(t.helper.killed()).toBe(true)
+
+    const other = setup()
+    await startIphone(A, other.events, other.io, new AbortController().signal)
+    other.helper.stdout.write(codec(0x68323635))
+    await vi.waitFor(() => expect(other.ends).toEqual([["Deck's iPhone helper sent another codec.", undefined]]))
+  })
+
+  it('a helper that fails to start: the spawn error, or a rejected start; a stopped start spawns nothing', async () => {
+    const t = setup({ spawnError: Object.assign(new Error('spawn /x/iphone-screen ENOENT'), { code: 'ENOENT' }) })
+    await startIphone(A, t.events, t.io, new AbortController().signal)
+    await vi.waitFor(() => expect(t.ends).toEqual([['spawn /x/iphone-screen ENOENT', undefined]]))
+
+    const throwing = { list: () => fakeProcess().proc, stream: (): ChildProcess => { throw new Error('spawn ENOEXEC') } }
+    await expect(startIphone(A, t.events, throwing, new AbortController().signal)).rejects.toThrow('spawn ENOEXEC')
+
+    const stopped = setup()
+    const signal = AbortSignal.abort()
+    await expect(startIphone(A, stopped.events, stopped.io, signal)).rejects.toThrow('Stopped.')
+    expect(stopped.streamed).toEqual([])
   })
 })

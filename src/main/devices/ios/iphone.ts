@@ -1,5 +1,8 @@
 import { type ChildProcess, spawn, type SpawnOptions } from 'node:child_process'
-import type { DeviceInfo } from '@shared/types'
+import type { DeviceBlock, DeviceInfo } from '@shared/types'
+import { CODEC_H264, VideoReader } from '../android/protocol'
+import type { DeviceSession, StreamEvents } from '../session'
+import { asFailure, endedHow, lastLine, stopper } from './process'
 import { LineTracker } from './tracker'
 
 /** An iPhone's screen, as Deck's helper (native/iphone-screen/) lists it: its capture device's ID (a
@@ -83,8 +86,8 @@ export interface IphoneTrackerDeps {
 
 /** Follows the iPhone screens with the helper's `list`, restarted and timed out as LineTracker does
  *  (tracker.ts). Each line lists every screen on offer, the first 3 s after the start. A line that
- *  drops entries (an id Deck doesn't recognise) is logged once per run: otherwise a helper that kept
- *  sending the same unrecognised id would repeat it forever. */
+ *  drops entries Deck can't read (ScreenList's `skipped`) is logged once per run: otherwise a helper
+ *  that kept sending the same ones would repeat it forever. */
 export class IphoneTracker {
   private offered = new Set<string>()
   /** Reset at the start of every run, so a new run that still drops entries gets its own warning. */
@@ -105,7 +108,7 @@ export class IphoneTracker {
         // would otherwise vanish behind a valid-looking empty list with nothing in the log to explain it.
         if (skipped > 0 && !this.warnedSkipped) {
           this.warnedSkipped = true
-          console.warn(`devices: iphone-screen: skipped ${skipped} screens with an id Deck doesn't recognise`)
+          console.warn(`devices: iphone-screen: skipped ${skipped} ${skipped === 1 ? 'entry' : 'entries'} Deck couldn't read`)
         }
         deps.publish(iphoneDevices(screens))
       },
@@ -149,5 +152,95 @@ export function iphoneIo(helper: string, deps: IphoneIoDeps = { spawn }): Iphone
   return {
     list: () => deps.spawn(helper, ['list'], options),
     stream: (id) => deps.spawn(helper, ['stream', id, '--max-size', String(MAX_SIDE), '--max-fps', String(MAX_FPS)], options),
+  }
+}
+
+/** What the panel says, under "Camera not allowed". */
+export const CAMERA_DENIED = "macOS hasn't let Deck use the camera, which is how it shows an iPhone's screen."
+
+/** The helper's failure line (`{"error":"<code>","message":"…"}`) as Deck says it, and what only the
+ *  user can change; null for any other line. */
+export function helperFailure(line: string): { why: string; blocked?: DeviceBlock } | null {
+  let raw: unknown
+  try {
+    raw = JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (typeof raw !== 'object' || raw === null) return null
+  const { error, message } = raw as Record<string, unknown>
+  if (typeof error !== 'string') return null
+  switch (error) {
+    case 'camera-denied':
+      return { why: CAMERA_DENIED, blocked: 'camera' }
+    case 'not-found':
+      return { why: "The iPhone didn't offer its screen. Unlock it, and check that it trusts this Mac." }
+    case 'no-picture':
+      return { why: 'The iPhone sent no picture. Unlock it, and check that its screen is on.' }
+    case 'disconnected':
+      return { why: 'The iPhone was disconnected.' }
+    default:
+      return { why: typeof message === 'string' && message ? message : `iphone-screen failed (${error}).` }
+  }
+}
+
+/** Starts iPhone screen `id`'s stream: the helper asks for the camera (macOS treats the screen as
+ *  one; the prompt shows once, for Deck), finds the screen and captures it. Resolves once the helper
+ *  runs, so the streams' 20 s start deadline doesn't cover the prompt, which waits for an answer; the
+ *  first picture follows in about 3 s after that. The helper gives up by itself when the screen isn't
+ *  offered within 10 s or sends nothing in 15 s. View only: input is dropped. */
+export async function startIphone(id: string, events: StreamEvents, io: IphoneIo, signal: AbortSignal): Promise<DeviceSession> {
+  if (signal.aborted) throw new Error('Stopped.')
+  // A spawn that throws (ENOEXEC) rejects the start here, with nothing opened.
+  const proc = io.stream(id)
+  const stop = stopper(proc)
+  let over = false
+  /** The helper's own failure line, which explains more than how it ended. */
+  let failure: { why: string; blocked?: DeviceBlock } | null = null
+  const said = lastLine(proc.stderr, (line) => {
+    const known = helperFailure(line)
+    if (known) failure = known
+    return known ? known.why : asFailure(line) || null
+  })
+  const end = (why: string, blocked?: DeviceBlock) => {
+    if (over) return
+    over = true
+    stop()
+    events.end(why, blocked)
+  }
+  const finish = (fallback: string) => {
+    // said() first: it also reads a last line with no newline, which may be the helper's failure.
+    const last = said()
+    if (failure) end(failure.why, failure.blocked)
+    else end(last || fallback)
+  }
+
+  const reader = new VideoReader({ from: 'codec', sender: "Deck's iPhone helper" })
+  proc.stdout?.on('data', (chunk: Buffer) => {
+    for (const event of reader.feed(chunk)) {
+      if (over) return
+      if (event.type === 'error') return end(event.message)
+      if (event.type === 'codec' && event.codec !== CODEC_H264) return end("Deck's iPhone helper sent another codec.")
+      if (event.type === 'size') events.size(event.width, event.height)
+      else if (event.type === 'packet') events.packet({ config: event.config, key: event.key, data: event.data })
+    }
+  })
+  // Writing to a helper that has just gone can fail (EPIPE): its 'close' says why.
+  proc.stdin?.on('error', () => {})
+  // A spawn that fails once under way (ENOENT, EACCES) says so in 'error', then 'close'. Unheard, the
+  // 'error' would reach main's uncaught exception handler.
+  proc.on('error', (err) => finish(err.message))
+  proc.on('close', (code: number | null, sig: NodeJS.Signals | null) => finish(endedHow('iphone-screen', code, sig)))
+
+  return {
+    input: () => {}, // view only: Apple offers no way to tap a real iPhone remotely
+    keyframe: () => {
+      if (!over && proc.stdin?.writable) proc.stdin.write('key\n')
+    },
+    stop: () => {
+      if (over) return
+      over = true
+      stop()
+    },
   }
 }
