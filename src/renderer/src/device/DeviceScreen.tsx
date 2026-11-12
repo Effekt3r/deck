@@ -63,7 +63,7 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
   /** Why decoding stopped (MAX_FAILURES in a row); null while it works. */
   const [broken, setBroken] = useState<string | null>(null)
   /** Apple offers no way to tap a real iPhone remotely: its screen is only shown. */
-  const takesInput = kind !== 'iphone'
+  const takesInput = kind === 'android' || kind === 'emulator' || kind === 'simulator'
   const interactive = takesInput && live && !message && broken === null
   /** The frame size touches are made for: scrcpy ignores a touch made for another size. */
   const sizeRef = useRef<Box | null>(null)
@@ -384,7 +384,7 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
   }
 
   // macOS hasn't let Deck use the camera (an iPhone's screen is one): System Settings changes that.
-  const camera = stream.state === 'error' && stream.blocked === 'camera'
+  const cameraBlocked = stream.state === 'error' && stream.blocked === 'camera'
   // Main's stream failed (it retries, then gives up), or decoding did: each has its own Try again.
   const failure = stream.state === 'error'
     ? { detail: stream.message, retry: () => {
@@ -396,7 +396,9 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
       : null
   const dim = message !== null || (live && (stream.state !== 'live' || broken !== null))
   return (
-    <div className="dp-area" ref={areaRef}>
+    // A click beside the screen, or through an overlay's text, leaves the keyboard where it was (with
+    // no picture yet that's the whole area): only the canvas decides for itself.
+    <div className="dp-area" ref={areaRef} onMouseDown={(e) => { if (e.target === e.currentTarget) e.preventDefault() }}>
       {drawn && (
         // Not interactive (gone, not allowed, not streaming), a click leaves the keyboard where it was,
         // but a screen that has it keeps it (-1, not none) until it's back: a wiggling cable or a
@@ -412,12 +414,12 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
         <div className="dp-overlay" role="status"><strong>{message}</strong></div>
       ) : live && failure ? (
         <div className="dp-overlay error" role="alert">
-          <strong>{camera ? 'Camera not allowed' : `Couldn't show ${name}`}</strong>
+          <strong>{cameraBlocked ? 'Camera not allowed' : `Couldn't show ${name}`}</strong>
           {failure.detail && <span className="dp-overlay-detail">{failure.detail}</span>}
           {/* A click leaves the keyboard where it was: the buttons go once the stream starts again, and
               Open System Settings leaves Deck. */}
           <span className="dp-overlay-buttons" onMouseDown={(e) => e.preventDefault()}>
-            {camera && <button className="button" onClick={() => window.deck.devices.openCameraSettings()}>Open System Settings</button>}
+            {cameraBlocked && <button className="button" onClick={() => window.deck.devices.openCameraSettings()}>Open System Settings</button>}
             <button className="button" onClick={failure.retry}>Try again</button>
           </span>
         </div>

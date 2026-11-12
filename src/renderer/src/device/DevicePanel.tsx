@@ -214,10 +214,11 @@ function Nothing({ problem, iosProblem, wants, looking }: { problem: DeviceList[
     }
     if (problem) return <State error title="adb couldn't list the devices" detail={problem.error} />
   }
-  // iOS is wanted only on macOS, where iPhones show too.
+  // iOS is wanted only on macOS, where iPhones show too: unlocked, since one isn't listed while it's
+  // locked or doesn't trust the Mac.
   const detail = wants.android && wants.ios
-    ? 'Plug in an Android phone with USB debugging on or an iPhone, start an emulator, or boot a simulator.'
-    : wants.ios ? 'Plug in an iPhone, or boot a simulator in Xcode or with simctl.' : 'Plug in an Android phone with USB debugging on, or start an emulator.'
+    ? 'Plug in an unlocked iPhone or an Android phone with USB debugging on, start an emulator, or boot a simulator.'
+    : wants.ios ? 'Plug in an unlocked iPhone, or boot a simulator in Xcode or with simctl.' : 'Plug in an Android phone with USB debugging on, or start an emulator.'
   return <State title="No devices connected" detail={detail} />
 }
 
