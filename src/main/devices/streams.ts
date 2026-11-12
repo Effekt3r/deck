@@ -9,7 +9,8 @@ const STEADY_MS = 5000
 export interface StreamsDeps {
   /** Starts device `id`'s stream; `signal` stops a start still under way. `events`' `size` and
    *  `packet` may arrive before this resolves; a failure before then rejects it instead of calling
-   *  `events.end()`. */
+   *  `events.end()`, so a block can only arrive through `events.end()` once start() has resolved: a
+   *  start that rejects is always retried. */
   start(id: string, events: StreamEvents, signal: AbortSignal): Promise<DeviceSession>
   /** News for the renderer. */
   send(id: string, event: DeviceStreamEvent): void
@@ -35,7 +36,7 @@ interface Stream {
   /** The error shown once the retries ran out (or at once, for a blocked stream), and again to a
    *  viewer that joins; cleared by begin() (retry(), resume(), or a fresh view after every viewer had
    *  left and dropped the stream). */
-  error: Extract<DeviceStreamEvent, { type: 'state' }> | null
+  error: (Extract<DeviceStreamEvent, { type: 'state' }> & { state: 'error' }) | null
   /** The latest capture size, for a viewer that joins a running stream; cleared on a restart, since
    *  a reconnected stream's size comes with its new session. */
   size: { width: number; height: number } | null

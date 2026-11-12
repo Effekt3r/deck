@@ -335,7 +335,7 @@ export interface DeviceInfo {
 /** What a device runs: Android phones and emulators, or iOS simulators and iPhones. */
 export type DevicePlatform = 'android' | 'ios'
 
-/** What stops a stream that only the user can change, so it isn't retried: 'camera', macOS hasn't let
+/** What stops a stream that only the user can change, so it isn't retried: 'camera': macOS hasn't let
  *  Deck use the camera (an iPhone's screen is a camera to macOS). */
 export type DeviceBlock = 'camera'
 
@@ -506,8 +506,8 @@ export interface DeckApi {
     input(id: string, input: DeviceInput): void
     /** Saves a screenshot (PNG) where Claude can read it: the text that adds it to Claude's prompt. */
     screenshot(png: Uint8Array): Promise<InsertResult>
-    /** Opens System Settings at Privacy & Security → Camera (macOS), where Deck is let use the
-     *  camera an iPhone's screen is. */
+    /** Opens System Settings at Privacy & Security → Camera (macOS), where Deck can be allowed the
+     *  camera (an iPhone's screen is one to macOS). */
     openCameraSettings(): void
   }
   app: {

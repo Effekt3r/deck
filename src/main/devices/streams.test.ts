@@ -108,9 +108,23 @@ describe('DeviceStreams', () => {
     expect(attempts()).toBe(1) // not retried: only System Settings can change it
     streams.view('iphone:A1') // a second tab
     expect(sent.at(-1)).toEqual(['iphone:A1', blocked])
+    expect(states(sent)).toEqual(['connecting', 'error', 'error']) // never 'reconnecting': no retry was ever sent
     streams.retry('iphone:A1') // Try again, once allowed
+    expect(states(sent).at(-1)).toBe('connecting') // "Camera not allowed" is cleared at once
     await flush()
     expect(attempts()).toBe(2)
+  })
+
+  it("a later failure that isn't blocked carries no blocked field, and still goes through the retries", async () => {
+    let failing = false
+    const { streams, started, sent } = setup(() => failing)
+    streams.view('iphone:A1')
+    await flush()
+    failing = true
+    started[0].events.end('The device stopped sending video.') // no blocked: an ordinary break
+    expect(sent.at(-1)).toEqual(['iphone:A1', { type: 'state', state: 'reconnecting' }])
+    await vi.advanceTimersByTimeAsync(1000 + 2000 + 5000)
+    expect(sent.at(-1)).toEqual(['iphone:A1', { type: 'state', state: 'error', message: 'device offline' }])
   })
 
   it('a viewer joining before the first packet gets connecting and no key-frame reset; a viewer joining while paused gets connecting', async () => {
