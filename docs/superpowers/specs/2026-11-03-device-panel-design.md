@@ -79,11 +79,13 @@ refines this design in these places, written into the sections below:
   simulators.
 - **The helper is looked for once, at start** (`index.ts`): without one, iPhones aren't a source at
   all, so nothing waits for them and no list says "no iPhones" late.
-- **The page is refused the camera and microphone** (`src/main/permissions.ts`): with the camera
-  entitlement and macOS's yes, Electron would otherwise grant a page's `getUserMedia` too.
+- **The page is refused the camera, the microphone and the screen** (`src/main/permissions.ts`): with
+  the camera entitlement and macOS's yes, Electron would otherwise grant a page's `getUserMedia` too,
+  and the page has no use for any of them.
 - **A helper that doesn't compile stops `npm ci`;** only a Mac without Xcode's command line tools
-  skips it, with a note, and then has no iPhones. A packaged Mac build without it stops, and so does
-  CI, which must run its selftest.
+  skips it, with a note, and then has no iPhones. A packaged Mac build builds it again when a source
+  changed since, so it never ships a stale one, and stops without one; so does CI, which must run its
+  selftest.
 - **Only Android phones, emulators and simulators take input:** the screen's list of kinds that do is
   an allow-list, so an iPhone (and any kind added later, until it says otherwise) is view only and its
   screen never takes the keyboard. Clicks beside the screen, and on a failed screen's buttons, leave
@@ -583,17 +585,19 @@ while the simulators or the iPhones are).
   macOS treats as a camera."), and `com.apple.security.device.camera` is in the one entitlements
   file the app and every binary in it are signed with. Whether macOS checks it on the app or on the
   helper isn't documented, so both have it. The phone asks nothing: its consent is the Trust prompt.
-- **The page never gets the camera or microphone** (`src/main/permissions.ts`): Electron grants every
-  permission request it isn't told about, so once macOS has let Deck use the camera a page's
-  `getUserMedia` would get it too. The permission check also keeps `deprecated-sync-clipboard-read`
-  denied, as Electron does without a handler.
+- **The page never gets the camera, the microphone or the screen** (`src/main/permissions.ts`:
+  `media` and `display-capture`, asked for or checked): Electron grants every permission request it
+  isn't told about, so once macOS has let Deck use the camera a page's `getUserMedia` would get it
+  too. Every other permission keeps Electron's own answer; the check keeps
+  `deprecated-sync-clipboard-read` denied, as Electron does without a handler.
 - **Built** with `swiftc` at install (`scripts/build-iphone-helper.mjs`, from postinstall;
   `npm run build:iphone` by hand): macOS 13 (Electron 45's minimum), arm64, Swift 5 mode, into
   `native/iphone-screen/out/` (not committed), and only when a source, their folder (a source
   deleted) or the script is newer than the helper. A Mac without Xcode's command line tools, or whose
   developer folder is gone, skips it with a note and then shows no iPhones; on CI that stops the
-  install, since CI must run the selftest. A helper that doesn't compile stops the install, and a
-  packaged Mac build without one stops (`before-pack.cjs`).
+  install, since CI must run the selftest. A helper that doesn't compile stops the install. A
+  packaged Mac build runs the same build first (`before-pack.cjs`: a current helper is left alone, a
+  stale one built again, a failed build stops the package), then stops if there's still none.
 - **Checked first in step 3** (2026-11-11, the update at the top): the phone appears, frames come
   (60 a second at 1206×2622), and the capture device's ID, though not the UDID, stays the same across
   runs and reconnects. Deck's own helper hasn't met a phone yet (Testing).
@@ -709,8 +713,8 @@ while the simulators or the iPhones are).
   - `ios/iphone.ts`: the helper's lists and failures (pure), `IphoneTracker`, an iPhone's session
     (`startIphone`) and the real helper (`iphoneIo`); `ios/iphone-helper.test.ts` runs the built
     helper's selftest (macOS).
-- `src/main/permissions.ts`: the page refused the camera and microphone; `src/main/index.ts` settles
-  the helper's path.
+- `src/main/permissions.ts`: the page refused the camera, the microphone and the screen;
+  `src/main/index.ts` settles the helper's path.
 - `native/iphone-screen/` (Swift): `main.swift` (the commands), `Output.swift` (whole writes to stdout
   under a lock, failures as JSON on stderr, stdin's lines and end), `Encoder.swift` (scaling, H.264
   and scrcpy's framing), `Screens.swift` (the screens on offer, and capturing one), `SelfTest.swift`
@@ -735,7 +739,7 @@ while the simulators or the iPhones are).
 - `scripts/fetch-scrcpy-server.mjs`, run by `postinstall` (or `npm run fetch:scrcpy`);
   `scripts/build-iphone-helper.mjs`, run by `postinstall` on macOS (or `npm run build:iphone`); and
   `scripts/before-pack.cjs`, electron-builder's `beforePack`, which stops a build without the right
-  server, and a Mac build without the helper.
+  server and, on macOS, builds a stale helper again and stops a build without one.
 - **Packaging:**
   - `electron-builder.yml`: `extraResources` for the server and, in `mac:`, the helper
     (`Resources/iphone-screen`); `NSCameraUsageDescription` in `extendInfo`;

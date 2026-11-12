@@ -69,7 +69,7 @@ Checked on macOS with a crafted log (2026-11-11); Franco's own sessions and Wind
 |---|---|
 | `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, `quote.ts` (shell quoting, and `quoteImagePath` for Claude Code's image paths; used by main and the renderer), `claude-images.ts` (why the Claude panel can't show an image: the reasons main answers) and `hid.ts` (a simulator's named keys as USB HID usages); the only thing main and renderer share |
 | `src/preload/index.ts` | exposes `window.deck`; sandboxed, requires only `electron` |
-| `src/main/index.ts` | lifecycle, single instance + `--open <folder>`, IPC wiring, the iPhone helper's path; `window.ts`, `menu.ts` (platform shortcuts → `MenuCommand`), `permissions.ts` (the page never gets the camera or microphone) |
+| `src/main/index.ts` | lifecycle, single instance + `--open <folder>`, IPC wiring, the iPhone helper's path; `window.ts`, `menu.ts` (platform shortcuts → `MenuCommand`), `permissions.ts` (the page never gets the camera, the microphone or the screen) |
 | `src/main/shell/` | `shellLaunch()` (which shell/args/env, pure), zsh `ZDOTDIR` wrappers + `deck.zsh`, PowerShell `deck.ps1`, installed to userData |
 | `src/main/pty/` | node-pty sessions, output batching, startup command typed when the line editor is ready |
 | `src/main/projects/` | `projects.json` (userData), scan, `.git/HEAD` branch, dirty counts, native context menu |
@@ -587,9 +587,10 @@ Things that aren't obvious from the code:
       and skipped while newer than its sources, their folder (so a deleted source rebuilds) and the
       script; `npm run build:iphone` after changing it. Without a developer folder (`xcode-select -p`
       fails, answers nothing, or names a folder that's gone) it's skipped with a note, and on CI it
-      throws, so CI can't skip the encoder check. `/usr/bin/swiftc` is a shim that would offer the command
-      line tools in a dialog; `xcode-select -p` only answers. A failed compile stops `npm ci`, and
-      `before-pack.cjs` stops a Mac build without the helper. Main looks for it once, at start
+      throws, so CI can't skip the encoder check. `/usr/bin/swiftc` is a shim that would offer the
+      command line tools in a dialog; `xcode-select -p` only answers. A failed compile stops `npm ci`.
+      `before-pack.cjs` runs the same build first, so a package never ships a stale helper (a failed
+      build stops it), then stops a Mac build that still has none. Main looks for it once, at start
       (`index.ts`: `Resources/iphone-screen` packaged, `native/iphone-screen/out/` in a dev build):
       without one there are no iPhones and nothing waits for them. A global in `main.swift` is set up
       as its top-level code reaches it, so the rest lives in other files; it's built under its final
@@ -643,11 +644,12 @@ Things that aren't obvious from the code:
       ("Deck shows a connected iPhone's screen, which macOS treats as a camera.").
       `com.apple.security.device.camera` is in the one entitlements file electron-builder signs the
       app and every binary in it with, so all of Deck's processes carry it. The page is refused it:
-      `permissions.ts` denies `media` to requests and checks (Electron grants every request it isn't
-      told about, and the camera would be open to the page once allowed), and its check keeps
-      `deprecated-sync-clipboard-read` denied, as Electron does without a handler. A dev build
-      started from a terminal is that terminal's child, so macOS most likely asks (or refuses) for the
-      terminal: start it through LaunchServices for a check
+      `permissions.ts` denies `media` (the camera and microphone) and `display-capture` (the screen)
+      to requests and checks (Electron grants every request it isn't told about, and the camera would
+      be open to the page once allowed); every other permission keeps Electron's own answer, and the
+      check keeps `deprecated-sync-clipboard-read` denied, as Electron does without a handler. A dev
+      build started from a terminal is that terminal's child, so macOS most likely asks (or refuses)
+      for the terminal: start it through LaunchServices for a check
       (`open -n node_modules/electron/dist/Electron.app --args …`), as the step 3 plan's Task 12 does.
     - **In the panel:** an iPhone fits an iOS app, as simulators do, and its header has only the
       camera (while Claude runs). Only Android phones, emulators and simulators take input
@@ -895,7 +897,7 @@ reference for M2/M3; keep it working until Deck replaces it.
 | `build/installer*.bmp`, `uninstallerSidebar.bmp`, `installer.nsh`, `license.txt` | NSIS installer art, "Open in Deck" folder context menu, EULA (have Franco review) |
 | `build/trayTemplate*.png`, `tray.*` | Menu-bar / tray icons |
 | `build/entitlements.mac.plist` | Hardened-runtime entitlements (JIT, node-pty, network, the camera for the iPhone helper); one file for the app and, as `entitlementsInherit`, every binary in it, so all of Deck's processes carry the camera entitlement (`src/main/permissions.ts` keeps the page off it) |
-| `electron-builder.yml` | Mac dmg+zip (Apple silicon only, notarised), Windows NSIS (x64; arm64 later), GitHub publish; each keeps only its own node-pty prebuild; ships `resources/` (scrcpy's server, its JSON, the notices) as `extraResources` and, on macOS, the iPhone helper (`mac.extraResources`, `Resources/iphone-screen`) and `NSCameraUsageDescription`; `beforePack` (`scripts/before-pack.cjs`) stops a build without the right server, and a Mac build without the helper |
+| `electron-builder.yml` | Mac dmg+zip (Apple silicon only, notarised), Windows NSIS (x64; arm64 later), GitHub publish; each keeps only its own node-pty prebuild; ships `resources/` (scrcpy's server, its JSON, the notices) as `extraResources` and, on macOS, the iPhone helper (`mac.extraResources`, `Resources/iphone-screen`) and `NSCameraUsageDescription`; `beforePack` (`scripts/before-pack.cjs`) stops a build without the right server and, on macOS, builds a stale helper again and stops a build without one |
 | `.github/workflows/release.yml` | Tag `v*` or manual run → one draft release (notes from `CHANGELOG.md`); signs when secrets exist |
 
 The NSIS include passes `--open "<folder>"`: the app must handle that argument
@@ -1113,7 +1115,8 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
     `devices:input` taps and types on a phone or simulator; `claude:image` and `claude:open-image`
     read images from Claude's session logs).
   - Load the renderer from a custom protocol, not `file://`.
-  - Deny permission requests (the camera and microphone are, since step 3: `src/main/permissions.ts`).
+  - Deny permission requests (the camera, the microphone and the screen are, since step 3:
+    `src/main/permissions.ts`).
   - Set Electron fuses, after moving node-pty into a `utilityProcess` (its Windows
     kill runs Electron as Node).
 
