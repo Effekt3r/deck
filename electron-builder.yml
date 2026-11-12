@@ -29,7 +29,8 @@ extraResources:
   - from: resources/THIRD-PARTY-NOTICES.txt
     to: THIRD-PARTY-NOTICES.txt
 
-# Stops a build whose scrcpy server is missing (scripts/before-pack.cjs).
+# Stops a build whose scrcpy server is missing, and a Mac build without the iPhone helper
+# (scripts/before-pack.cjs).
 beforePack: scripts/before-pack.cjs
 
 # ---------------------------------------------------------------- macOS
@@ -49,14 +50,23 @@ mac:
     - "!**/node_modules/node-pty/prebuilds/win32-*/**"
   hardenedRuntime: true
   gatekeeperAssess: false
+  # The app and everything in it, the iPhone helper included, are signed with the same entitlements
+  # (the helper needs the camera's under the hardened runtime: macOS treats an iPhone's screen as one).
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
+  # Deck's iPhone helper (scripts/build-iphone-helper.mjs builds it; before-pack.cjs stops a build
+  # without it), beside scrcpy's server.
+  extraResources:
+    - from: native/iphone-screen/out/iphone-screen
+      to: iphone-screen
   # Signs with "Developer ID Application: Effekt Studios Pty Ltd (QT63GS3Q44)"
   # from the keychain / CSC_LINK. Unsigned when no identity is available.
   notarize: true             # uses APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER
   extendInfo:
     NSHumanReadableCopyright: Copyright © 2026 Effekt Studios
     LSApplicationCategoryType: public.app-category.developer-tools
+    # macOS's camera prompt shows it: the helper captures a connected iPhone's screen.
+    NSCameraUsageDescription: Deck shows a connected iPhone's screen, which macOS treats as a camera.
 
 dmg:
   title: Deck ${version}

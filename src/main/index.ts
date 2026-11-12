@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { homedir, release } from 'node:os'
 import { join, resolve } from 'node:path'
-import { app, type BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron'
+import { app, type BrowserWindow, clipboard, ipcMain, Menu, session, shell } from 'electron'
 import { IPC } from '@shared/channels'
 import type { AppInfo, Platform, PtyCreateOptions } from '@shared/types'
 import { buildMenu } from './menu'
@@ -15,6 +15,7 @@ import { registerDeviceIpc } from './devices/ipc'
 import { socketDirFor } from './devices/ios/simulator-io'
 import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
+import { denyMedia } from './permissions'
 import { registerProjectsIpc } from './projects/ipc'
 import { PtyManager } from './pty/manager'
 import { installShellIntegration } from './shell/install'
@@ -157,6 +158,8 @@ async function start(): Promise<void> {
   })
 
   Menu.setApplicationMenu(buildMenu((cmd) => send(IPC.appMenu, cmd)))
+  // The camera entitlement is the iPhone helper's: the page never gets the camera.
+  denyMedia(session.defaultSession)
   win = createWindow()
   clip.attach(win)
   usage.attach(win)
