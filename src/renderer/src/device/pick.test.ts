@@ -7,6 +7,7 @@ const c66 = device('android:8d2e61a', 'C66')
 const s25 = device('android:R5CW20XY7QZ', "Franco's S25 FE")
 const emu = device('emulator:Pixel_9', 'Pixel 9')
 const sim: DeviceInfo = { id: 'simulator:U1', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' }
+const iphone: DeviceInfo = { id: 'iphone:C1', kind: 'iphone', name: "Franco's iPhone", detail: 'iPhone · cable · view only', state: 'ready' }
 
 describe('choosePanel', () => {
   const base = { tab: undefined, project: [] as string[], android: true, ios: false, byHand: false }
@@ -54,12 +55,19 @@ describe('choosePanel', () => {
     expect(choosePanel({ ...base, byHand: true, android: false, devices: [c66, sim] })).toEqual({ kind: 'choose', devices: [c66, sim] })
     expect(choosePanel({ ...base, project: [sim.id], devices: [c66, sim] })).toEqual({ kind: 'device', device: sim })
   })
+
+  it('iPhones fit an iOS app, beside simulators, and never an Android one', () => {
+    expect(choosePanel({ ...base, android: false, ios: true, devices: [c66, iphone] })).toEqual({ kind: 'device', device: iphone })
+    expect(choosePanel({ ...base, android: false, ios: true, devices: [iphone, sim] })).toEqual({ kind: 'choose', devices: [iphone, sim] })
+    expect(choosePanel({ ...base, devices: [c66, iphone] })).toEqual({ kind: 'device', device: c66 })
+  })
 })
 
 describe('menuOrder', () => {
   it('lists the devices that fit first, each group as listed', () => {
     expect(menuOrder([c66, sim, emu], { android: false, ios: true })).toEqual([sim, c66, emu])
     expect(menuOrder([c66, sim, emu], { android: true, ios: false })).toEqual([c66, emu, sim])
+    expect(menuOrder([c66, iphone, emu, sim], { android: false, ios: true })).toEqual([iphone, sim, c66, emu])
   })
 })
 
@@ -74,6 +82,11 @@ describe('stillLooking', () => {
     expect(stillLooking(list(['ios']), android, false, sim.id)).toBe(true)
     expect(stillLooking(list(['ios']), { ...android, picks: [sim.id] }, false, undefined)).toBe(true)
     expect(stillLooking(list([]), null, true, undefined)).toBe(false)
+  })
+
+  it('waits for iOS for an iPhone picked by the tab or the project, as for a simulator', () => {
+    expect(stillLooking(list(['ios']), android, false, iphone.id)).toBe(true)
+    expect(stillLooking(list(['ios']), { ...android, picks: [iphone.id] }, false, undefined)).toBe(true)
   })
 })
 
