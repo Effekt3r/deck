@@ -106,11 +106,14 @@ export class LineTracker<L> {
 
     child.stdout?.setEncoding('utf8')
     child.stdout?.on('data', (text: string) => {
-      if (this.child !== child) return
       const lines = (rest + text).split('\n')
       rest = lines.pop() ?? ''
       if (rest.length > MAX_PENDING_LINE) rest = '' // no line is this long: garbage
       for (const line of lines) {
+        // Checked per line, not once for the whole chunk: a publish() below can stop() (or
+        // stop()+start()) this tracker, and the rest of an already-read chunk must not go on
+        // feeding a run that's no longer current (it could clear a new run's own deadline).
+        if (this.child !== child) return
         if (!line.trim()) continue
         const list = this.guard('reading', () => this.deps.parse(line, first)) ?? null
         if (list === null) continue
@@ -138,7 +141,7 @@ export class LineTracker<L> {
     // had to kill for being hung proves nothing of the sort, however long its (grown) deadline let it
     // run first, so it never resets this.
     if (!hung && ranMs >= RESTART_MAX) this.wait = RESTART_MIN
-    this.guard('reporting a failure of', () => this.deps.failed(why, listed))
+    this.guard('reporting', () => this.deps.failed(why, listed))
     const wait = this.wait
     this.timer = setTimeout(() => {
       this.timer = null
@@ -160,7 +163,7 @@ export class LineTracker<L> {
     try {
       return run()
     } catch (err) {
-      console.error(`devices: ${doing} ${this.deps.name}'s list failed`, err)
+      console.error(`devices: ${this.deps.name}: ${doing} failed`, err)
       return undefined
     }
   }

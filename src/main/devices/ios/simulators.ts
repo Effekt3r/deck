@@ -72,10 +72,10 @@ export interface SimulatorTrackerDeps {
  *  stale news from a much earlier run. */
 export class SimulatorTracker {
   private targets = new Map<string, SimTarget>()
-  private readonly lines: LineTracker<Map<string, SimTarget>>
+  private readonly tracker: LineTracker<Map<string, SimTarget>>
 
   constructor(deps: SimulatorTrackerDeps) {
-    this.lines = new LineTracker({
+    this.tracker = new LineTracker({
       name: 'idb_companion',
       spawn: () => deps.notify(),
       parse: (line, first) => readNotifyLine(line, this.targets, first),
@@ -91,11 +91,11 @@ export class SimulatorTracker {
   }
 
   start(): void {
-    this.lines.start()
+    this.tracker.start()
   }
 
   stop(): void {
-    this.lines.stop()
+    this.tracker.stop()
   }
 
   /** Whether simulator `udid` was booted at the last line. */
