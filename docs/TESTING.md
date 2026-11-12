@@ -127,7 +127,8 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
      Win+Space): AltGr+Q and Ctrl+Alt+Q both type `@` on the phone, ´ (left of Backspace) then E
      types `é`, and Alt+F does nothing there. Ctrl+Backspace deletes a word on the phone and Ctrl+←
      moves back a word; Alt+Backspace does nothing there. Tab and Esc go to the phone too; clicking
-     the terminal gives it the keyboard back.
+     the terminal gives it the keyboard back, and clicking beside the phone's screen, in the panel's
+     empty space, leaves the keyboard where it was.
 18s. Ctrl+V and Ctrl+Shift+V paste copied text into a field on the phone. Select a word in Claude's
      reply, Ctrl+C, click the screen, Ctrl+V: the word goes to the phone, not the terminal. Ctrl+A
      with the screen selected, then Ctrl+V: the paste still goes to the phone. With Claude running in
@@ -170,3 +171,48 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
 
 19. Quit Deck and open it again: the panel widths and the device panel's height are
     remembered (hiding a panel lasts only while that tab stays in that repo).
+
+## macOS: an iPhone on a cable
+
+macOS only (Windows shows no iPhones), numbered after the Windows steps. Install the latest draft or
+release (`Deck-<version>-mac-arm64.dmg`). You need an iPhone that trusts this Mac, unlocked, on a
+cable, and a folder with an Xcode project in a git repository.
+
+20. Open Deck in the iOS project's folder: after about 3 s ("Looking for devices…") the device panel
+    shows the iPhone by its name, or asks between it and a booted simulator. Its ▾ menu says
+    `iPhone · cable · view only`, and doesn't offer the phone's own camera ("… iPhone Camera").
+21. The first time, macOS asks whether **Deck** may use the camera: "Deck shows a connected iPhone's
+    screen, which macOS treats as a camera." Meanwhile the panel says "Connecting to …". Allow: the
+    screen shows within a few seconds, sharp and in proportion. (If macOS names another app, or
+    refuses without asking, report it.)
+22. The header has no Back, Home or Power. With Claude running in the tab, the camera adds a
+    screenshot to Claude's prompt as `[Image #N]`. Clicking the screen does nothing, and neither does
+    clicking beside it: typing still goes to the terminal.
+23. Turn the phone to landscape in an app that turns (Photos): the picture turns with it. (If it
+    turns inside a portrait frame instead, report it.)
+24. Leave the phone untouched for 15 s, switch to another tab, and come back within 10 s: the
+    picture is back at once, not blank. Again with a video playing on the phone.
+25. Lock the phone, wait 30 s, then unlock it: note what the panel shows meanwhile (the last picture,
+    black, "Reconnecting…", or "Couldn't show …" with its reason), and whether the picture comes back
+    by itself or only after **Try again**.
+26. Unplug it: "disconnected" over the dimmed picture (not "Reconnecting…" or "Couldn't show …"), and
+    the panel goes 10 s later. Plug it in again: it's back within a few seconds. Note it if either
+    takes about 5 s or more.
+27. Lock the Mac (Ctrl+Cmd+Q) and unlock it straight away: the picture comes back within a few
+    seconds. Then quit Deck and open it again at once: the same.
+28. Play a video with sound on the phone while Deck shows it: the sound stays on the phone.
+29. While Deck shows the phone, run an app on it from Xcode: Xcode installs and starts it as usual,
+    and Deck's picture carries on.
+30. Open QuickTime Player › File › New Movie Recording, and pick the iPhone from the menu beside the
+    record button: note what Deck's panel shows while QuickTime shows the phone, and once QuickTime's
+    window is closed (with **Try again** if the panel offers it).
+31. In System Settings › Privacy & Security › Camera, turn Deck off. In Deck, switch to another tab
+    for 15 s, then back: "Camera not allowed" at once (no "Reconnecting…" before it), with **Open
+    System Settings** and **Try again**; clicking either leaves typing in the terminal. **Open System
+    Settings** opens that same page (if not, note where it lands). Turn Deck on there (if macOS
+    offers to quit and reopen Deck, choose Later), then come back to Deck: the screen shows, by itself
+    if System Settings had covered Deck's window, else after **Try again**.
+32. With the panel showing the phone and something moving on it, Activity Monitor (search
+    "iphone-screen") lists two `iphone-screen` processes, the list and the stream: note their CPU and
+    Deck's. Fold the panel: 10 s later only the list is left, using next to no CPU. Quit Deck: none
+    is left.

@@ -53,7 +53,12 @@ emulator a tab's project runs on, live at the top of the right pane. Checked wit
 `docs/superpowers/plans/2026-11-10-device-panel-simulators.md`, the spec updated; built 2026-11-10):
 a booted iOS simulator in an iOS project's tabs, on macOS with idb-companion from Homebrew, with taps,
 drags, typing, pastes and Home. Checked on a throwaway simulator (2026-11-10); the camera with Claude
-running and a landscape app are still to do. iPhones are step 3.
+running and a landscape app are still to do. Step 3 (iPhones: plan
+`docs/superpowers/plans/2026-11-11-device-panel-iphones.md`, the spec updated; built 2026-11-11/12):
+an iPhone on a cable in an iOS project's tabs, view only, through a Swift helper
+(`native/iphone-screen/`) that captures macOS's iPhone screen device and encodes H.264. Checked by
+unit tests, the helper's selftest and an unsigned package so far; the hands-on check with Franco's
+iPhone is still to do (Device panel › iPhones).
 
 Images in the Claude panel (spec `…/2026-11-10-claude-panel-images-design.md`, plan
 `docs/superpowers/plans/2026-11-11-claude-panel-images.md`, built 2026-11-11): pasted images and the
@@ -64,7 +69,7 @@ Checked on macOS with a crafted log (2026-11-11); Franco's own sessions and Wind
 |---|---|
 | `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, `quote.ts` (shell quoting, and `quoteImagePath` for Claude Code's image paths; used by main and the renderer), `claude-images.ts` (why the Claude panel can't show an image: the reasons main answers) and `hid.ts` (a simulator's named keys as USB HID usages); the only thing main and renderer share |
 | `src/preload/index.ts` | exposes `window.deck`; sandboxed, requires only `electron` |
-| `src/main/index.ts` | lifecycle, single instance + `--open <folder>`, IPC wiring; `window.ts`, `menu.ts` (platform shortcuts → `MenuCommand`) |
+| `src/main/index.ts` | lifecycle, single instance + `--open <folder>`, IPC wiring, the iPhone helper's path; `window.ts`, `menu.ts` (platform shortcuts → `MenuCommand`), `permissions.ts` (the page never gets the camera or microphone) |
 | `src/main/shell/` | `shellLaunch()` (which shell/args/env, pure), zsh `ZDOTDIR` wrappers + `deck.zsh`, PowerShell `deck.ps1`, installed to userData |
 | `src/main/pty/` | node-pty sessions, output batching, startup command typed when the line editor is ready |
 | `src/main/projects/` | `projects.json` (userData), scan, `.git/HEAD` branch, dirty counts, native context menu |
@@ -72,10 +77,11 @@ Checked on macOS with a crafted log (2026-11-11); Franco's own sessions and Wind
 | `src/main/claude/` | session-log locator, incremental tail (with each line's place), the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions, images (`images.ts`: formats, sizes, ids, lookups; `pixels.ts`: thumbnails and full images read again from the log) |
 | `src/main/clipboard/` | reads the clipboard (files, text, images; concealed copies skipped), decides what the card offers, saves pasted images for Claude |
 | `src/main/usage/` | Claude's plan usage: the status line command and script, Claude Code's settings (connect/disconnect), reading and merging reports, `usage.json` |
-| `src/main/devices/` | the device panel's main side: `android/` (finding and running adb, `track-devices` and identities, scrcpy's protocol, input checks and sessions), `ios/` (finding idb-companion and following the simulators; a simulator's session: its companion, gRPC on `node:http2`, `sim-video`'s fMP4, HID input), `session.ts` (one session shape for every kind), `streams.ts` (viewers, grace, retries), `registry.ts` (one list from both sources), `project.ts` (a folder's project, Android or iOS app or neither), `picks.ts` (`devices.json`), `ipc.ts` (wiring, both sources, lock and sleep) |
+| `src/main/devices/` | the device panel's main side: `android/` (finding and running adb, `track-devices` and identities, scrcpy's protocol, input checks and sessions), `ios/` (finding idb-companion and following the simulators; a simulator's session: its companion, gRPC on `node:http2`, `sim-video`'s fMP4, HID input; and Deck's iPhone helper: its lists and a session (`iphone.ts`); `tracker.ts`, the restarting `LineTracker` both run on), `session.ts` (one session shape for every kind), `streams.ts` (viewers, grace, retries, a blocked camera), `registry.ts` (one list from the three sources), `project.ts` (a folder's project, Android or iOS app or neither), `picks.ts` (`devices.json`), `ipc.ts` (wiring, the three sources, lock and sleep) |
 | `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker, images: thumbnails, viewer), `clipboard/` (card, hook), `usage/` (card, donut, view), `device/` (below) |
 | `src/renderer/src/device/` | the device panel: which device a tab shows and the panel's rules (`pick.ts`), the screen (WebCodecs, canvas, input: `codec.ts`, `fit.ts`, `keys.ts`: Android key codes and simulators' HID usages), the menu, `useDevices.ts` |
 | `resources/` | `scrcpy-server.json` (the server's version, URL, size, SHA-256) and `THIRD-PARTY-NOTICES.txt`; the server itself is downloaded at install (`scripts/fetch-scrcpy-server.mjs`), never committed |
+| `native/iphone-screen/` | Deck's iPhone helper (Swift): lists the iPhone screens macOS offers and streams one as scrcpy's video stream; built at install by `scripts/build-iphone-helper.mjs` into its ignored `out/` |
 
 Things that aren't obvious from the code:
 - The app scrubs a parent Claude Code session's variables (`CLAUDECODE`, session
@@ -365,7 +371,10 @@ Things that aren't obvious from the code:
     server, and so does a build: electron-builder only warns about a missing `extraResources` file, so
     `scripts/before-pack.cjs` (`beforePack`) checks the hash. Dev builds read the repo's `resources/`,
     packaged ones `process.resourcesPath`. The server refuses any version but its own, so a bump
-    changes the JSON, `android/protocol.ts` if the protocol moved, and the notices.
+    changes the JSON, `android/protocol.ts` if the protocol moved, and the notices. The iPhone helper
+    writes scrcpy's video stream itself, so a bump also means checking its framing
+    (`native/iphone-screen/Encoder.swift`), which `ios/iphone-helper.test.ts` reads with scrcpy's
+    reader on macOS.
   - **adb:** `ANDROID_HOME`/`ANDROID_SDK_ROOT` from Deck's own environment, the SDK's usual place, then
     PATH and Homebrew. The SDK's adb first: Android Studio runs it, and two adb versions restart each
     other's server. Only absolute PATH entries (a relative one means "the current folder"); Windows
@@ -434,12 +443,15 @@ Things that aren't obvious from the code:
       one packet.
     - **Lifecycle** (`streams.ts`): one stream per device, shared by its viewers. It lingers 10 s
       after its last viewer and sends no packets meanwhile; a viewer coming back gets a key frame. A
-      break is retried after 1, 2 and 5 s, then it's an error until Try again. A stream counts as
-      recovered only after 5 s live, so one that dies right after its first frame still reaches the
-      error. Each start has its own 20 s deadline, an ended session is never heard from again, and
-      `view()` always answers with a state. It takes any `DeviceSession` (`session.ts`: `input`,
-      `keyframe` and `stop`, none of which throws; guarded anyway, since a throw would leave `halt()`
-      half done); `android/session.ts` wraps scrcpy's, a simulator's is `ios/simulator.ts`'s.
+      break is retried after 1, 2 and 5 s, then it's an error until Try again. A blocked one
+      (`end(why, 'camera')`: macOS hasn't let Deck use the camera) skips the retries and is an error
+      at once, with `blocked: 'camera'`, to every viewer; Try again clears it, and a later ordinary
+      failure carries no block. A stream counts as recovered only after 5 s live, so one that dies
+      right after its first frame still reaches the error. Each start has its own 20 s deadline, an
+      ended session is never heard from again, and `view()` always answers with a state. It takes any
+      `DeviceSession` (`session.ts`: `input`, `keyframe` and `stop`, none of which throws; guarded
+      anyway, since a throw would leave `halt()` half done); `android/session.ts` wraps scrcpy's, a
+      simulator's is `ios/simulator.ts`'s, an iPhone's `ios/iphone.ts`'s.
   - **On the device:** `stay_awake` keeps the screen on while it's shown and plugged in:
     `stay_on_while_plugged_in` is 7 while shown and goes back when the stream stops (2 on the C66,
     2026-11-04). scrcpy's cleanup is a separate process: it deletes the jar at start and puts the
@@ -470,14 +482,18 @@ Things that aren't obvious from the code:
       (`Booting`, `Booted`, `Shutting Down`, `Shutdown`), and creating or deleting a shut-down
       simulator prints nothing. Only booted ones are listed. It gets 20 s for its first list, else
       it's killed as hung and the next run gets twice as long, up to 2 minutes (a list resets it);
-      one that stops is started again after 1 s, doubling to 30 s, as adb's tracker is.
+      one that stops is started again after 1 s, doubling to 30 s, as adb's tracker is. Those rules
+      are `LineTracker`'s (`ios/tracker.ts`), which runs the iPhone helper's `list` too; it re-checks
+      its run on every line, so a publish that stops or restarts the tracker ends the old run's
+      chunk.
       idb_companion handles SIGTERM itself on a dispatch queue, so a hung one may never act on it:
       every idb process gets SIGKILL 2 s after a SIGTERM it ignores (`ios/process.ts`). A run that had
       listed keeps its list while it's away; one that never listed makes a panel asked for say "Deck
       couldn't list the simulators", with its last words.
-    - **One list** (`registry.ts`, a pure merge; `ipc.ts` starts and stops both sources): adb's
-      devices, then the simulators, each source's problem (`problem`, `iosProblem`) and the
-      platforms still finding their first devices (`pending`).
+    - **One list** (`registry.ts`, a pure merge of three sources; `ipc.ts` starts and stops them):
+      Android phones, then iPhones, then emulators, then simulators, each source's problem
+      (`problem`, `iosProblem`; iPhones have none) and the platforms still finding their first
+      devices (`pending`; iOS while the simulators or the iPhones are).
     - **No idb-companion:** `pgrep -x launchd_sim` (each booted simulator runs one) decides whether an
       iOS project's panel opens to say "Deck shows simulators with idb-companion:" with Copy (or, for
       one without `sim-video`, to update it), at each start of watching and each focus. Not the
@@ -555,6 +571,108 @@ Things that aren't obvious from the code:
       never lists is started again and again, its 20 s wait doubling; a companion or notifier that
       ignores SIGTERM can outlive Deck when it quits (Deck exits before the 2 s SIGKILL); simulators
       of other platforms (watchOS, tvOS, visionOS) aren't listed.
+  - **iPhones** (`native/iphone-screen/`, `ios/iphone.ts`, macOS only; the screen measured 2026-11-11
+    with Franco's iPhone 17 Pro on iOS 27 through a throwaway probe app; Deck's helper built
+    2026-11-11/12 and not yet run against a phone):
+    - **The screen is a capture device** once a process sets CoreMediaIO's
+      `kCMIOHardwarePropertyAllowScreenCaptureDevices` (QuickTime's switch, per process): model "iOS
+      Device", muxed, `.external`, the phone's name, one `muxx` format of 0×0 until frames come; 0.5 s
+      after the switch with the phone plugged in, 2.5 s after a replug. Listing asks for nothing;
+      capturing asks for the camera. The phone's Continuity Camera ("… iPhone Camera", `iPhone18,1`,
+      video only) is listed too and never opened. Its `uniqueID` (a UUID) isn't the UDID but stayed
+      the same across runs and replugs: the device id is `iphone:<uniqueID>`. The probe's capture gave
+      60 frames/s at 1206×2622, none dropped, the first 2.7 s after `startRunning()`.
+    - **The helper** (Swift 5 mode, `-target arm64-apple-macos13.0`: Electron 45's minimum) is built by
+      `scripts/build-iphone-helper.mjs` from postinstall into `native/iphone-screen/out/` (ignored),
+      and skipped while newer than its sources, their folder (so a deleted source rebuilds) and the
+      script; `npm run build:iphone` after changing it. Without a developer folder (`xcode-select -p`
+      fails, answers nothing, or names a folder that's gone) it's skipped with a note, and on CI it
+      throws, so CI can't skip the encoder check. `/usr/bin/swiftc` is a shim that would offer the command
+      line tools in a dialog; `xcode-select -p` only answers. A failed compile stops `npm ci`, and
+      `before-pack.cjs` stops a Mac build without the helper. Main looks for it once, at start
+      (`index.ts`: `Resources/iphone-screen` packaged, `native/iphone-screen/out/` in a dev build):
+      without one there are no iPhones and nothing waits for them. A global in `main.swift` is set up
+      as its top-level code reaches it, so the rest lives in other files; it's built under its final
+      name in a temporary folder and moved, since the linker's ad hoc signature takes the output's
+      name. It exits with `_exit`, safe from any thread (two threads' `exit()`s at once are
+      undefined).
+    - **`list`** prints `{"devices":[{"id","name"}]}` lines: the first 3 s after it starts (so the
+      screens offered in the first moments are in it, and iOS isn't told "none" too soon), then
+      200 ms after the last connect or disconnect, and a look every 5 s; an unchanged list isn't sent
+      again. Main follows it with `LineTracker` (Simulators above), its stdin a pipe: the helper ends
+      when that closes, as it does when Deck crashes. Ids are checked where they're read
+      (`readScreenList`, and `screenIdOf` for a device id): letters, digits and dashes, not starting
+      with a dash, since an id goes into the helper's argv. A list that drops entries logs "skipped N
+      entries Deck couldn't read" once per run; a repeated id keeps its first entry; a nameless screen
+      is "iPhone".
+      A failing helper is quiet (main's log): no iPhones, though a run that had listed keeps its list
+      while it's started again. iOS stays `pending` until the simulators and the iPhones have both
+      listed, the iPhones for 6 s at most (`IPHONE_FIRST_LIST_MS` in `ipc.ts`; a later list still
+      counts): a helper that never lists would otherwise hold iOS tabs at "Looking for devices…" for
+      the tracker's 20 s, even with a simulator listed and picked. So an iOS tab says "Looking for
+      devices…" for about 3 s.
+    - **`stream <id> --max-size 1600 --max-fps 60`** asks for the camera, waits up to 10 s for the
+      screen (`not-found`), turns the input's audio ports off (so the capture shouldn't take the
+      phone's sound; unchecked), captures 420v, scales with `VTPixelTransferSession` (even sizes,
+      never larger: 1206×2622 → 736×1600) and encodes H.264 High in real time, no reordering,
+      8 Mbit/s, a key frame at least every 10 s. `startRunning()` runs on a queue of its own, so a
+      hung start can't block the check that fails with `no-picture` when nothing has been encoded
+      15 s after the capture starts. stdout is scrcpy's video stream from the codec id on (read with
+      `VideoReader({ from: 'codec' })`): a session header per size (a rotation makes a new encoder),
+      and a config packet before *every* key frame, since a viewer that joins or a decoder behind
+      asks for one (`key` on stdin) and can't decode it without. iPhone capture is probably
+      variable-rate, so a still screen may send nothing: the newest frame is kept, and if nothing has
+      been encoded 100 ms after a `key`, it's encoded again as the forced key frame.
+    - **Failures** are one JSON line on stderr, then exit 1 (`usage` 64; stdin's end exits 0):
+      `camera-denied` (also AVError −11852), `not-found`, `no-picture`, `disconnected` (the device's
+      own notice, or AVError −11808), `capture` (with a message; also a session interrupted, when
+      another app takes the screen), `encoder` (also an encoded frame it can't read: the stream ends
+      rather than lose a key frame), `usage`. `startIphone` parses only stderr lines that start with
+      `{` (`helperFailure`) and says them in Deck's words: `usage` as "Deck started its iPhone helper
+      wrongly (usage).", `capture` and `encoder` with the helper's message, cut at 500 characters.
+      Another line counts only when it reads as a failure, else the reason is how the helper ended.
+      Nothing is parsed after the stream ends.
+    - **The session** (`startIphone`) resolves once the helper runs, so the streams' 20 s start
+      deadline doesn't cut the camera prompt short, and drops input (view only). `camera-denied` ends
+      it blocked: "Camera not allowed" at once, with Open System Settings and Try again.
+      `devices:camera-settings` opens only
+      `x-apple.systempreferences:com.apple.preference.security?Privacy_Camera`, whatever the page
+      sends with it. A view of a screen the last list didn't offer fails with "The iPhone isn't
+      connected."
+    - **The camera:** asked once, for the responsible app (Deck), with `NSCameraUsageDescription`
+      ("Deck shows a connected iPhone's screen, which macOS treats as a camera.").
+      `com.apple.security.device.camera` is in the one entitlements file electron-builder signs the
+      app and every binary in it with, so all of Deck's processes carry it. The page is refused it:
+      `permissions.ts` denies `media` to requests and checks (Electron grants every request it isn't
+      told about, and the camera would be open to the page once allowed), and its check keeps
+      `deprecated-sync-clipboard-read` denied, as Electron does without a handler. A dev build
+      started from a terminal is that terminal's child, so macOS most likely asks (or refuses) for the
+      terminal: start it through LaunchServices for a check
+      (`open -n node_modules/electron/dist/Electron.app --args …`), as the step 3 plan's Task 12 does.
+    - **In the panel:** an iPhone fits an iOS app, as simulators do, and its header has only the
+      camera (while Claude runs). Only Android phones, emulators and simulators take input
+      (`takesInput` in `DeviceScreen.tsx`, an allow-list: a kind added later is view only until it
+      says otherwise); an iPhone's canvas has no `tabIndex`, and a click on it does nothing.
+    - **Checks:** `iphone-screen selftest` and its usage errors open no device and no camera. `list`
+      and `stream` reach Franco's iPhone, and `stream` can raise the camera prompt, which is his to
+      answer: run them only in a check he's part of (the step 3 plan's Task 12).
+    - **Unit tests:** the helper's `selftest` (made-up frames: 6 at 1206×2622, a key frame asked for
+      at the fourth, 6 at 2622×1206) read with scrcpy's reader gives `|ckppckpp|ckppppp` (`|` a new
+      size, `c` config, `k` key frame, `p` other), the same on VideoToolbox's software encoder
+      (checked while planning), so a CI VM without the media engine passes too
+      (`iphone-helper.test.ts`: it fails on macOS CI without the helper, and skips locally without
+      one). Then the lists and ids, `IphoneTracker`, `LineTracker`'s own tests, a session against
+      fake processes, `helperFailure`, the blocked stream, the three sources' list and races
+      (`ipc.watch.test.ts`, with a fake helper), and `denyMedia`.
+    - **Known limits:** view only; an iPad lists as `iPhone · cable · view only`; while macOS's camera
+      prompt is up the panel says "Connecting to …"; a camera restricted by a profile reads as "Camera
+      not allowed" too; whether the screen's id survives a restart of the Mac isn't known (if not, a
+      project that picked the phone asks again); "Plug in an unlocked iPhone" also shows on a Mac
+      whose helper wasn't built. Only a signed, notarised build settles three things: that
+      notarisation accepts the helper, whether macOS checks the camera entitlement on the app or on
+      the helper (both have it), and that the prompt names Deck. Once Deck is allowed the camera,
+      programs run in its tabs most likely are too, without a prompt: macOS answers for the app
+      responsible for them, as it does for Terminal's (unverified).
   - **Which projects** (`project.ts`): a tab's project is its repository's main work tree (worktrees
     share it), else its folder. Inside git the whole repository is scanned; outside git only a Gradle
     build (`settings.gradle[.kts]` at the root or in `android/`); the home folder never: scanning `~`
@@ -583,15 +701,15 @@ Things that aren't obvious from the code:
     while none of them is connected: another project's phone never opens it (Guard with its C66
     unplugged asked between the S25 FE and another repository's face terminal, 2026-11-10). Nothing
     picked yet: the only device that fits, by platform (phones and emulators an Android app,
-    simulators an iOS one; Flutter and React Native take both); with several the panel asks. Shown by
-    hand, every device fits. The menu lists those that fit first (`menuOrder`). Outside an Android or
-    iOS app the project's picks don't open the panel by themselves; they're used once the panel is
-    shown by hand.
+    simulators and iPhones an iOS one; Flutter and React Native take both); with several the panel
+    asks. Shown by hand, every device fits. The menu lists those that fit first (`menuOrder`).
+    Outside an Android or iOS app the project's picks don't open the panel by themselves; they're
+    used once the panel is shown by hand.
     - **Waiting:** a tab says "Looking for devices…" until the list is in and no kind it may show is
       still `pending`: its project's apps' kinds, those of the devices picked in the project or by
       the tab, and every kind when shown by hand (`stillLooking`). So a project with a phone and a
       simulator asks rather than showing whichever came first, and an Android app's tab doesn't wait
-      out the notifier's 2.5 s.
+      out the notifier's 2.5 s or the iPhone helper's 3 s.
     - **The rules** are pure, in `pick.ts`: `devicesNeeded` (whether main should watch; App.tsx asks
       before `useDeviceList`, so it can't read the list it gates) and `panelRules` (the rest, once the
       list answers: the choice, what the panel speaks of, whether it's looking, and `iosHint`, which
@@ -626,7 +744,8 @@ Things that aren't obvious from the code:
       is lifted at its last point for both sizes: scrcpy drops a touch made for another size, and may
       switch before or after it says so. A finger down when the screen goes (a tab switch, a fold) is
       lifted too. A pinch (a wheel with Ctrl) isn't a scroll; a wheel notch is taken as 100 px. A
-      simulator gets no wheel: it scrolls by dragging.
+      simulator gets no wheel: it scrolls by dragging. An iPhone takes no input and never the
+      keyboard (iPhones above).
     - **Keys** (`keys.ts`): macOS's Option+Backspace/Delete/←/→ are word-wise, so they go to Android
       with Ctrl: Android's Alt+Backspace deletes the whole line. Shift is dropped on the deletes
       (Android deletes nothing for Ctrl+Shift+Backspace) and kept on the arrows. Option+↑/↓ are plain
@@ -658,23 +777,28 @@ Things that aren't obvious from the code:
       160 px and both cards, so the cards overflow and the clipboard card's Add button can end up
       below the window, which breaks clipboard.css's "the card is never cut". Folding the device panel
       removes its floor.
-    - **Keyboard:** clicks in the header and the chooser leave it where it was. The ▾ menu gives it
-      back where it was when the menu opened (the terminal, for a click) once it's gone: Esc, a pick,
-      the button again, or a click elsewhere that didn't take it. A screen that went with its device
-      falls back to the button, and Tab hands it to the button and moves on. Folding the panel, or
-      another device taking the screen's place, gives it to the terminal; a screen that pauses (a
-      wiggling cable, a minimised window) keeps it (`tabIndex` -1, not none) until it's back.
+    - **Keyboard:** clicks in the header and the chooser leave it where it was, and so, for every
+      kind, do clicks beside the screen (the area around it, or an overlay's text) and on a failed
+      screen's Try again and Open System Settings: those buttons go once the stream starts again, and
+      Open System Settings leaves Deck. The ▾ menu gives it back where it was when the menu opened
+      (the terminal, for a click) once it's gone: Esc, a pick, the button again, or a click elsewhere
+      that didn't take it. A screen that went with its device falls back to the button, and Tab hands
+      it to the button and moves on. Folding the panel, or another device taking the screen's place,
+      gives it to the terminal; a screen that pauses (a wiggling cable, a minimised window) keeps it
+      (`tabIndex` -1, not none) until it's back.
   - **Screenshot:** the camera (while Claude runs) draws the last live frame into a PNG; main takes
     only a PNG of at most 32 MiB, saves it with the clipboard's `saveImage` (same folder, cleared at
     start and quit) and returns `quoteImagePath`'s text (see the clipboard's image paths above).
   - **IPC:** a pick needs an absolute root and a project an absolute folder; a view of a device that
     isn't listed is ignored (it could only cycle through retries); input goes to the device's
-    session, which checks it (`android/input.ts`, `ios/input.ts`) and drops what it can't use. For
-    M4, see Security below.
+    session, which checks it (`android/input.ts`, `ios/input.ts`) and drops what it can't use (an
+    iPhone's drops everything). `devices:camera-settings` ignores what comes with it and does
+    nothing off macOS. For M4, see Security below.
   - **Cost:** only the active tab's unfolded panel streams, with the window visible (page
     visibility); a stream lingers 10 s after its last viewer; lock and sleep stop it. Measured
     2026-11-04 (dev build, the C66 and S25 FE on their lock screens, so almost no frames): main, GPU
-    and renderer about 0.5 % of a core each. A moving screen's cost isn't measured yet.
+    and renderer about 0.5 % of a core each. A moving screen's cost isn't measured yet, nor the
+    iPhone helper's (its stream's, and its `list`'s while idle).
   - **Checked on the devices** (2026-11-04, macOS, C66 and S25 FE over USB; the emulator streamed
     earlier): Guard with no pick asked between the two, and the pick went to `devices.json` and
     survived a restart. One `adb … shell CLASSPATH=…deck-scrcpy-server.jar` per stream; the jar gone
@@ -722,7 +846,28 @@ Things that aren't obvious from the code:
       methods (Chinese, Japanese, Korean) don't reach the device;
     - on a simulator: the camera's `[Image #N]` with Claude running, a landscape app, the "old-idb"
       hint (an idb-companion without `sim-video`), the notifier failing for real, two Decks at once;
-    - Windows, all of it: `docs/TESTING.md` 18p–18y (simulators don't apply there).
+    - an iPhone, all of it: the step 3 plan's Task 12 with a dev build, and `docs/TESTING.md` 20–32
+      with the installed app. In particular:
+      - a still screen, then a tab switch away and back within 10 s: does the picture come back (the
+        `key` that encodes the newest frame again)?
+      - pulling the cable: does the helper say `disconnected` or `capture`? And are connect and
+        disconnect notices posted for the screen, or does a plug or unplug show only at the 5 s look?
+      - locking the phone mid-stream: does the picture just hold, or does the stream break and run
+        through its retries into an error?
+      - QuickTime recording the same phone at once;
+      - whether the phone keeps its sound while shown (the capture's audio ports are off);
+      - whether `list` disturbs Xcode or `devicectl`;
+      - a stream stopped and started again at once (the Mac locked and unlocked, Try again): does a
+        new helper get the screen while the old one lets go of it?
+      - frames at full size through the real capture and the scaler (the selftest's are made up), and
+        `list`'s CPU while idle;
+      - the System Settings link on macOS 27; Try again after allowing the camera, without relaunching
+        Deck; System Settings covering Deck's window meanwhile (the page hidden, so the failed stream
+        is dropped and starts again by itself when Deck shows);
+      - rotation: does the frame turn, or does the phone letterbox inside a portrait frame?
+      - the camera prompt's attribution: a dev build started through `open` (asked as Electron), and
+        the packaged app (asked as Deck, with its usage string);
+    - Windows, all of it: `docs/TESTING.md` 18p–18y (simulators and iPhones don't apply there).
   - **Known limits, devices:** two devices sharing an id look like one (cheap boards' `0123456789ABCDEF`
     serial; two copies of one AVD with `-read-only`); Linux's `no permissions` shows as offline, or
     not at all when adb gives no reason; recovery and sideload devices are told to unplug; devices
@@ -749,8 +894,8 @@ reference for M2/M3; keep it working until Deck replaces it.
 | `build/background*.png` | DMG window (app at x180, Applications at x480, y215) |
 | `build/installer*.bmp`, `uninstallerSidebar.bmp`, `installer.nsh`, `license.txt` | NSIS installer art, "Open in Deck" folder context menu, EULA (have Franco review) |
 | `build/trayTemplate*.png`, `tray.*` | Menu-bar / tray icons |
-| `build/entitlements.mac.plist` | Hardened-runtime entitlements (JIT, node-pty, network) |
-| `electron-builder.yml` | Mac dmg+zip (Apple silicon only, notarised), Windows NSIS (x64; arm64 later), GitHub publish; each keeps only its own node-pty prebuild; ships `resources/` (scrcpy's server, its JSON, the notices) as `extraResources`, and `beforePack` (`scripts/before-pack.cjs`) stops a build without the right server |
+| `build/entitlements.mac.plist` | Hardened-runtime entitlements (JIT, node-pty, network, the camera for the iPhone helper); one file for the app and, as `entitlementsInherit`, every binary in it, so all of Deck's processes carry the camera entitlement (`src/main/permissions.ts` keeps the page off it) |
+| `electron-builder.yml` | Mac dmg+zip (Apple silicon only, notarised), Windows NSIS (x64; arm64 later), GitHub publish; each keeps only its own node-pty prebuild; ships `resources/` (scrcpy's server, its JSON, the notices) as `extraResources` and, on macOS, the iPhone helper (`mac.extraResources`, `Resources/iphone-screen`) and `NSCameraUsageDescription`; `beforePack` (`scripts/before-pack.cjs`) stops a build without the right server, and a Mac build without the helper |
 | `.github/workflows/release.yml` | Tag `v*` or manual run → one draft release (notes from `CHANGELOG.md`); signs when secrets exist |
 
 The NSIS include passes `--open "<folder>"`: the app must handle that argument
@@ -891,9 +1036,10 @@ excludes every `build` folder.
    A Keychain-exported `.p12` uses old ciphers: OpenSSL 3 reads it only with
    `openssl pkcs12 -legacy`.
 5. Device panel: step 1 (Android) built 2026-11-03/04 and checked with two phones on macOS; step 2
-   (simulators, idb-companion) built 2026-11-10. Next: Franco's hands-on checks (Device panel → "Not
-   yet checked" above) and Windows (`docs/TESTING.md` 18p–18y); then step 3, iPhones (a Swift helper
-   on CoreMediaIO, once an iPhone has been seen streaming). Each step gets its own plan and pull
+   (simulators, idb-companion) built 2026-11-10; step 3 (iPhones, a Swift helper on CoreMediaIO)
+   built 2026-11-11/12. Next: the check with Franco's iPhone (the step 3 plan's Task 12, then
+   `docs/TESTING.md` 20–32 on the signed app), Franco's hands-on checks (Device panel → "Not yet
+   checked" above) and Windows (`docs/TESTING.md` 18p–18y). Each step gets its own plan and pull
    request.
 
 Deferred from the M1 review (`3f9feb6` fixed the important ones):
@@ -955,9 +1101,10 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
     is in both `devices/ipc.ts` and `clipboard/read.ts`.
   - Tests: no test drives a real stream through `registerDeviceIpc` (a fake adb and a TCP server
     standing in for scrcpy's would pin "nothing left on the phone" after a reload or quit; likewise
-    a fake `idb_companion` and `sim-video` for a simulator). `App.tsx`'s panel rules moved into
-    `pick.ts`'s `devicesNeeded` and `panelRules`, with tests, in step 2; `showDevice` and `movedOn`
-    are still in App.tsx and could follow.
+    a fake `idb_companion` and `sim-video` for a simulator). An iPhone's goes through it with a fake
+    helper (`ipc.watch.test.ts`). `App.tsx`'s panel rules moved into `pick.ts`'s `devicesNeeded` and
+    `panelRules`, with tests, in step 2; `showDevice` and `movedOn` are still in App.tsx and could
+    follow.
 - **Accepted risk (device panel):** on Windows `devices:project` accepts a UNC path from the tab's
   folder, which other programs' output can set (OSC 7), so Deck may run git and stat files on a
   network share: the same exposure as the git panel's.
@@ -966,7 +1113,7 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
     `devices:input` taps and types on a phone or simulator; `claude:image` and `claude:open-image`
     read images from Claude's session logs).
   - Load the renderer from a custom protocol, not `file://`.
-  - Deny permission requests.
+  - Deny permission requests (the camera and microphone are, since step 3: `src/main/permissions.ts`).
   - Set Electron fuses, after moving node-pty into a `utilityProcess` (its Windows
     kill runs Electron as Node).
 
@@ -987,8 +1134,9 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
 ```bash
 # Deck app (Node 22: export PATH="$HOME/.nvm/versions/node/v22.19.0/bin:$PATH" or `nvm use`)
 npm test && npm run typecheck && npm run build
-# the simulator code's tests on main's own Node too (Electron 45's 24.22; CI runs Node 22)
+# the simulator and iPhone code's tests on main's own Node too (Electron 45's 24.22; CI runs Node 22)
 ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron ./node_modules/vitest/vitest.mjs run src/main/devices/ios
+npm run build:iphone   # the iPhone helper, after changing native/iphone-screen/
 npm run dev                                   # the app, with renderer hot reload
 npx electron-vite dev --remoteDebuggingPort 9333   # + DevTools protocol for scripted checks
 # unsigned packaged app (never let it sign with whatever identity is in the keychain)
