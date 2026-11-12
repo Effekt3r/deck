@@ -160,8 +160,13 @@ describe('helperFailure', () => {
     expect(helperFailure('{"error":"disconnected"}')).toEqual({ why: 'The iPhone was disconnected.' })
     expect(helperFailure('{"error":"capture","message":"The iPhone\'s screen stopped: busy."}')).toEqual({ why: "The iPhone's screen stopped: busy." })
     expect(helperFailure('{"error":"encoder","message":"No H.264 encoder (VideoToolbox error -12902)."}')).toEqual({ why: 'No H.264 encoder (VideoToolbox error -12902).' })
-    expect(helperFailure('{"error":"usage"}')).toEqual({ why: 'iphone-screen failed (usage).' })
+    expect(helperFailure('{"error":"something-new"}')).toEqual({ why: 'iphone-screen failed (something-new).' })
+    // The line the helper prints when Deck starts it wrongly: its usage, which means nothing to the user.
+    expect(helperFailure('{"error":"usage","message":"iphone-screen stream <id> [--max-size N] [--max-fps N]"}')).toEqual({ why: 'Deck started its iPhone helper wrongly (usage).' })
+    // Its own words are cut as any process's are.
+    expect(helperFailure(JSON.stringify({ error: 'capture', message: 'x'.repeat(3000) }))?.why).toBe('x'.repeat(500))
     expect(helperFailure('2026-11-11 something else')).toBeNull()
+    expect(helperFailure('{not json')).toBeNull()
     expect(helperFailure('{"message":"no code"}')).toBeNull()
   })
 })
@@ -291,6 +296,24 @@ describe('startIphone', () => {
     await startIphone(A, other.events, other.io, new AbortController().signal)
     other.helper.stdout.write(codec(0x68323635))
     await vi.waitFor(() => expect(other.ends).toEqual([["Deck's iPhone helper sent another codec.", undefined]]))
+    expect(other.helper.killed()).toBe(true)
+  })
+
+  it('asks for no key frame once it has ended or been stopped', async () => {
+    const ended = setup()
+    const endedLive = await startIphone(A, ended.events, ended.io, new AbortController().signal)
+    ended.helper.exit(1)
+    await vi.waitFor(() => expect(ended.ends).toHaveLength(1))
+    const endedWrite = vi.spyOn(ended.helper.stdin, 'write')
+    endedLive.keyframe()
+    expect(endedWrite).not.toHaveBeenCalled()
+
+    const stopped = setup()
+    const stoppedLive = await startIphone(A, stopped.events, stopped.io, new AbortController().signal)
+    stoppedLive.stop()
+    const stoppedWrite = vi.spyOn(stopped.helper.stdin, 'write')
+    stoppedLive.keyframe()
+    expect(stoppedWrite).not.toHaveBeenCalled()
   })
 
   it('a helper that fails to start: the spawn error, or a rejected start; a stopped start spawns nothing', async () => {

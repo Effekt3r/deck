@@ -157,10 +157,13 @@ export function iphoneIo(helper: string, deps: IphoneIoDeps = { spawn }): Iphone
 
 /** What the panel says, under "Camera not allowed". */
 export const CAMERA_DENIED = "macOS hasn't let Deck use the camera, which is how it shows an iPhone's screen."
+/** The helper's own words are cut here, as process.ts's lastLine() cuts any process's. */
+const MAX_LINE = 500
 
 /** The helper's failure line (`{"error":"<code>","message":"…"}`) as Deck says it, and what only the
  *  user can change; null for any other line. */
 export function helperFailure(line: string): { why: string; blocked?: DeviceBlock } | null {
+  if (!line.startsWith('{')) return null // most lines aren't JSON: no parse to throw
   let raw: unknown
   try {
     raw = JSON.parse(line)
@@ -179,16 +182,20 @@ export function helperFailure(line: string): { why: string; blocked?: DeviceBloc
       return { why: 'The iPhone sent no picture. Unlock it, and check that its screen is on.' }
     case 'disconnected':
       return { why: 'The iPhone was disconnected.' }
+    case 'usage':
+      // Its message is the helper's usage line, which says nothing to the user: Deck's own mistake.
+      return { why: 'Deck started its iPhone helper wrongly (usage).' }
     default:
-      return { why: typeof message === 'string' && message ? message : `iphone-screen failed (${error}).` }
+      return { why: (typeof message === 'string' && message ? message : `iphone-screen failed (${error}).`).slice(0, MAX_LINE) }
   }
 }
 
 /** Starts iPhone screen `id`'s stream: the helper asks for the camera (macOS treats the screen as
  *  one; the prompt shows once, for Deck), finds the screen and captures it. Resolves once the helper
- *  runs, so the streams' 20 s start deadline doesn't cover the prompt, which waits for an answer; the
- *  first picture follows in about 3 s after that. The helper gives up by itself when the screen isn't
- *  offered within 10 s or sends nothing in 15 s. View only: input is dropped. */
+ *  is spawned (a missing binary arrives later, as an end), so the streams' 20 s start deadline
+ *  doesn't cover the prompt, which waits for an answer; the first picture follows in about 3 s after
+ *  that. The helper gives up by itself when the screen isn't offered within 10 s or sends nothing in
+ *  15 s. View only: input is dropped. */
 export async function startIphone(id: string, events: StreamEvents, io: IphoneIo, signal: AbortSignal): Promise<DeviceSession> {
   if (signal.aborted) throw new Error('Stopped.')
   // A spawn that throws (ENOEXEC) rejects the start here, with nothing opened.
@@ -217,6 +224,7 @@ export async function startIphone(id: string, events: StreamEvents, io: IphoneIo
 
   const reader = new VideoReader({ from: 'codec', sender: "Deck's iPhone helper" })
   proc.stdout?.on('data', (chunk: Buffer) => {
+    if (over) return // still read to its end, so the pipe never fills, but no longer parsed
     for (const event of reader.feed(chunk)) {
       if (over) return
       if (event.type === 'error') return end(event.message)
