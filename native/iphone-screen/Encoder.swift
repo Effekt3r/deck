@@ -139,11 +139,16 @@ final class ScreenEncoder {
     return out
   }
 
-  /// An encoded frame to stdout: a key frame behind a config packet, in one write.
+  /// An encoded frame to stdout: a key frame behind a config packet, in one write. A frame the encoder
+  /// dropped is skipped; one it gave that can't be read ends the stream, which Deck restarts: a lost
+  /// key frame would leave the view blank until the next, up to 10 s later.
   private static func send(status: OSStatus, flags: VTEncodeInfoFlags, sample: CMSampleBuffer?, micros: UInt64) {
     if status != noErr { fail("encoder", "The iPhone's screen couldn't be encoded (VideoToolbox error \(status)).") }
-    guard !flags.contains(.frameDropped), let sample, let format = CMSampleBufferGetFormatDescription(sample),
-          let sets = parameterSets(format), let data = annexB(sample, lengthSize: sets.lengthSize) else { return }
+    guard !flags.contains(.frameDropped), let sample else { return }
+    guard let format = CMSampleBufferGetFormatDescription(sample), let sets = parameterSets(format),
+          let data = annexB(sample, lengthSize: sets.lengthSize) else {
+      fail("encoder", "The iPhone's screen couldn't be encoded (unreadable H.264).")
+    }
     if isKeyFrame(sample) {
       emit(packet(sets.config, micros: 0, config: true) + packet(data, micros: micros, key: true))
     } else {

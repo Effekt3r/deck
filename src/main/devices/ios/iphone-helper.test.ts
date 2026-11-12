@@ -16,10 +16,15 @@ function nalTypes(data: Uint8Array): number[] {
   return types
 }
 
-// No capture device and no camera: `selftest` encodes made-up frames. Skipped off macOS, and on a Mac
-// without Xcode's command line tools, which builds no helper.
-describe.skipIf(process.platform !== 'darwin' || !existsSync(HELPER))("the iPhone helper's selftest", () => {
+/** Skipped off macOS, and on a Mac without Xcode's command line tools, which builds no helper. On CI
+ *  the suite still runs there, and fails instead of skipping silently: CI must check the encoder. */
+const skipHelper = process.platform !== 'darwin' || (!existsSync(HELPER) && !process.env.CI)
+
+// No capture device and no camera: `selftest` encodes made-up frames.
+describe.skipIf(skipHelper)("the iPhone helper's selftest", () => {
   it("scales, encodes and frames made-up frames as scrcpy's stream, with a new session when they turn", async () => {
+    // On CI, with no helper built (checked above): fail here rather than skip.
+    if (!existsSync(HELPER)) throw new Error(`no iPhone helper at ${HELPER} (npm run build:iphone)`)
     const stdout = await new Promise<Buffer>((done, failed) => {
       execFile(HELPER, ['selftest'], { encoding: 'buffer', maxBuffer: 64 * 1024 * 1024, timeout: 20_000 }, (err, out) => (err ? failed(err) : done(out)))
     })

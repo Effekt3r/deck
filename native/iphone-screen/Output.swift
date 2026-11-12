@@ -1,6 +1,7 @@
 // Writing to Deck: the stream on stdout, failures on stderr, and Deck's lines on stdin. Kept out of
 // main.swift, whose globals are set up in order as its top-level code runs (after the commands
 // start, for anything declared below them); a global here is set up when first used.
+// Exits are _exit: two threads' exit()s at once are undefined, and no output waits in stdio.
 import Foundation
 
 /// stdout carries one stream: whole writes, one at a time, from any thread.
@@ -11,7 +12,7 @@ private let outputLock = NSLock()
 func emit(_ data: Data) {
   outputLock.lock()
   defer { outputLock.unlock() }
-  if !writeAll(STDOUT_FILENO, data) { exit(0) }
+  if !writeAll(STDOUT_FILENO, data) { _exit(0) }
 }
 
 private func writeAll(_ fd: Int32, _ data: Data) -> Bool {
@@ -48,7 +49,7 @@ private struct Failure: Encodable {
 /// Says why on stderr, as the JSON line Deck reads (iphone.ts), and exits.
 func fail(_ code: String, _ message: String? = nil, status: Int32 = 1) -> Never {
   _ = writeAll(STDERR_FILENO, jsonLine(Failure(error: code, message: message)))
-  exit(status)
+  _exit(status)
 }
 
 /// Deck holds stdin open for as long as it wants this process: its end (Deck stopped it, quit or
@@ -57,7 +58,7 @@ func fail(_ code: String, _ message: String? = nil, status: Int32 = 1) -> Never 
 func followStdin(_ line: @escaping (String) -> Void = { _ in }) {
   let thread = Thread {
     while let text = readLine() { line(text) }
-    exit(0)
+    _exit(0)
   }
   thread.start()
 }
