@@ -351,6 +351,23 @@ export interface DeviceInfo {
   state: 'ready' | 'unauthorized' | 'offline' | 'connecting'
 }
 
+/** An emulator or a simulator that isn't running, which the panel can start (an AVD the SDK's
+ *  emulator lists, a shut-down simulator), or one started from the panel and not listed yet. */
+export interface StartableDevice {
+  /** The id it has once running: `emulator:<AVD name>` or `simulator:<UDID>`. */
+  id: string
+  kind: 'emulator' | 'simulator'
+  /** As the running device's: an AVD's name with spaces for its `_`, a simulator's name. */
+  name: string
+  /** "Emulator", or "Simulator · iOS 27.0". */
+  detail: string
+  /** Started from the panel and not among the devices yet (3 minutes at most). */
+  starting?: boolean
+  /** Why its last start failed: the tool's last line, or that it didn't start in time. Cleared by
+   *  the next start. */
+  error?: string
+}
+
 /** What a device runs: Android phones and emulators, or iOS simulators and iPhones. */
 export type DevicePlatform = 'android' | 'ios'
 
