@@ -13,13 +13,16 @@ export function attentionSignal(before: number, now: number, focused: boolean): 
   return { badge: now > 0 ? String(now) : '', alert: now > before && !focused }
 }
 
+/** More tabs than anyone opens: a larger count isn't one. */
+const MAX_COUNT = 999
+
 /** `app:attention`: the renderer's count of tabs that need the user. */
 export function registerAttention(platform: NodeJS.Platform): { attach(win: BrowserWindow): void } {
   let win: BrowserWindow | null = null
   let count = 0
   // An `on` listener that throws shows an error dialog, so the count is checked first.
   ipcMain.on(IPC.appAttention, (_e, waiting: unknown) => {
-    if (typeof waiting !== 'number' || !Number.isSafeInteger(waiting) || waiting < 0 || waiting > 999) return
+    if (typeof waiting !== 'number' || !Number.isSafeInteger(waiting) || waiting < 0 || waiting > MAX_COUNT) return
     const w = win !== null && !win.isDestroyed() ? win : null
     const signal = attentionSignal(count, waiting, w?.isFocused() ?? false)
     count = waiting
