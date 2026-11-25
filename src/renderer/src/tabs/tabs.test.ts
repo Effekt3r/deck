@@ -70,4 +70,21 @@ describe('tabsReducer', () => {
     expect(tabsReducer(s, { type: 'activate', id: 'a' }).active).toBe('a')
     expect(tabsReducer(s, { type: 'activate', id: 'nope' })).toBe(s)
   })
+
+  it('moves a terminal tab to a new place; Projects stays first and the front tab stays in front', () => {
+    const s = open(open(open(initialTabs, 'a'), 'b'), 'c') // c in front
+    const ids = (x: TabsState) => x.tabs.map((t) => t.id)
+    expect(ids(tabsReducer(s, { type: 'move', id: 'a', index: 3 }))).toEqual([PROJECTS_ID, 'b', 'c', 'a'])
+    expect(ids(tabsReducer(s, { type: 'move', id: 'c', index: 1 }))).toEqual([PROJECTS_ID, 'c', 'a', 'b'])
+    expect(tabsReducer(s, { type: 'move', id: 'c', index: 1 }).active).toBe('c')
+    expect(ids(tabsReducer(s, { type: 'move', id: 'b', index: 0 }))).toEqual([PROJECTS_ID, 'b', 'a', 'c']) // never before Projects
+    expect(ids(tabsReducer(s, { type: 'move', id: 'a', index: 99 }))).toEqual([PROJECTS_ID, 'b', 'c', 'a'])
+  })
+  it("doesn't move the Projects tab, unknown tabs, or a tab to its own place", () => {
+    const s = open(open(initialTabs, 'a'), 'b')
+    expect(tabsReducer(s, { type: 'move', id: PROJECTS_ID, index: 2 })).toBe(s)
+    expect(tabsReducer(s, { type: 'move', id: 'nope', index: 1 })).toBe(s)
+    expect(tabsReducer(s, { type: 'move', id: 'a', index: 1 })).toBe(s)
+    expect(tabsReducer(s, { type: 'move', id: 'a', index: Number.NaN })).toBe(s)
+  })
 })
