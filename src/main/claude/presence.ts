@@ -68,3 +68,56 @@ export function publicPresence(e: PresenceEntry): ClaudePresence {
   if (e.waitingFor) p.waitingFor = e.waitingFor
   return p
 }
+
+/** A process as `ps -A -o pid=,ppid=,lstart=` lists it. */
+export interface ProcessRow {
+  ppid: number
+  /** When it started, as `ps` printed it (UTC when run with TZ=UTC), runs of spaces collapsed. */
+  started: string
+}
+
+/** `ps -A -o pid=,ppid=,lstart=`'s output: pid → its row. Lines it can't read are skipped. */
+export function parseProcessTable(out: string): Map<number, ProcessRow> {
+  const table = new Map<number, ProcessRow>()
+  for (const line of out.split('\n')) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line)
+    if (m) table.set(Number(m[1]), { ppid: Number(m[2]), started: m[3].replace(/\s+/g, ' ') })
+  }
+  return table
+}
+
+/** How far up from Claude's process to look for a tab's shell (a wrapper script or two between). */
+const MAX_DEPTH = 8
+
+/**
+ * Which tab's pty each Claude belongs to, by process (macOS, Linux): a tab's shell (`shells`: its
+ * pid → the pty's id) is an ancestor of Claude's process. Entries whose process isn't in `table`
+ * (gone), or started at another time than their file says (a pid reused after a Claude was
+ * killed), are dropped. A pty keeps only the Claude nearest its shell: a `claude -p` that Claude's
+ * own Bash tool runs descends from the same shell.
+ */
+export function matchProcesses(entries: readonly PresenceEntry[], shells: ReadonlyMap<number, string>, table: ReadonlyMap<number, ProcessRow>): ClaudePresence[] {
+  const out: ClaudePresence[] = []
+  const nearest = new Map<string, { depth: number; presence: ClaudePresence }>()
+  for (const entry of entries) {
+    const row = table.get(entry.pid)
+    if (!row || (entry.procStart !== undefined && entry.procStart !== row.started)) continue
+    const presence = publicPresence(entry)
+    let pid = row.ppid
+    for (let depth = 1; depth <= MAX_DEPTH && pid > 1; depth++) {
+      const ptyId = shells.get(pid)
+      if (ptyId !== undefined) {
+        const best = nearest.get(ptyId)
+        if (!best || depth < best.depth) {
+          if (best) delete best.presence.ptyId
+          presence.ptyId = ptyId
+          nearest.set(ptyId, { depth, presence })
+        }
+        break
+      }
+      pid = table.get(pid)?.ppid ?? 0
+    }
+    out.push(presence)
+  }
+  return out
+}
