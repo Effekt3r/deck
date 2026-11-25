@@ -461,6 +461,11 @@ export interface DeckApi {
     /** Opens a copy of image `id` in the default image app (the copy is removed when Deck quits):
      *  null, or why it couldn't. */
     openImage(folder: string, id: string): Promise<{ error: string } | null>
+    /** Every Claude Code running on this machine and what it's doing (their presence files), with
+     *  the pty of the Deck tab each runs in where that's known. */
+    presence(): Promise<ClaudePresence[]>
+    /** The list changed. */
+    onPresence(cb: (list: ClaudePresence[]) => void): () => void
   }
   clipboard: {
     /** The item the card offers now, or null. */

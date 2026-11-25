@@ -27,6 +27,8 @@ export const IPC = {
   claudeFollow: 'claude:follow',
   claudeImage: 'claude:image',
   claudeOpenImage: 'claude:open-image',
+  claudePresence: 'claude:presence',
+  claudePresenceChanged: 'claude:presence-changed',
   clipboardCurrent: 'clipboard:current',
   clipboardItem: 'clipboard:item',
   clipboardAdd: 'clipboard:add',

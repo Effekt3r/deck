@@ -8,6 +8,7 @@ import { IPC } from '@shared/channels'
 import type { AppInfo, Platform, PtyCreateOptions } from '@shared/types'
 import { buildMenu } from './menu'
 import { registerClaudeIpc } from './claude/ipc'
+import { registerPresenceIpc } from './claude/presence-ipc'
 import { registerClipboardIpc } from './clipboard/ipc'
 import { TempImages } from './clipboard/temp'
 import { externalUrl } from './external'
@@ -125,6 +126,8 @@ async function start(): Promise<void> {
   })
   // The Claude panel's viewer opens copies of Claude's images from the same temp folder.
   registerClaudeIpc({ saveImage: (bytes, ext) => clip.saveImage(bytes, ext, 'image') })
+  // The tabs' Claude status: Claude Code's presence files, matched to the tabs' shells.
+  const presence = registerPresenceIpc({ shells: () => ptys.shells(), platform: process.platform })
   const usage = registerUsageIpc({
     dir: join(userData, 'usage'),
     settingsFile: claudeSettingsFile(),
@@ -147,6 +150,7 @@ async function start(): Promise<void> {
   clip.attach(win)
   usage.attach(win)
   devices.attach(win)
+  presence.attach(win)
   // A reload starts a fresh renderer whose tabs know nothing of the old shells.
   win.webContents.on('did-start-loading', () => {
     rendererReady = false
@@ -162,6 +166,7 @@ async function start(): Promise<void> {
     clip.dispose()
     usage.dispose()
     devices.dispose()
+    presence.dispose()
   })
 }
 

@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils, type IpcRendererEvent } from 'electron'
 import { IPC } from '@shared/channels'
-import type { ClaudeSnapshot, ClipboardPreview, DeckApi, DeviceList, DeviceStreamEvent, GitSnapshot, MenuCommand, Platform, UsageState } from '@shared/types'
+import type { ClaudePresence, ClaudeSnapshot, ClipboardPreview, DeckApi, DeviceList, DeviceStreamEvent, GitSnapshot, MenuCommand, Platform, UsageState } from '@shared/types'
 
 function on<A extends unknown[]>(channel: string, cb: (...args: A) => void): () => void {
   const listener = (_e: IpcRendererEvent, ...args: unknown[]) => cb(...(args as A))
@@ -55,6 +55,8 @@ const api: DeckApi = {
     follow: (folder, sessionId) => ipcRenderer.invoke(IPC.claudeFollow, folder, sessionId),
     image: (folder, id, size) => ipcRenderer.invoke(IPC.claudeImage, folder, id, size),
     openImage: (folder, id) => ipcRenderer.invoke(IPC.claudeOpenImage, folder, id),
+    presence: () => ipcRenderer.invoke(IPC.claudePresence),
+    onPresence: (cb) => on<[ClaudePresence[]]>(IPC.claudePresenceChanged, cb),
   },
   clipboard: {
     current: () => ipcRenderer.invoke(IPC.clipboardCurrent),
