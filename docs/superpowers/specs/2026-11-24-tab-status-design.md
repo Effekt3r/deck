@@ -133,8 +133,10 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
 
 ### The name
 
-- While a tab shows its mark, its name drops Claude's leading glyph:
-  `deck · Fix the login screen`, not `deck · ◐ Fix the login screen`. The window title does the same.
+- While Deck knows a tab's Claude (its presence file matched the tab), the name drops Claude's
+  leading glyph, whether or not a mark shows: `deck · Fix the login screen`, not
+  `deck · ◐ Fix the login screen`. Dropping it only while a mark shows would make the glyph come and
+  go with the mark. The window title does the same.
 - Otherwise the name is built as before: repo · Claude's title while Claude runs, else
   repo ⎇ branch, else the terminal's title or the folder.
 
@@ -204,10 +206,10 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
   - `presenceFor(tab, list, platform)`: by pty id, or on Windows by folder (rules above);
   - `nextAttention(previous, now, seenTab)`: each tab's state, and whether a finished turn is still
     unseen.
-- **`tabs/useAttention.ts`:**
-  - **inputs:** the list (`claude.presence()` and `onPresence`), window focus (`focus` and `blur`)
-    and the front tab;
-  - **outputs:** each tab's mark, and the needs-you count sent to main.
+- **`tabs/useTabStatus.ts`:**
+  - **inputs:** the list (`claude.presence()` and `onPresence`), and the tab being looked at (the
+    front tab while the window has focus: `useWindowFocused` in `hooks.ts`);
+  - **outputs:** each known tab's status (its mark, if any), and the needs-you count sent to main.
 - **`tabs/title.ts`:** `tabTitle(tab, platform, { glyph: false })` drops Claude's glyph.
 - **`tabs/tabs.ts`:** a `{ type: 'move'; id; index }` action. It moves terminal tabs only, to an
   index of 1 or more, and keeps the front tab in front.
