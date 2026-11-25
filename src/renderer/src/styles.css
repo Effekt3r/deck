@@ -204,6 +204,13 @@ body.dragging-tab, body.dragging-tab * { cursor: grabbing !important; }
 }
 .tab.mark-waiting { border-top-color: var(--amber); }
 .tab.mark-done { border-top-color: var(--green); }
+/* High contrast: the marks in the theme's text colour, which every theme keeps legible. */
+@media (forced-colors: active) {
+  .tab-mark.working { border-color: CanvasText; border-right-color: transparent; }
+  .tab-mark.waiting { background: CanvasText; }
+  .tab-mark.waiting::after { display: none; }
+  .tab-mark.done::before { color: CanvasText; }
+}
 @keyframes tab-turn { to { transform: rotate(360deg); } }
 @keyframes tab-pulse { 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
