@@ -245,6 +245,24 @@ export interface ClaudeResume {
   pinned: boolean
 }
 
+/** What a running Claude Code is doing, from its presence file: working (a turn, or work it handed
+ *  off to an agent), waiting (something on its screen needs the user), idle (the turn ended). */
+export type ClaudeActivity = 'working' | 'waiting' | 'idle'
+
+/** A running Claude Code, from its presence file (`<claude home>/sessions/<pid>.json`). */
+export interface ClaudePresence {
+  pid: number
+  sessionId: string
+  /** The folder it was started in. */
+  cwd: string
+  state: ClaudeActivity
+  /** While waiting: what it waits on, in Claude Code's words ('dialog open', 'input needed', …). */
+  waitingFor?: string
+  /** The pty of the Deck tab whose shell started it (macOS, Linux). Unset when it isn't a Deck
+   *  tab's, and on Windows, where tabs match by folder. */
+  ptyId?: string
+}
+
 /** The item the clipboard card offers: what Cmd/Ctrl+V would paste now. */
 export type ClipboardPreview =
   | {
