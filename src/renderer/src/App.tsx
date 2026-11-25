@@ -122,6 +122,7 @@ export function App() {
   const update = useCallback((id: string, patch: TerminalPatch) => dispatch({ type: 'update', id, patch }), [])
   const close = useCallback((id: string) => dispatch({ type: 'close', id }), [])
   const activate = useCallback((id: string) => dispatch({ type: 'activate', id }), [])
+  const move = useCallback((id: string, index: number) => dispatch({ type: 'move', id, index }), [])
   const storeGitWidth = useCallback((px: number) => {
     const width = clampGitWidth(px)
     setGitWidth(width)
@@ -197,7 +198,7 @@ export function App() {
   return (
     <div className="app">
       <TabBar tabs={state.tabs} active={state.active} platform={platform}
-        onActivate={activate} onClose={close} onNew={newTab} />
+        onActivate={activate} onClose={close} onMove={move} onNew={newTab} />
       <main className="content">
         <ProjectsView active={state.active === PROJECTS_ID} openTabs={terminals} home={info?.home ?? ''}
           findRequest={findRequests[PROJECTS_ID] ?? 0} onOpen={openProject} />

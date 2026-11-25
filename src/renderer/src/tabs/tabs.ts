@@ -86,6 +86,7 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
       const tab = state.tabs[from]
       if (!tab || !isTerminal(tab)) return state
       const to = Math.min(Math.max(Math.trunc(action.index), 1), state.tabs.length - 1)
+      // NaN survives the clamp (Math.min/max propagate it), so this also catches a non-finite index.
       if (!Number.isFinite(to) || to === from) return state
       const tabs = state.tabs.slice()
       tabs.splice(from, 1)

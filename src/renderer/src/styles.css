@@ -73,7 +73,9 @@ input, textarea { user-select: text; }
 .tabbar[data-platform='darwin'] { padding-left: 78px; } /* traffic lights */
 .tabbar[data-platform='win32'] { padding-right: 140px; } /* caption buttons (title bar overlay) */
 
+/* Positioned: the tabs' offsetLeft, which a drag measures, counts from here. */
 .tab-strip {
+  position: relative;
   display: flex;
   min-width: 0;
   overflow-x: auto;
@@ -153,6 +155,19 @@ input, textarea { user-select: text; }
   -webkit-app-region: no-drag;
 }
 .tab-new:hover { background: var(--chrome-hover); color: var(--ink); }
+
+/* A dragged tab follows the pointer above the others, which slide aside to show where it lands. */
+.tab-strip.reordering .tab { transition: transform 120ms ease; }
+.tab-strip.reordering .tab.dragging {
+  z-index: 1;
+  transition: none;
+  background: var(--tab-active);
+  box-shadow: 0 0 0 1px var(--line-strong), 0 4px 14px rgb(0 0 0 / 0.4);
+}
+body.dragging-tab, body.dragging-tab * { cursor: grabbing !important; }
+@media (prefers-reduced-motion: reduce) {
+  .tab-strip.reordering .tab:not(.dragging) { transition: none; }
+}
 
 /* ---------------------------------------------------------------- workspace */
 
