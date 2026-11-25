@@ -10,11 +10,12 @@ import { devicesNeeded, menuOrder, panelRules } from './device/pick'
 import { useDeviceList, useDeviceProject, useHeldView } from './device/useDevices'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
-import { usePageVisible, useStoredFlag } from './hooks'
+import { usePageVisible, useStoredFlag, useWindowFocused } from './hooks'
 import { ProjectsView } from './projects/ProjectsView'
 import { TabBar } from './tabs/TabBar'
 import { initialTabs, isTerminal, PROJECTS_ID, tabsReducer, type TerminalPatch, type TerminalTab } from './tabs/tabs'
 import { runsClaude, tabTitle } from './tabs/title'
+import { useTabStatus } from './tabs/useTabStatus'
 import { TerminalView } from './terminal/TerminalView'
 import { UsageCard } from './usage/UsageCard'
 import { useUsage } from './usage/useUsage'
@@ -82,6 +83,9 @@ export function App() {
   const [deviceShare, setDeviceShare] = useState(() => clampShare(loadSize(DEVICE_SHARE_KEY, DEVICE_SHARE * 1000) / 1000))
   /** Device screens stream only while the window can be seen. */
   const pageVisible = usePageVisible()
+  /** Claude's status per tab; a tab is seen while it's in front and Deck has focus. */
+  const focused = useWindowFocused()
+  const statuses = useTabStatus(state.tabs, focused ? state.active : null, platform)
 
   // Menu commands and IPC events read the latest state through refs.
   const stateRef = useRef(state)
@@ -97,8 +101,15 @@ export function App() {
     })
   }, [])
 
+  /** The order terminal tabs were opened in: their workspaces keep it in the page, whatever their order
+   *  in the bar. Following a reorder, React would move a workspace's node, which resets its panels'
+   *  scroll (the Claude feed back to the top, a scrolled git graph blank). */
+  const openedAt = useRef(new Map<string, number>())
+  const opened = useRef(0)
   const open = useCallback((cwd: string, command?: string) => {
-    dispatch({ type: 'open', id: crypto.randomUUID(), cwd, command })
+    const id = crypto.randomUUID()
+    openedAt.current.set(id, opened.current++)
+    dispatch({ type: 'open', id, cwd, command })
   }, [])
 
   /** A shell tab in the active terminal's folder; from Projects, the home folder (main also falls back to it). */
@@ -122,6 +133,7 @@ export function App() {
   const update = useCallback((id: string, patch: TerminalPatch) => dispatch({ type: 'update', id, patch }), [])
   const close = useCallback((id: string) => dispatch({ type: 'close', id }), [])
   const activate = useCallback((id: string) => dispatch({ type: 'activate', id }), [])
+  const move = useCallback((id: string, index: number) => dispatch({ type: 'move', id, index }), [])
   const storeGitWidth = useCallback((px: number) => {
     const width = clampGitWidth(px)
     setGitWidth(width)
@@ -152,6 +164,12 @@ export function App() {
           return dispatch({ type: 'prev' })
         case 'select-tab':
           return dispatch({ type: 'select', index: cmd.index })
+        case 'move-tab': {
+          const i = stateRef.current.tabs.findIndex((t) => t.id === active)
+          // The reducer keeps Projects first and ignores a move off either end.
+          if (i >= 1) dispatch({ type: 'move', id: active, index: i + cmd.delta })
+          return
+        }
         case 'projects':
           return dispatch({ type: 'activate', id: PROJECTS_ID })
         case 'find':
@@ -187,21 +205,22 @@ export function App() {
   }, [newTab, open, update])
 
   const activeTab = state.tabs.find((t) => t.id === state.active)
-  const windowTitle = activeTab && isTerminal(activeTab) ? tabTitle(activeTab, platform) : 'Deck'
+  const windowTitle = activeTab && isTerminal(activeTab) ? tabTitle(activeTab, platform, { glyph: !statuses.has(activeTab.id) }) : 'Deck'
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
 
   const terminals = state.tabs.filter(isTerminal)
+  const workspaces = [...terminals].sort((a, b) => (openedAt.current.get(a.id) ?? 0) - (openedAt.current.get(b.id) ?? 0))
 
   return (
     <div className="app">
-      <TabBar tabs={state.tabs} active={state.active} platform={platform}
-        onActivate={activate} onClose={close} onNew={newTab} />
+      <TabBar tabs={state.tabs} active={state.active} platform={platform} statuses={statuses}
+        onActivate={activate} onClose={close} onMove={move} onNew={newTab} />
       <main className="content">
         <ProjectsView active={state.active === PROJECTS_ID} openTabs={terminals} home={info?.home ?? ''}
           findRequest={findRequests[PROJECTS_ID] ?? 0} onOpen={openProject} />
-        {terminals.map((tab) => (
+        {workspaces.map((tab) => (
           <Workspace key={tab.id} tab={tab} active={tab.id === state.active} home={info?.home ?? ''}
             gitWidth={gitWidth} claudeWidth={claudeWidth} windowsBuild={info?.windowsBuild}
             findRequest={findRequests[tab.id] ?? 0} claudeToggle={claudeToggles[tab.id] ?? 0} clipItem={clipItem} usage={usage}

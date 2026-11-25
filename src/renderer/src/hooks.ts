@@ -39,3 +39,22 @@ export function usePageVisible(): boolean {
   }, [])
   return visible
 }
+
+/** Deck's window has the keyboard focus: the user is looking at its front tab. */
+export function useWindowFocused(): boolean {
+  const [focused, setFocused] = useState(() => document.hasFocus())
+  useEffect(() => {
+    const on = () => setFocused(true)
+    const off = () => setFocused(false)
+    window.addEventListener('focus', on)
+    window.addEventListener('blur', off)
+    // A change between the first render and these listeners (the window is shown after its first
+    // paint) would otherwise be missed.
+    setFocused(document.hasFocus())
+    return () => {
+      window.removeEventListener('focus', on)
+      window.removeEventListener('blur', off)
+    }
+  }, [])
+  return focused
+}

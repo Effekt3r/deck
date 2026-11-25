@@ -1,7 +1,6 @@
 /* Git panel: header, graph area, commit details, merge-target menu. */
 
 .git-panel {
-  --green: #9ece6a;
   position: relative;
   flex: 1;
   min-height: 0;

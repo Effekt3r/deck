@@ -67,4 +67,11 @@ describe('PtyManager', () => {
     expect(pty.paused).toBe(false)
     m.killAll()
   })
+
+  it("lists each live session's shell by pid", () => {
+    const { m, pty, id } = fakeManager()
+    expect([...m.shells()]).toEqual([[pty.pid, id]])
+    m.kill(id)
+    expect(m.shells().size).toBe(0)
+  })
 })

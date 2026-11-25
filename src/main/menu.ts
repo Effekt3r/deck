@@ -13,8 +13,8 @@ export function menuTemplate(
 ): MenuItemConstructorOptions[] {
   const mac = platform === 'darwin'
   const key = (macKey: string, otherKey: string) => (mac ? macKey : otherKey)
-  const item = (label: string, accelerator: string, cmd: MenuCommand, extra: MenuItemConstructorOptions = {}) =>
-    ({ label, accelerator, click: () => send(cmd), ...extra }) satisfies MenuItemConstructorOptions
+  const item = (label: string, accelerator: string | undefined, cmd: MenuCommand, extra: MenuItemConstructorOptions = {}) =>
+    ({ label, ...(accelerator ? { accelerator } : {}), click: () => send(cmd), ...extra }) satisfies MenuItemConstructorOptions
 
   const shellMenu: MenuItemConstructorOptions = {
     label: 'Shell',
@@ -60,6 +60,10 @@ export function menuTemplate(
     submenu: [
       item('Next Tab', key('Cmd+Shift+]', 'Ctrl+Tab'), { type: 'next-tab' }),
       item('Previous Tab', key('Cmd+Shift+[', 'Ctrl+Shift+Tab'), { type: 'prev-tab' }),
+      // No macOS shortcut: Cmd+Shift+←/→ select text on a device's screen. System Settings →
+      // Keyboard → Keyboard Shortcuts → App Shortcuts can give these one by name.
+      item('Move Tab Left', mac ? undefined : 'Ctrl+Shift+PageUp', { type: 'move-tab', delta: -1 }),
+      item('Move Tab Right', mac ? undefined : 'Ctrl+Shift+PageDown', { type: 'move-tab', delta: 1 }),
       { type: 'separator' },
       // Hidden on macOS (the accelerators still fire); listed elsewhere.
       ...Array.from({ length: 9 }, (_, i) =>

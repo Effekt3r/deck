@@ -41,7 +41,10 @@ Windows installer; publish it once it looks right.
   run imports `~/.config/wezterm/projects.json` from the prototype.
 - **Terminal tabs:** xterm.js (WebGL) on node-pty. zsh and PowerShell get Deck's
   prompt hook automatically (no dotfile edits), so tabs show `repo ⎇ branch`, or
-  `repo · <Claude's status title>` while Claude runs.
+  `repo · <Claude's session title>` while Claude runs. A tab where Claude runs shows its status: a
+  violet ring while it works, an amber dot and edge when it needs you, a green ✓ and edge when it
+  finished while you looked elsewhere; the Dock's badge counts the tabs that need you. Drag tabs to
+  reorder them (Window → Move Tab Left/Right; Ctrl+Shift+PageUp/PageDown on Windows).
 - **Keys** (Windows: Ctrl+Shift instead of Cmd): Cmd+T new tab, Cmd+W close,
   Cmd+1…9 select, Cmd+Shift+O projects, Cmd+F find, Cmd+Shift+D device panel, Shift+Enter newline
   in Claude.
