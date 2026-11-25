@@ -50,6 +50,7 @@ export type TabsAction =
   | { type: 'next' }
   | { type: 'prev' }
   | { type: 'select'; index: number } // 1-based over all tabs; 9 = last
+  | { type: 'move'; id: string; index: number } // a terminal tab to place `index` (1 or more: Projects stays first)
   | { type: 'update'; id: string; patch: TerminalPatch }
 
 export const initialTabs: TabsState = { tabs: [{ id: PROJECTS_ID, kind: 'projects' }], active: PROJECTS_ID }
@@ -80,6 +81,18 @@ export function tabsReducer(state: TabsState, action: TabsAction): TabsState {
     }
     case 'select':
       return activate(state, action.index === 9 ? state.tabs.length - 1 : action.index - 1)
+    case 'move': {
+      const from = state.tabs.findIndex((t) => t.id === action.id)
+      const tab = state.tabs[from]
+      if (!tab || !isTerminal(tab)) return state
+      const to = Math.min(Math.max(Math.trunc(action.index), 1), state.tabs.length - 1)
+      // NaN survives the clamp (Math.min/max propagate it); this catches it.
+      if (!Number.isFinite(to) || to === from) return state
+      const tabs = state.tabs.slice()
+      tabs.splice(from, 1)
+      tabs.splice(to, 0, tab)
+      return { ...state, tabs }
+    }
     case 'update': {
       const i = state.tabs.findIndex((t) => t.id === action.id)
       const tab = state.tabs[i]

@@ -51,6 +51,17 @@ describe('menuTemplate', () => {
     }
   })
 
+  it('Move Tab Left/Right: Ctrl+Shift+PageUp/PageDown off macOS, no shortcut on macOS', () => {
+    const win = shortcuts('win32')
+    win.byKey.get('Ctrl+Shift+PageUp')?.click?.({} as never, undefined, {} as never)
+    win.byKey.get('Ctrl+Shift+PageDown')?.click?.({} as never, undefined, {} as never)
+    expect(win.sent).toEqual([{ type: 'move-tab', delta: -1 }, { type: 'move-tab', delta: 1 }])
+    // macOS: Cmd+Shift+←/→ select text on a device's screen; the items are in the menu without one.
+    const moves = shortcuts('darwin').all.filter((i) => i.label === 'Move Tab Left' || i.label === 'Move Tab Right')
+    expect(moves).toHaveLength(2)
+    expect(moves.every((i) => i.accelerator === undefined)).toBe(true)
+  })
+
   it('Windows has no copy/paste roles (Ctrl+C must stay SIGINT)', () => {
     const roles = shortcuts('win32').all.map((i) => i.role).filter(Boolean)
     expect(roles).not.toContain('copy')

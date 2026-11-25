@@ -41,6 +41,8 @@ export function keyAction(e: KeyInput, platform: Platform, hasSelection: boolean
     if (letter === 'v') return 'paste'
     if (letter === 'f') return 'find'
     if (MENU_LETTERS.has(letter) || /^Digit[1-9]$/.test(e.code ?? '')) return 'menu'
+    // Move Tab Left/Right (xterm would send them to the shell).
+    if (e.key === 'PageUp' || e.key === 'PageDown') return 'menu'
     return null
   }
   if (letter === 'c') return hasSelection ? 'copy' : null // without a selection Ctrl+C is SIGINT
