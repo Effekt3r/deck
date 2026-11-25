@@ -532,5 +532,8 @@ export interface DeckApi {
     onMenu(cb: (cmd: MenuCommand) => void): () => void
     /** Renderer is listening; main then delivers queued folders. */
     ready(): void
+    /** How many tabs need the user: the Dock's badge (macOS), and a bounce (macOS) or a taskbar
+     *  flash (Windows) when it rises while Deck is in the background. */
+    attention(waiting: number): void
   }
 }

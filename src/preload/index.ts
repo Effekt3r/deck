@@ -104,6 +104,7 @@ const api: DeckApi = {
     onOpenFolder: (cb) => on<[string]>(IPC.appOpenFolder, cb),
     onMenu: (cb) => on<[MenuCommand]>(IPC.appMenu, cb),
     ready: () => ipcRenderer.send(IPC.appReady),
+    attention: (waiting) => ipcRenderer.send(IPC.appAttention, waiting),
   },
 }
 

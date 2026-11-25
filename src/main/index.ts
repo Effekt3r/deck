@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path'
 import { app, type BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron'
 import { IPC } from '@shared/channels'
 import type { AppInfo, Platform, PtyCreateOptions } from '@shared/types'
+import { registerAttention } from './attention'
 import { buildMenu } from './menu'
 import { registerClaudeIpc } from './claude/ipc'
 import { registerPresenceIpc } from './claude/presence-ipc'
@@ -128,6 +129,7 @@ async function start(): Promise<void> {
   registerClaudeIpc({ saveImage: (bytes, ext) => clip.saveImage(bytes, ext, 'image') })
   // The tabs' Claude status: Claude Code's presence files, matched to the tabs' shells.
   const presence = registerPresenceIpc({ shells: () => ptys.shells(), platform: process.platform })
+  const attention = registerAttention(process.platform)
   const usage = registerUsageIpc({
     dir: join(userData, 'usage'),
     settingsFile: claudeSettingsFile(),
@@ -151,6 +153,7 @@ async function start(): Promise<void> {
   usage.attach(win)
   devices.attach(win)
   presence.attach(win)
+  attention.attach(win)
   // A reload starts a fresh renderer whose tabs know nothing of the old shells.
   win.webContents.on('did-start-loading', () => {
     rendererReady = false

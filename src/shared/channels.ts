@@ -57,4 +57,5 @@ export const IPC = {
   appOpenFolder: 'app:open-folder',
   appMenu: 'app:menu',
   appReady: 'app:ready',
+  appAttention: 'app:attention',
 } as const
