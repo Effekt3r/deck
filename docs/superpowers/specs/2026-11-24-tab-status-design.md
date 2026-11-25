@@ -153,8 +153,11 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
 - **Dragging:**
   - **Start:** press on a terminal tab and move more than 4 px sideways. The tab follows the pointer
     and the others slide aside (120 ms) to show where it will land.
-  - **Drop:** releasing puts it there. Esc, a lost pointer, or Deck's window losing focus puts it
-    back.
+  - **Drop:** releasing puts it there. Esc, a lost pointer, Deck's window losing focus, or a tab
+    opening or closing meanwhile (Cmd+W, a shell that exits) puts it back. A held Esc's repeats don't
+    reach the terminal either: in a Claude tab they would interrupt Claude.
+  - **Within the strip:** the dragged tab is drawn no further than the last tab's end, nor over the
+    Projects tab.
   - **The Projects tab** stays first: it doesn't move, and nothing lands before it.
   - **Front tab:** the dragged tab comes to the front, as in browsers.
   - **Keyboard:** the terminal keeps it throughout, as it does for clicks on the tab bar today.
@@ -230,6 +233,8 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
   turn a background tab green, but such commands are typed in the front tab.
 - Dragging across the bar's empty space, which drags the window, should keep working because the
   press started on a tab. Check this on both platforms.
+- On a touch screen, a drag on a tab pans the strip (the browser's default `touch-action`), so
+  reordering there is by the menu. A touch-only reorder would cost panning the strip from a tab.
 
 ## Not in this design
 

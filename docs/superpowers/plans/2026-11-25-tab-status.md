@@ -2237,7 +2237,7 @@ Use `$S/cdp.mjs` (from the earlier probe; it exports `evaluate`, `type`, `enter`
 5. Finds A's pty id (the one that echoed the `/config` typing) and sends Esc to it: `window.deck.pty.write(idA, '\x1b')`. Expect A's mark to become `.tab-mark.done` with `.tab.mark-done`, and the badge `""`.
 6. Clicks A: no mark on A.
 7. Checks the names: A's `.tab-label` doesn't start with a status glyph while its status is known.
-8. Drags: `Input.dispatchMouseEvent` `mousePressed` on tab A's centre, `mouseMoved` in 10 px steps past tab B's middle, `mouseReleased`. Expect the labels' order to show A after B. Repeat with Esc (`Input.dispatchKeyEvent` keyDown Escape) before releasing: the order doesn't change.
+8. Drags: `Input.dispatchMouseEvent` `mousePressed` on tab A's centre, `mouseMoved` in 10 px steps past tab B's middle, `mouseReleased`. Every `mouseMoved` must carry `button: 'left', buttons: 1`: without them the first move has no button held, which ends the press, and nothing is dragged. Expect the labels' order to show A after B. Repeat with Esc (`Input.dispatchKeyEvent` keyDown Escape) before releasing: the order doesn't change. Then drag a tab past the strip's right end and hold it there for 1 s: `.tab-strip`'s `scrollLeft` stays at its natural maximum (0 when the tabs fit), and the tab lands last.
 9. Window → Move Tab Left: through the main inspector, find the item by label in `Menu.getApplicationMenu()` and `click()` it; the front tab moves left.
 
 - [ ] **Step 3: Clean up**
