@@ -221,9 +221,10 @@ Things that aren't obvious from the code:
     words its "session presence PID file": `status` busy, waiting, idle or shell (idle with a
     background shell), `waitingFor` while waiting (a dialog's words, `input needed`, `dialog open`, …),
     and `procStart`, its start as `ps -o lstart` with `LC_ALL=C TZ=UTC` (read from Claude Code's
-    binary). Deck shows busy as working and shell as idle, reads only `<digits>.json` (never the
-    `<pid>.<hash>.key` files beside them, which hold peer-messaging keys) and shows no status if a
-    version drops the files. Undocumented; checked against 2.1.283.
+    binary). Deck shows busy as working and shell as idle, counts only interactive sessions (`kind`;
+    background and print ones run elsewhere), reads only regular files named `<digits>.json` (`lstat`:
+    never the `<pid>.<hash>.key` files beside them, which hold peer-messaging keys, not even through a
+    link) and shows no status if a version drops the files. Undocumented; checked against 2.1.283.
   - **Which tab:** main runs `/bin/ps -A -o pid=,ppid=,lstart=` (`TZ=UTC LC_ALL=C`, 20 ms) only when a
     presence file with a pid or start time it hasn't looked up appears, or a new tab's shell has a pid
     the last table gave another process, and walks up from Claude's pid to a tab's shell
@@ -251,6 +252,12 @@ Things that aren't obvious from the code:
     tab opening or closing mid-drag, a lost pointer or a window blur puts the tab back. Window → Move
     Tab Left/Right: Ctrl+Shift+PageUp/PageDown off macOS, no shortcut on macOS (Cmd+Shift+←/→ select
     text on a device's screen).
+  - **Workspaces keep the order tabs were opened in** (App.tsx's `openedAt`), not the bar's: moving a
+    workspace's node to follow a reorder resets its panels' scroll (the Claude feed jumped to the top,
+    a scrolled git graph went blank; measured in Electron 45). They're absolutely positioned, so their
+    order in the page doesn't show.
+  - **Not yet checked:** the Dock bounce and the taskbar flash for real (only mocked), a real
+    permission prompt (it needs a prompt to Claude), and Windows (`docs/TESTING.md` 18ac–18ag).
 - Clipboard (`src/main/clipboard/`):
   - **Electron 45's clipboard is async and web-like:** `read()` returns one item whose
     `types` are MIME types plus raw platform formats (`electron application/osclipboard;format="…"`).

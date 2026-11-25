@@ -180,7 +180,8 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
 ### Main
 
 - **`src/main/claude/presence.ts`:**
-  - **`readPresence(home)`:** reads `<home>/sessions/<digits>.json` and checks each file:
+  - **`readPresence(dir, cache)`** (internal): reads `<home>/sessions/<digits>.json`, regular files
+    only (`lstat`: a link is never followed), and checks each file:
     - `pid` must be a positive integer, and `cwd` and `sessionId` strings;
     - `status` must be one of the four, else the file is skipped;
     - `waitingFor` and `procStart` must be strings when present;
@@ -199,7 +200,7 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
       timeout and its output capped;
     - drops a file whose pid `process.kill(pid, 0)` finds gone;
     - publishes the list when it changes;
-    - starts with the window and stops at quit.
+    - starts with the renderer's first `claude:presence` ask and stops at quit.
 - **`PtyManager.shells()`:** shell pid → pty id, for the matching.
 - **IPC:**
   - `claude:presence` (invoke: the list now) and `claude:presence-changed` (push);
@@ -236,6 +237,12 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
   own daemon.
 - Two Claudes as near a tab's shell (one suspended with Ctrl+Z, and a new one): that tab shows no
   status until one of them ends.
+- `CLAUDE_CONFIG_DIR` set only in shell profiles: Deck doesn't see it when started from Finder, so it
+  looks in `~/.claude` and finds no presence files (as the Claude panel finds no logs).
+- Windows PowerShell 5.1 under its Restricted policy runs without Deck's hook, so a tab keeps
+  Claude's last title after Claude exits and still counts as running Claude for the folder rule.
+- Only interactive sessions count (a file's `kind`, when it has one): background and print
+  sessions run under Claude Code's daemon or inside a tab's own Claude.
 - Windows checks no process identity: a file left by a killed Claude whose pid Windows has reused
   looks alive, and makes that folder ambiguous (no status) until it's removed.
 - Windows matches by folder only, and is untested, like the rest of Deck there.
@@ -292,10 +299,10 @@ local commands were sent: `/config` and Esc. No prompt, so no tokens.
   "Claude needs you (dialog open)", and a Dock badge of 1. Switching to the other tab kept the mark.
 - **Finished, unseen:** Claude's dialog closed while the other tab was in front. The tab turned green
   (✓ and top edge) and the Dock badge cleared. Clicking the tab cleared the ✓.
-- **Esc in a script:** Claude Code turns on the kitty keyboard protocol, so a real Esc reaches it as
-  `ESC[27u`. A bare ESC byte written to its pty doesn't close the dialog. A check that closes one in a
-  background tab writes `\x1b[27u`. Escape pressed in the front tab closed it, with no mark after, as
-  the tab was seen.
+- **Esc in a script:** a bare ESC byte written to the Claude tab's pty didn't close the dialog, even
+  after a focus-in report; `ESC[27u` (the kitty keyboard protocol's Esc) did, and so did Escape
+  pressed in the front tab. Why the bare byte didn't isn't settled (xterm 6 sends a bare ESC for the
+  key). A check that closes a dialog in a background tab writes `\x1b[27u`.
 - **Dragging** (mouse events carrying `buttons: 1`):
   - dropping a tab past its neighbour's middle swapped them, and Esc mid-drag put the tab back;
   - held 1 s past the strip's right end, the strip's `scrollLeft` stayed 0, and the tab landed last.
