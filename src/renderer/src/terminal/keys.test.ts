@@ -47,6 +47,14 @@ describe('keyAction', () => {
     expect(keyAction(k('А', { ctrlKey: true, shiftKey: true, code: 'KeyF' }), 'win32', false)).toBe('find')
     expect(keyAction(k('а', { metaKey: true, code: 'KeyF' }), 'darwin', false)).toBe('find')
   })
+  it('Windows: Ctrl+Shift+PageUp/PageDown move the tab (the menu), not the shell', () => {
+    expect(keyAction(k('PageUp', { ctrlKey: true, shiftKey: true, code: 'PageUp' }), 'win32', false)).toBe('menu')
+    expect(keyAction(k('PageDown', { ctrlKey: true, shiftKey: true, code: 'PageDown' }), 'win32', false)).toBe('menu')
+    expect(keyAction(k('PageUp', { shiftKey: true }), 'win32', false)).toBeNull() // xterm scrolls
+    expect(keyAction(k('PageUp', { ctrlKey: true }), 'win32', false)).toBeNull()
+    expect(keyAction(k('PageUp', { metaKey: true, shiftKey: true }), 'darwin', false)).toBeNull()
+  })
+
   it('leaves other modified Enters and plain Ctrl keys to the terminal', () => {
     expect(keyAction(k('Enter', { shiftKey: true, ctrlKey: true }), 'win32', false)).toBeNull()
     expect(keyAction(k('Enter', { shiftKey: true, metaKey: true }), 'darwin', false)).toBeNull()

@@ -153,6 +153,12 @@ export function App() {
           return dispatch({ type: 'prev' })
         case 'select-tab':
           return dispatch({ type: 'select', index: cmd.index })
+        case 'move-tab': {
+          const i = stateRef.current.tabs.findIndex((t) => t.id === active)
+          // The reducer keeps Projects first and ignores a move off either end.
+          if (i >= 1) dispatch({ type: 'move', id: active, index: i + cmd.delta })
+          return
+        }
         case 'projects':
           return dispatch({ type: 'activate', id: PROJECTS_ID })
         case 'find':

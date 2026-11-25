@@ -58,6 +58,7 @@ export type MenuCommand =
   | { type: 'toggle-git' }
   | { type: 'toggle-claude' }
   | { type: 'toggle-device' }
+  | { type: 'move-tab'; delta: -1 | 1 } // the front tab, one place left or right
 
 export type ProjectAction = 'claude' | 'shell'
 
