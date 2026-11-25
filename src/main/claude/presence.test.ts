@@ -1,5 +1,10 @@
-import { describe, expect, it } from 'vitest'
-import { activityOf, matchProcesses, parsePresence, parseProcessTable, PRESENCE_FILE, type PresenceEntry, type ProcessRow } from './presence'
+import { spawnSync } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import type { ClaudePresence } from '@shared/types'
+import { activityOf, alive, matchProcesses, parsePresence, parseProcessTable, PRESENCE_FILE, type PresenceEntry, PresenceWatch, type ProcessRow, psTable } from './presence'
 
 const file = (p: Record<string, unknown>) => JSON.stringify({ pid: 500, sessionId: 's1', cwd: '/w/a', status: 'busy', ...p })
 
@@ -90,5 +95,123 @@ describe('matchProcesses', () => {
   it("stops at pid 1 and doesn't loop on a cycle", () => {
     const loop = new Map<number, ProcessRow>([[5, { ppid: 6, started }], [6, { ppid: 5, started }]])
     expect(matchProcesses([entry(5)], shells, loop)).toEqual([{ pid: 5, sessionId: 's5', cwd: '/w/a', state: 'working' }])
+  })
+})
+
+const dirs: string[] = []
+afterEach(async () => {
+  for (const d of dirs.splice(0)) await rm(d, { recursive: true, force: true })
+})
+
+describe('PresenceWatch', () => {
+  const started = 'Tue Nov 24 06:01:36 2026'
+  const table = new Map<number, ProcessRow>([[400, { ppid: 1, started }], [500, { ppid: 400, started }], [600, { ppid: 1, started }]])
+  const write = (dir: string, pid: number, p: Record<string, unknown> = {}) =>
+    writeFile(join(dir, `${pid}.json`), JSON.stringify({ pid, sessionId: `s${pid}`, cwd: '/w/a', status: 'busy', procStart: started, ...p }))
+
+  async function setup(opts: { ps?: boolean } = {}) {
+    const dir = await mkdtemp(join(tmpdir(), 'deck-presence-'))
+    dirs.push(dir)
+    const published: ClaudePresence[][] = []
+    const living = new Set([500, 600])
+    let psRuns = 0
+    const watch = new PresenceWatch({
+      dir,
+      shells: () => new Map([[400, 'pty-a']]),
+      processes: opts.ps === false ? null : async () => {
+        psRuns++
+        return table
+      },
+      alive: (pid) => living.has(pid),
+      publish: (list) => published.push(list),
+      watch: () => null,
+      pollMs: 60_000,
+    })
+    return { dir, published, living, watch, psRuns: () => psRuns }
+  }
+
+  it("publishes a Claude with its tab's pty, then its changes, then its going", async () => {
+    const { dir, published, watch, psRuns } = await setup()
+    await write(dir, 500)
+    await watch.refresh()
+    expect(published.at(-1)).toEqual([{ pid: 500, sessionId: 's500', cwd: '/w/a', state: 'working', ptyId: 'pty-a' }])
+    expect(watch.current()).toEqual(published.at(-1))
+    await write(dir, 500, { status: 'waiting', waitingFor: 'dialog open' })
+    await watch.refresh()
+    expect(published.at(-1)?.[0]).toMatchObject({ state: 'waiting', waitingFor: 'dialog open', ptyId: 'pty-a' })
+    expect(psRuns()).toBe(1) // the same Claude: ps isn't run again
+    await rm(join(dir, '500.json'))
+    await watch.refresh()
+    expect(published.at(-1)).toEqual([])
+    watch.stop()
+  })
+
+  it('publishes only changes', async () => {
+    const { dir, published, watch } = await setup()
+    await write(dir, 500)
+    await watch.refresh()
+    await watch.refresh()
+    expect(published).toHaveLength(1)
+    watch.stop()
+  })
+
+  it("leaves out other files, broken ones, and Claudes whose process is gone", async () => {
+    const { dir, published, living, watch } = await setup()
+    await write(dir, 500)
+    await writeFile(join(dir, '500.f2ef5ab0ef195a82.key'), 'secret')
+    await writeFile(join(dir, '600.json'), '{"pid": 600, "sessi')
+    await writeFile(join(dir, 'notes.json'), '{}')
+    await write(dir, 700) // a file naming a pid with no process: gone
+    await writeFile(join(dir, '800.json'), JSON.stringify({ pid: 801, sessionId: 's', cwd: '/w/a', status: 'busy' })) // its name isn't its pid
+    await watch.refresh()
+    expect(published.at(-1)?.map((p) => p.pid)).toEqual([500])
+    living.delete(500)
+    await watch.refresh()
+    expect(published.at(-1)).toEqual([])
+    watch.stop()
+  })
+
+  it('reads a file caught mid-write again on the next look', async () => {
+    const { dir, published, watch } = await setup()
+    await writeFile(join(dir, '600.json'), '{"pid": 600, "sessi')
+    await watch.refresh()
+    expect(published).toHaveLength(0)
+    await write(dir, 600)
+    await watch.refresh()
+    expect(published.at(-1)?.map((p) => p.pid)).toEqual([600])
+    watch.stop()
+  })
+
+  it('Windows (no ps): lists the running Claudes without ptys', async () => {
+    const { dir, published, watch } = await setup({ ps: false })
+    await write(dir, 500)
+    await watch.refresh()
+    expect(published.at(-1)).toEqual([{ pid: 500, sessionId: 's500', cwd: '/w/a', state: 'working' }])
+    watch.stop()
+  })
+
+  it('a missing sessions folder is no Claudes', async () => {
+    const published: ClaudePresence[][] = []
+    const watch = new PresenceWatch({ dir: join(tmpdir(), 'deck-no-such-folder-6c1f'), shells: () => new Map(), processes: null, alive: () => true, publish: (l) => published.push(l), watch: () => null, pollMs: 60_000 })
+    await watch.refresh()
+    expect(watch.current()).toEqual([])
+    expect(published).toHaveLength(0)
+    watch.stop()
+  })
+})
+
+describe('alive', () => {
+  it('knows a live process and one that has exited', () => {
+    expect(alive(process.pid)).toBe(true)
+    const child = spawnSync(process.execPath, ['-e', ''])
+    expect(alive(child.pid as number)).toBe(false)
+  })
+})
+
+describe.skipIf(process.platform === 'win32')('psTable', () => {
+  it('lists this process under its parent, with a UTC start time', async () => {
+    const t = await psTable()
+    expect(t.get(process.pid)?.ppid).toBe(process.ppid)
+    expect(t.get(process.pid)?.started).toMatch(/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d{1,2} \d\d:\d\d:\d\d \d{4}$/)
   })
 })

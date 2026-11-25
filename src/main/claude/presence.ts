@@ -1,4 +1,8 @@
+import { execFile } from 'node:child_process'
+import { readdir, readFile, stat } from 'node:fs/promises'
+import { join } from 'node:path'
 import type { ClaudeActivity, ClaudePresence } from '@shared/types'
+import { watchDirs } from './watch'
 
 /** One running Claude Code, as its presence file (`<claude home>/sessions/<pid>.json`) says. */
 export interface PresenceEntry {
@@ -120,4 +124,154 @@ export function matchProcesses(entries: readonly PresenceEntry[], shells: Readon
     out.push(presence)
   }
   return out
+}
+
+/** A presence file as last read: re-read only when its size or time changes. */
+interface Seen {
+  size: number
+  mtimeMs: number
+  entry: PresenceEntry
+}
+
+/** The presence files in `dir` (`<claude home>/sessions`), re-reading only those whose size or
+ *  time changed since `cache`. A missing folder has none. */
+async function readPresence(dir: string, cache: Map<string, Seen>): Promise<PresenceEntry[]> {
+  const names = (await readdir(dir).catch(() => [] as string[])).filter((n) => PRESENCE_FILE.test(n)).sort()
+  const present = new Set(names)
+  for (const name of cache.keys()) if (!present.has(name)) cache.delete(name)
+  const entries: PresenceEntry[] = []
+  for (const name of names) {
+    const path = join(dir, name)
+    const st = await stat(path).catch(() => null) // removed meanwhile: null
+    if (!st || !st.isFile() || st.size > MAX_PRESENCE_BYTES) {
+      cache.delete(name)
+      continue
+    }
+    let seen = cache.get(name)
+    if (!seen || seen.size !== st.size || seen.mtimeMs !== st.mtimeMs) {
+      const entry = parsePresence(await readFile(path, 'utf8').catch(() => ''))
+      // A file caught mid-write reads as broken: not kept, so the next look reads it again.
+      if (!entry) {
+        cache.delete(name)
+        continue
+      }
+      seen = { size: st.size, mtimeMs: st.mtimeMs, entry }
+      cache.set(name, seen)
+    }
+    // A file is named after its pid: one that says otherwise isn't believed.
+    if (`${seen.entry.pid}.json` === name) entries.push(seen.entry)
+  }
+  return entries
+}
+
+/** Whether a process exists, without signalling it (EPERM: it exists, but isn't ours to signal). */
+export function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+/** The process table (macOS, Linux), with start times in UTC as Claude Code writes them. */
+export function psTable(): Promise<Map<number, ProcessRow>> {
+  const ps = process.platform === 'darwin' ? '/bin/ps' : 'ps'
+  return new Promise((resolve, reject) => {
+    execFile(ps, ['-A', '-o', 'pid=,ppid=,lstart='], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' }, timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout) => (err ? reject(err) : resolve(parseProcessTable(stdout))))
+  })
+}
+
+export interface PresenceWatchDeps {
+  /** `<claude home>/sessions`. */
+  dir: string
+  /** Each tab's shell pid → its pty id (PtyManager.shells), read at every look. */
+  shells(): ReadonlyMap<number, string>
+  /** The process table (`psTable`), or null where there's none (Windows: tabs then match by folder). */
+  processes: (() => Promise<Map<number, ProcessRow>>) | null
+  alive(pid: number): boolean
+  /** The list changed. */
+  publish(list: ClaudePresence[]): void
+  /** Tests pass their own. */
+  watch?: (dirs: string[], onChange: () => void) => (() => void) | null
+  pollMs?: number
+}
+
+/**
+ * Follows the running Claude Codes: watches their presence folder and looks every 2 s too (a
+ * watch can miss events, or fail). The process table is read again only when a Claude appears that
+ * it hasn't looked up; a Claude whose process has gone drops out at the next look.
+ */
+export class PresenceWatch {
+  private readonly cache = new Map<string, Seen>()
+  private table = new Map<number, ProcessRow>()
+  /** Each looked-up Claude's pid → its start time then. */
+  private known = new Map<number, string | undefined>()
+  private list: ClaudePresence[] = []
+  private last = '[]'
+  private timer: ReturnType<typeof setInterval> | null = null
+  private unwatch: (() => void) | null = null
+  private running: Promise<void> | null = null
+  private again = false
+  private stopped = false
+
+  constructor(private readonly deps: PresenceWatchDeps) {}
+
+  /** Starts watching (once; nothing after stop()). */
+  start(): void {
+    if (this.timer || this.stopped) return
+    this.unwatch = (this.deps.watch ?? watchDirs)([this.deps.dir], () => void this.refresh())
+    this.timer = setInterval(() => void this.refresh(), this.deps.pollMs ?? 2000)
+    void this.refresh()
+  }
+
+  stop(): void {
+    this.stopped = true
+    if (this.timer) clearInterval(this.timer)
+    this.timer = null
+    this.unwatch?.()
+    this.unwatch = null
+  }
+
+  current(): ClaudePresence[] {
+    return this.list
+  }
+
+  /** Looks again. A call while a look runs makes it look once more after; never rejects. */
+  refresh(): Promise<void> {
+    if (this.running) {
+      this.again = true
+      return this.running
+    }
+    this.running = (async () => {
+      do {
+        this.again = false
+        await this.look().catch((err: unknown) => console.warn("presence: reading Claude Code's sessions failed", err))
+      } while (this.again && !this.stopped)
+    })().finally(() => {
+      this.running = null
+    })
+    return this.running
+  }
+
+  private async look(): Promise<void> {
+    const entries = (await readPresence(this.deps.dir, this.cache)).filter((e) => this.deps.alive(e.pid))
+    let list: ClaudePresence[]
+    if (this.deps.processes) {
+      if (entries.some((e) => !this.known.has(e.pid) || this.known.get(e.pid) !== e.procStart)) {
+        this.table = await this.deps.processes()
+        this.known = new Map(entries.map((e) => [e.pid, e.procStart]))
+      }
+      list = matchProcesses(entries, this.deps.shells(), this.table)
+    } else {
+      list = entries.map(publicPresence)
+    }
+    if (this.stopped) return
+    const key = JSON.stringify(list)
+    if (key === this.last) return
+    this.last = key
+    this.list = list
+    this.deps.publish(list)
+  }
 }
