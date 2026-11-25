@@ -48,26 +48,29 @@ export function useTabStatus(tabs: readonly Tab[], seen: string | null, platform
     return new Map(terminals.map((t) => [t.id, presenceFor(t, terminals, list, platform)]))
   }, [tabs, list, platform])
 
-  // Whether a finished turn is unseen depends on what came before: kept here, moved on by changes.
+  // Whether a finished turn is unseen depends on what came before, so it's kept. Where it goes next
+  // is worked out during render, so a finishing tab never paints a frame without its mark (the
+  // strip would jump by the mark's width); the effect only stores it. nextAttention gives the same
+  // result applied twice, so this settles after one store.
   const [attention, setAttention] = useState<ReadonlyMap<string, TabAttention>>(() => new Map())
-  useEffect(() => {
+  const next = useMemo(() => {
     const now = new Map([...presences].map(([id, p]) => [id, p?.state ?? null]))
-    setAttention((prev) => {
-      const next = nextAttention(prev, now, seen)
-      return sameAttention(prev, next) ? prev : next
-    })
-  }, [presences, seen])
+    const moved = nextAttention(attention, now, seen)
+    return sameAttention(attention, moved) ? attention : moved
+  }, [attention, presences, seen])
+  useEffect(() => {
+    if (next !== attention) setAttention(next)
+  }, [next, attention])
 
   const statuses = useMemo(() => {
     const out = new Map<string, TabStatus>()
     for (const [id, p] of presences) {
       if (!p) continue
-      // Working and needs-you are shown as they are now; finished waits for the effect above.
-      const mark = markOf(p.state, attention.get(id)?.unseen === true)
+      const mark = markOf(p.state, next.get(id)?.unseen === true)
       out.set(id, { mark, text: mark ? markText(mark, p.waitingFor) : '' })
     }
     return out
-  }, [presences, attention])
+  }, [presences, next])
 
   const waiting = useMemo(() => [...statuses.values()].filter((s) => s.mark === 'waiting').length, [statuses])
   useEffect(() => {

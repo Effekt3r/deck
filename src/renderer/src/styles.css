@@ -171,14 +171,27 @@ body.dragging-tab, body.dragging-tab * { cursor: grabbing !important; }
 }
 /* A tab's Claude: working (a turning ring), needs you (a pulsing dot, amber top edge), finished and
    not yet seen (a check, green top edge). The shapes differ as well as the colours. */
-.tab-mark { flex: none; position: relative; width: 10px; height: 10px; }
+.tab-mark { flex: none; position: relative; width: 10px; height: 10px; forced-color-adjust: none; } /* drawn in high contrast too */
+/* A squeezed tab with a mark keeps room for some of its name. */
+.tab:has(.tab-mark) { min-width: 92px; }
 .tab-mark.working {
   border: 1.5px solid var(--violet);
   border-right-color: transparent;
   border-radius: 50%;
   animation: tab-turn 0.9s linear infinite;
 }
-.tab-mark.waiting { width: 8px; height: 8px; margin: 1px; border-radius: 50%; background: var(--amber); animation: tab-pulse 1.6s ease-in-out infinite; }
+.tab-mark.waiting { width: 8px; height: 8px; margin: 1px; border-radius: 50%; background: var(--amber); }
+/* The pulse is a halo's opacity, which the GPU animates: a box-shadow would repaint every frame for as
+   long as a tab waits. */
+.tab-mark.waiting::after {
+  content: '';
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  background: rgb(255 159 67 / 0.25);
+  opacity: 0;
+  animation: tab-pulse 1.6s ease-in-out infinite;
+}
 .tab-mark.done::before {
   content: '✓';
   position: absolute;
@@ -192,9 +205,9 @@ body.dragging-tab, body.dragging-tab * { cursor: grabbing !important; }
 .tab.mark-waiting { border-top-color: var(--amber); }
 .tab.mark-done { border-top-color: var(--green); }
 @keyframes tab-turn { to { transform: rotate(360deg); } }
-@keyframes tab-pulse { 50% { box-shadow: 0 0 0 3px rgb(255 159 67 / 0.25); } }
+@keyframes tab-pulse { 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) {
-  .tab-mark.working, .tab-mark.waiting { animation: none; }
+  .tab-mark.working, .tab-mark.waiting::after { animation: none; }
 }
 
 /* ---------------------------------------------------------------- workspace */

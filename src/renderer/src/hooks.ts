@@ -48,6 +48,9 @@ export function useWindowFocused(): boolean {
     const off = () => setFocused(false)
     window.addEventListener('focus', on)
     window.addEventListener('blur', off)
+    // A change between the first render and these listeners (the window is shown after its first
+    // paint) would otherwise be missed.
+    setFocused(document.hasFocus())
     return () => {
       window.removeEventListener('focus', on)
       window.removeEventListener('blur', off)
