@@ -140,3 +140,59 @@ one that is, without opening Android Studio or Xcode.
   - only a throwaway simulator in a private set (`DECK_SIMULATOR_SET`, `DECK_IDB_COMPANION`), never
     Franco's own (CLAUDE.md): start it from the menu, see it stream, stop it;
   - an emulator only with a throwaway AVD Franco agrees to (he has none now), or not at all.
+
+## Decided while planning (2026-11-25)
+
+Measured on Franco's Mac with a throwaway simulator in a private device set (idb-companion 1.6.1,
+iOS 27.0; his own simulators untouched), and the SDK's emulator 37.2.12 (no AVD made or started):
+
+- **`idb_companion --boot`** doesn't open Simulator.app: it wasn't running, and the boot didn't start
+  it (a private set's simulators never show there anyway). The simulator stays booted after the
+  command ends. A first boot took 21 s (data migration), later ones 3 s; booting one already booted
+  exits 0 in 0.9 s. It prints one JSON line on stdout and exits 0.
+- **`--shutdown`** exits 0 in 3.5–6 s; one already shut down exits 0 too.
+- **A failure** (an unknown UDID) exits 1, its last stderr line
+  `<timestamp> <udid> could not be resolved to any target in [FBSimulatorControl.SimulatorSet]`. The
+  reason shown drops the timestamp. Deck passes `--log-level info`, as it does for the notifier.
+- **A SIGTERM mid-boot** ends idb_companion with exit code 0 within 0.1 s, and the simulator boots
+  anyway: an abort is known by its signal, not its exit code.
+- **The notifier** lists a shut-down simulator with `"state":"Shutdown"` and the fields Deck reads.
+  During a first boot it said `Booting`, then `Booted` 0.07 s later, while idb's boot went on for 19 s
+  more.
+- **`emulator -list-avds`** with no AVDs exits 0 in 0.2 s, printing nothing; `-help` lists
+  `-list-avds` and `-avd <name>`.
+
+Decided (the planner makes the design calls; Franco reviews them here):
+
+- **`booting`:** a device's state gains `booting`. A simulator Deck boots is listed as booting until
+  idb's boot command ends, since the notifier says Booted 19 s too early to stream it. So is an
+  Android device that answered before Android had started (`sys.boot_completed` not 1): adb lists an
+  emulator during its cold boot (and a phone while it reboots) long before scrcpy's server can run,
+  and a stream started then fails into "Couldn't show …". The panel says "Starting <name>…" with the
+  spinner, so the text runs on from the click to the screen. A device still saying it's starting
+  after the tracker's 40 asks (about 2 minutes) is taken as started.
+- **The panel stays for a device that can be started:** with the tab's pick (else the project's
+  latest) an emulator or simulator that isn't running, the panel stays open, "No devices connected"
+  with that device's Start button first. The existing rules would hide it (nothing connected, not
+  shown by hand), so a Stop would take the panel away 10 s later; this is what "After a stop" above
+  describes. A project whose emulator or simulator is shut down offers it the same way in every new
+  tab; an unplugged phone still closes the panel.
+- **Failures** read "Couldn't start <name>" with the reason under it: the tool's last line, or "It
+  didn't start within 3 minutes."; Try again. A failed start's menu row says `didn't start`, and the
+  failure stays until it's started again or no tab watches devices. A start main refuses (no longer
+  offered) and a stop that fails show "Couldn't start/stop <name>: <why>" under the panel's header.
+- **"No emulators: …"** comes from a `noAvds` flag in the list (the SDK's emulator is there and lists
+  no AVDs), shown in the menu's Start section and the empty panel, where emulators fit.
+- **AVDs are read again** after an emulator's start or stop; a simulator's doesn't change them.
+- **Already running** (started some other way meanwhile): a start answers null and the pick shows it.
+  A second click while it starts changes nothing.
+- **When no tab watches devices**, the starts are forgotten; one under way carries on by itself, and
+  the next watch lists the device once it's up.
+- **`sdkRoots`** lives in `android/adb.ts`, beside the `adbCandidates` it came out of: `emulators.ts`
+  uses `runAdb`, so the other way round would be an import cycle.
+- **Windows:** `startAvd` passes `windowsHide`, as planned. It asks Windows to hide a new process's
+  first window, which could be the emulator's own; the Windows check looks for that, and for a
+  console window beside the emulator.
+- **Not checked:** an emulator started from Deck (no AVD here), and whether macOS asks Deck for an
+  emulator's microphone use. Deck's Info.plist has no `NSMicrophoneUsageDescription`, and macOS ends
+  a process that asks for the microphone when the app responsible for it has none.
