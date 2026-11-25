@@ -21,7 +21,8 @@ const folderKey = (path: string) => path.replace(/\\/g, '/').replace(/\/+$/, '')
  * reused since) can't keep a status on a tab whose shell is back at its prompt.
  */
 export function presenceFor(tab: TerminalTab, tabs: readonly TerminalTab[], list: readonly ClaudePresence[], platform: Platform): ClaudePresence | undefined {
-  if (!runsClaude(tab.process, tab.title)) return undefined
+  // A tab whose shell has exited runs nothing, whatever its last title says.
+  if (tab.exited !== undefined || !runsClaude(tab.process, tab.title)) return undefined
   if (platform !== 'win32') return tab.ptyId === undefined ? undefined : list.find((p) => p.ptyId === tab.ptyId)
   const key = folderKey(tab.cwd)
   if (key === '') return undefined
