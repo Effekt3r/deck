@@ -27,6 +27,18 @@ export function slideFor(i: number, from: number, to: number, width: number): nu
   return 0
 }
 
+/**
+ * How far the dragged tab is drawn from its place: `dx`, kept between the Projects tab's neighbour
+ * place (`first`) and the last tab's end. Drawn further, it would widen the strip it scrolls in, and
+ * scrolling at the strip's end would never stop. Where it lands comes from the unclamped `dx`, or a
+ * wide tab could never pass a narrow last tab's middle.
+ */
+export function shownShift(slots: readonly Slot[], from: number, dx: number, first = 1): number {
+  const s = slots[from]
+  const last = slots[slots.length - 1]
+  return Math.min(Math.max(dx, slots[first].left - s.left), last.left + last.width - (s.left + s.width))
+}
+
 /** Within 32 px of the strip's ends a drag scrolls it: up to 8 px a frame, faster closer in. */
 export function edgeScroll(x: number, left: number, right: number): number {
   const ZONE = 32

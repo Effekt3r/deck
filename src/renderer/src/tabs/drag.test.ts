@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dropIndex, edgeScroll, slideFor, type Slot } from './drag'
+import { dropIndex, edgeScroll, shownShift, slideFor, type Slot } from './drag'
 
 // Projects (40 px), then a, b and c (100 px each): their middles are at 90, 190 and 290.
 const slots: Slot[] = [{ left: 0, width: 40 }, { left: 40, width: 100 }, { left: 140, width: 100 }, { left: 240, width: 100 }]
@@ -32,6 +32,16 @@ describe('slideFor', () => {
     expect([1, 2, 3].map((i) => slideFor(i, 1, 3, 100))).toEqual([0, -100, -100]) // a dragged to 3
     expect([1, 2, 3].map((i) => slideFor(i, 3, 1, 100))).toEqual([100, 100, 0]) // c dragged to 1
     expect([1, 2, 3].map((i) => slideFor(i, 2, 2, 100))).toEqual([0, 0, 0])
+  })
+})
+
+describe('shownShift', () => {
+  it("keeps the dragged tab between Projects and the strip's last tab", () => {
+    expect(shownShift(slots, 1, 50)).toBe(50)
+    expect(shownShift(slots, 1, 500)).toBe(200) // a's right edge stops at c's
+    expect(shownShift(slots, 1, -100)).toBe(0) // a can't cover Projects
+    expect(shownShift(slots, 3, 100)).toBe(0)
+    expect(shownShift(slots, 3, -500)).toBe(-200)
   })
 })
 

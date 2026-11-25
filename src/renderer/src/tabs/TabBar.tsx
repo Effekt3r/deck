@@ -1,7 +1,7 @@
 import { type MouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 import type { Platform } from '@shared/types'
 import { CloseIcon, PlusIcon } from '../icons'
-import { dropIndex, edgeScroll, slideFor, type Slot } from './drag'
+import { dropIndex, edgeScroll, shownShift, slideFor, type Slot } from './drag'
 import type { Tab } from './tabs'
 import { tabTitle } from './title'
 
@@ -40,7 +40,7 @@ interface Drag {
   from: number
   /** Where it lands if dropped now. */
   to: number
-  /** How far it has moved, in the strip's coordinates. */
+  /** How far it is drawn from its place, kept within the strip's tabs. */
   dx: number
   width: number
 }
@@ -62,6 +62,8 @@ export function TabBar({ tabs, active, platform, onActivate, onClose, onMove, on
   const [drag, setDrag] = useState<Drag | null>(null)
   // The window listeners below are added once; they call the latest callbacks through this.
   const latest = useRef({ onActivate, onMove })
+  // Set inside the listeners effect below: cancels a drag in progress.
+  const cancelRef = useRef<() => void>(() => {})
   useEffect(() => {
     latest.current = { onActivate, onMove }
   })
@@ -72,6 +74,7 @@ export function TabBar({ tabs, active, platform, onActivate, onClose, onMove, on
 
   useEffect(() => {
     let frame = 0
+    let swallowEsc = false
     const show = (next: Drag | null) => {
       dragRef.current = next
       setDrag(next)
@@ -82,7 +85,7 @@ export function TabBar({ tabs, active, platform, onActivate, onClose, onMove, on
       if (!strip || !p.slots) return
       const slot = p.slots[p.from]
       const dx = p.x - p.startX + (strip.scrollLeft - p.startScroll)
-      show({ id: p.id, from: p.from, to: dropIndex(p.slots, p.from, slot.left + slot.width / 2 + dx), dx, width: slot.width })
+      show({ id: p.id, from: p.from, to: dropIndex(p.slots, p.from, slot.left + slot.width / 2 + dx), dx: shownShift(p.slots, p.from, dx), width: slot.width })
     }
     /** Near the strip's ends, scrolls it every frame while the pointer stays there. */
     const scroll = () => {
@@ -112,11 +115,14 @@ export function TabBar({ tabs, active, platform, onActivate, onClose, onMove, on
       show(null)
       if (drop && d && d.to !== d.from) latest.current.onMove(d.id, d.to)
     }
+    cancelRef.current = () => {
+      if (pressRef.current?.slots) end(false)
+    }
     const onPointerMove = (e: PointerEvent) => {
       const p = pressRef.current
       if (!p || e.pointerId !== p.pointerId) return
-      // The button was let go where this window didn't hear it (outside it, before any capture).
-      if ((e.buttons & 1) === 0) return end(p.slots !== null)
+      // The button was let go where this window didn't hear it; like a lost pointer, the tab goes back.
+      if ((e.buttons & 1) === 0) return end(false)
       p.x = e.clientX
       if (!p.slots) {
         if (Math.abs(p.x - p.startX) <= DRAG_START) return
@@ -143,27 +149,44 @@ export function TabBar({ tabs, active, platform, onActivate, onClose, onMove, on
     }
     // Captured before xterm sees it: an Esc reaching a Claude tab would interrupt Claude.
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !pressRef.current?.slots) return
-      e.preventDefault()
-      e.stopPropagation()
-      end(false)
+      if (e.key !== 'Escape') return
+      if (pressRef.current?.slots) {
+        e.preventDefault()
+        e.stopPropagation()
+        swallowEsc = true
+        end(false)
+      } else if (swallowEsc && e.repeat) {
+        // The key that cancelled a drag is still held; its repeats mustn't reach Claude either.
+        e.preventDefault()
+        e.stopPropagation()
+      }
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') swallowEsc = false
     }
     const onBlur = () => end(false)
     window.addEventListener('pointermove', onPointerMove)
     window.addEventListener('pointerup', onPointerUp)
     window.addEventListener('pointercancel', onPointerCancel)
     window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
     window.addEventListener('blur', onBlur)
     return () => {
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('pointerup', onPointerUp)
       window.removeEventListener('pointercancel', onPointerCancel)
       window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
       window.removeEventListener('blur', onBlur)
       cancelAnimationFrame(frame)
       document.body.classList.remove('dragging-tab')
     }
   }, [])
+
+  // A tab opened or closed during a drag (Cmd+W, a shell that exits, --open) moves the others
+  // under it: the drag ends where it started.
+  const order = tabs.map((t) => t.id).join('\n')
+  useEffect(() => cancelRef.current(), [order])
 
   const press = (e: ReactPointerEvent<HTMLDivElement>, id: string) => {
     if (e.button !== 0 || pressRef.current?.slots || (e.target as HTMLElement).closest('.tab-close')) return
