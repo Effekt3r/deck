@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { lstat, readdir, readFile } from 'node:fs/promises'
 import type { Stats } from 'node:fs'
 import { join } from 'node:path'
 import type { ClaudeActivity, ClaudePresence } from '@shared/types'
@@ -59,6 +59,9 @@ export function parsePresence(json: string): PresenceEntry | null {
   const cwd = text(d.cwd)
   const state = activityOf(d.status)
   if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || !sessionId || !cwd || !state) return null
+  // A terminal's Claude is interactive. Background and print sessions run elsewhere (under Claude Code's
+  // daemon, or inside a tab's own Claude) and would only make a folder ambiguous. No kind: an older file.
+  if (d.kind !== undefined && d.kind !== 'interactive') return null
   const entry: PresenceEntry = { pid, sessionId, cwd, state }
   const waitingFor = text(d.waitingFor)
   if (state === 'waiting' && waitingFor) entry.waitingFor = waitingFor.slice(0, MAX_WAITING_FOR)
@@ -171,7 +174,9 @@ async function readPresence(dir: string, cache: Map<string, Seen>): Promise<Pres
     let seen = cache.get(name)
     let st: Stats
     try {
-      st = await stat(path)
+      // Not followed: a link named like a presence file could lead to a .key file. Only a regular
+      // file (isFile below) is believed.
+      st = await lstat(path)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         cache.delete(name) // removed meanwhile

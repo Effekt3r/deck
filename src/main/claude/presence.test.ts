@@ -32,6 +32,12 @@ describe('parsePresence', () => {
   })
   it("compares start times with runs of spaces collapsed (ps pads a day below 10)", () =>
     expect(parsePresence(file({ procStart: ' Tue Nov  4 06:01:36 2026 ' }))?.procStart).toBe('Tue Nov 4 06:01:36 2026'))
+  it('keeps interactive sessions only (background and print ones run elsewhere), and files without a kind', () => {
+    expect(parsePresence(file({ kind: 'interactive' }))).not.toBeNull()
+    expect(parsePresence(file({}))).not.toBeNull()
+    expect(parsePresence(file({ kind: 'bg' }))).toBeNull()
+    expect(parsePresence(file({ kind: 'daemon' }))).toBeNull()
+  })
   it("skips anything that isn't a presence file", () => {
     expect(parsePresence('{"pid": 500, "sessionId": "s1", "cwd": "/w/a", "status": "bu')).toBeNull() // caught mid-write
     expect(parsePresence('[]')).toBeNull()
@@ -372,24 +378,29 @@ describe('PresenceWatch', () => {
   })
 
   describe.skipIf(process.platform === 'win32')('files and folders it can’t read', () => {
-    it('one file it can’t stat (a symlink to itself) holds up none of the others', async () => {
+    it('never follows a link named like a presence file (it could lead to a .key file), and the others still count', async () => {
       const { dir, published, watch } = await setup()
-      await symlink('500.json', join(dir, '500.json')) // stat fails with ELOOP
+      // The link's target would read as a presence file for 500: only a regular file is believed.
+      await writeFile(join(dir, '500.f2ef5ab0ef195a82.key'), JSON.stringify({ pid: 500, sessionId: 's500', cwd: '/w/a', status: 'busy', procStart: started }))
+      await symlink('500.f2ef5ab0ef195a82.key', join(dir, '500.json'))
       await write(dir, 600)
       await watch.refresh()
       expect(published.at(-1)?.map((p) => p.pid)).toEqual([600])
       watch.stop()
     })
 
-    it('a Claude read before keeps its last state while its file can’t be stat’d', async () => {
+    it.skipIf(process.getuid?.() === 0)('a Claude read before keeps its last state while its file can’t be looked at', async () => {
       const { dir, published, watch } = await setup()
       await write(dir, 500)
       await watch.refresh()
-      await rm(join(dir, '500.json'))
-      await symlink('500.json', join(dir, '500.json')) // stat fails with ELOOP, not ENOENT
-      await watch.refresh()
-      expect(published).toHaveLength(1)
-      expect(watch.current().map((p) => p.pid)).toEqual([500])
+      await chmod(dir, 0o600) // listable, but its files can't be looked at (EACCES, not ENOENT)
+      try {
+        await watch.refresh()
+        expect(published).toHaveLength(1)
+        expect(watch.current().map((p) => p.pid)).toEqual([500])
+      } finally {
+        await chmod(dir, 0o755)
+      }
       watch.stop()
     })
 
