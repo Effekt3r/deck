@@ -1,8 +1,9 @@
 import { spawnSync } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ClaudePresence } from '@shared/types'
 import { activityOf, alive, matchProcesses, parsePresence, parseProcessTable, PRESENCE_FILE, type PresenceEntry, PresenceWatch, type ProcessRow, psTable } from './presence'
 
@@ -72,6 +73,8 @@ describe('matchProcesses', () => {
     [310, { ppid: 210, started }], [311, { ppid: 310, started }], [400, { ppid: 1, started }], [401, { ppid: 400, started }],
   ])
   const shells = new Map([[200, 'pty-a'], [210, 'pty-b']])
+  // 300 and 320: two Claudes both direct children of tab A's shell (200) — tied at depth 1.
+  const tableWithTie = new Map(table).set(320, { ppid: 200, started })
 
   it("gives each Claude its tab's pty: a child, or further down (a wrapper script)", () => {
     expect(matchProcesses([entry(300), entry(311)], shells, table)).toEqual([
@@ -96,6 +99,20 @@ describe('matchProcesses', () => {
     const loop = new Map<number, ProcessRow>([[5, { ppid: 6, started }], [6, { ppid: 5, started }]])
     expect(matchProcesses([entry(5)], shells, loop)).toEqual([{ pid: 5, sessionId: 's5', cwd: '/w/a', state: 'working' }])
   })
+  it("gives a Claude that is the tab's shell itself (`exec claude`) its pty", () =>
+    expect(matchProcesses([entry(200)], shells, table)).toEqual([{ pid: 200, sessionId: 's200', cwd: '/w/a', state: 'working', ptyId: 'pty-a' }]))
+  it('gives neither Claude a ptyId when two tie for the same shell', () => {
+    const list = matchProcesses([entry(300), entry(320)], shells, tableWithTie)
+    expect(list.find((p) => p.pid === 300)).not.toHaveProperty('ptyId')
+    expect(list.find((p) => p.pid === 320)).not.toHaveProperty('ptyId')
+  })
+  it('ties the same way regardless of entry order', () => {
+    const sort = (l: ClaudePresence[]) => [...l].sort((a, b) => a.pid - b.pid)
+    const a = sort(matchProcesses([entry(300), entry(320)], shells, tableWithTie))
+    const b = sort(matchProcesses([entry(320), entry(300)], shells, tableWithTie))
+    expect(a).toEqual(b)
+    expect(a.every((p) => !('ptyId' in p))).toBe(true)
+  })
 })
 
 const dirs: string[] = []
@@ -105,22 +122,27 @@ afterEach(async () => {
 
 describe('PresenceWatch', () => {
   const started = 'Tue Nov 24 06:01:36 2026'
-  const table = new Map<number, ProcessRow>([[400, { ppid: 1, started }], [500, { ppid: 400, started }], [600, { ppid: 1, started }]])
+  const table = new Map<number, ProcessRow>([
+    [400, { ppid: 1, started }], [500, { ppid: 400, started }], [600, { ppid: 1, started }], [801, { ppid: 1, started }],
+  ])
   const write = (dir: string, pid: number, p: Record<string, unknown> = {}) =>
     writeFile(join(dir, `${pid}.json`), JSON.stringify({ pid, sessionId: `s${pid}`, cwd: '/w/a', status: 'busy', procStart: started, ...p }))
 
-  async function setup(opts: { ps?: boolean } = {}) {
+  async function setup(
+    opts: { ps?: boolean; shells?: () => ReadonlyMap<number, string>; processes?: () => Promise<Map<number, ProcessRow>> } = {},
+  ) {
     const dir = await mkdtemp(join(tmpdir(), 'deck-presence-'))
     dirs.push(dir)
     const published: ClaudePresence[][] = []
     const living = new Set([500, 600])
     let psRuns = 0
+    const runPs = opts.processes ?? (async () => table)
     const watch = new PresenceWatch({
       dir,
-      shells: () => new Map([[400, 'pty-a']]),
+      shells: opts.shells ?? (() => new Map([[400, 'pty-a']])),
       processes: opts.ps === false ? null : async () => {
         psRuns++
-        return table
+        return runPs()
       },
       alive: (pid) => living.has(pid),
       publish: (list) => published.push(list),
@@ -157,6 +179,7 @@ describe('PresenceWatch', () => {
 
   it("leaves out other files, broken ones, and Claudes whose process is gone", async () => {
     const { dir, published, living, watch } = await setup()
+    living.add(801) // 800.json names pid 801: it must be excluded by the name check, not by alive()
     await write(dir, 500)
     await writeFile(join(dir, '500.f2ef5ab0ef195a82.key'), 'secret')
     await writeFile(join(dir, '600.json'), '{"pid": 600, "sessi')
@@ -182,12 +205,129 @@ describe('PresenceWatch', () => {
     watch.stop()
   })
 
+  it('skips a file larger than 64 KiB', async () => {
+    const { dir, published, watch } = await setup()
+    await write(dir, 500, { padding: 'x'.repeat(70 * 1024) })
+    await watch.refresh()
+    expect(published).toHaveLength(0)
+    watch.stop()
+  })
+
+  it('a file overwritten with half its JSON keeps its last state; a later whole write is picked up', async () => {
+    const { dir, published, watch } = await setup()
+    await write(dir, 500)
+    await watch.refresh()
+    expect(published).toHaveLength(1)
+    const last = published.at(-1)
+    await writeFile(join(dir, '500.json'), '{"pid": 500, "sessi') // caught mid-rewrite
+    await watch.refresh()
+    expect(published).toHaveLength(1) // no new publish: the last whole read stands
+    expect(watch.current()).toEqual(last)
+    await write(dir, 500, { status: 'waiting', waitingFor: 'dialog open' }) // the rewrite finishes
+    await watch.refresh()
+    expect(published).toHaveLength(2)
+    expect(published.at(-1)?.[0]).toMatchObject({ state: 'waiting', waitingFor: 'dialog open', ptyId: 'pty-a' })
+    watch.stop()
+  })
+
   it('Windows (no ps): lists the running Claudes without ptys', async () => {
     const { dir, published, watch } = await setup({ ps: false })
     await write(dir, 500)
     await watch.refresh()
     expect(published.at(-1)).toEqual([{ pid: 500, sessionId: 's500', cwd: '/w/a', state: 'working' }])
     watch.stop()
+  })
+
+  it('the same pid with a new procStart runs ps again', async () => {
+    const { dir, watch, psRuns } = await setup()
+    await write(dir, 500)
+    await watch.refresh()
+    expect(psRuns()).toBe(1)
+    await write(dir, 500, { procStart: 'Wed Nov 25 06:01:36 2026' })
+    await watch.refresh()
+    expect(psRuns()).toBe(2)
+    watch.stop()
+  })
+
+  it('a processes() that fails keeps the last table and matches with it; warns once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      let calls = 0
+      const { dir, published, watch } = await setup({
+        processes: async () => {
+          calls++
+          if (calls === 2) throw new Error('ps boom')
+          return table
+        },
+      })
+      await write(dir, 500)
+      await watch.refresh()
+      expect(published.at(-1)).toEqual([{ pid: 500, sessionId: 's500', cwd: '/w/a', state: 'working', ptyId: 'pty-a' }])
+      // A status change for 500, together with a new Claude (600): the new pid makes ps run again, and it fails.
+      await write(dir, 500, { status: 'waiting', waitingFor: 'dialog open' })
+      await write(dir, 600)
+      await watch.refresh()
+      expect(published.at(-1)?.find((p) => p.pid === 500)).toMatchObject({ state: 'waiting', waitingFor: 'dialog open', ptyId: 'pty-a' })
+      expect(warn).toHaveBeenCalledTimes(1)
+      watch.stop()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('a reused shell pid runs ps again once', async () => {
+    let shellsMap = new Map([[400, 'pty-a']])
+    const { dir, watch, psRuns } = await setup({ shells: () => shellsMap })
+    await write(dir, 500)
+    await watch.refresh()
+    expect(psRuns()).toBe(1)
+    shellsMap = new Map([[400, 'pty-a'], [600, 'pty-b']]) // 600 is in `table` as another, unrelated process
+    await watch.refresh()
+    expect(psRuns()).toBe(2)
+    await watch.refresh()
+    expect(psRuns()).toBe(2)
+    watch.stop()
+  })
+
+  it('a second refresh() during a slow processes() looks again and picks up a file written meanwhile', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    let calls = 0
+    const { dir, published, watch } = await setup({
+      processes: async () => {
+        calls++
+        if (calls === 1) await gate
+        return table
+      },
+    })
+    await write(dir, 500)
+    const p1 = watch.refresh() // starts a look; its processes() call is about to wait on the gate
+    const p2 = watch.refresh() // asks for another look once this one's done
+    expect(p2).toBe(p1)
+    await write(dir, 600) // written while the first look is in flight
+    release()
+    await p1
+    expect(calls).toBe(2)
+    expect(published[0]?.map((p) => p.pid)).toEqual([500])
+    expect(published.at(-1)?.map((p) => p.pid).sort()).toEqual([500, 600])
+    watch.stop()
+  })
+
+  it('stop() while a look waits on processes() publishes nothing', async () => {
+    let release!: () => void
+    const gate = new Promise<void>((r) => { release = r })
+    const { dir, published, watch } = await setup({
+      processes: async () => {
+        await gate
+        return table
+      },
+    })
+    await write(dir, 500)
+    const p = watch.refresh()
+    watch.stop()
+    release()
+    await p
+    expect(published).toHaveLength(0)
   })
 
   it('a missing sessions folder is no Claudes', async () => {
@@ -197,6 +337,40 @@ describe('PresenceWatch', () => {
     expect(watch.current()).toEqual([])
     expect(published).toHaveLength(0)
     watch.stop()
+  })
+
+  it('a folder missing at start() gets its watch once Claude Code makes it', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'deck-presence-late-'))
+    dirs.push(root)
+    const dir = join(root, 'sessions')
+    let watchCalls = 0
+    let stopCalls = 0
+    const watchStub = (ds: string[]) => {
+      watchCalls++
+      if (!existsSync(ds[0])) return null
+      return () => {
+        stopCalls++
+      }
+    }
+    const watch = new PresenceWatch({
+      dir,
+      shells: () => new Map(),
+      processes: null,
+      alive: () => true,
+      publish: () => {},
+      watch: watchStub,
+      pollMs: 60_000,
+    })
+    watch.start()
+    await watch.refresh()
+    expect(stopCalls).toBe(0) // still missing: no watch established yet
+    await mkdir(dir)
+    await watch.refresh()
+    const triedOnceWatching = watchCalls
+    await watch.refresh() // already watching: the stub isn't asked again
+    expect(watchCalls).toBe(triedOnceWatching)
+    watch.stop()
+    expect(stopCalls).toBe(1)
   })
 })
 

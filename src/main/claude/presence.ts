@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process'
 import { readdir, readFile, stat } from 'node:fs/promises'
+import type { Stats } from 'node:fs'
 import { join } from 'node:path'
 import type { ClaudeActivity, ClaudePresence } from '@shared/types'
 import { watchDirs } from './watch'
@@ -95,27 +96,32 @@ const MAX_DEPTH = 8
 
 /**
  * Which tab's pty each Claude belongs to, by process (macOS, Linux): a tab's shell (`shells`: its
- * pid → the pty's id) is an ancestor of Claude's process. Entries whose process isn't in `table`
- * (gone), or started at another time than their file says (a pid reused after a Claude was
- * killed), are dropped. A pty keeps only the Claude nearest its shell: a `claude -p` that Claude's
- * own Bash tool runs descends from the same shell.
+ * pid → the pty's id) is Claude's process itself (a tab whose command was `exec claude`) or one of
+ * its ancestors. Entries whose process isn't in `table` (gone), or started at another time than
+ * their file says (a pid reused after a Claude was killed), are dropped. A pty gets only the Claude
+ * nearest its shell (a `claude -p` that Claude's own Bash tool runs descends from the same shell),
+ * and none when two are as near (one suspended with Ctrl+Z, and a new one started).
  */
 export function matchProcesses(entries: readonly PresenceEntry[], shells: ReadonlyMap<number, string>, table: ReadonlyMap<number, ProcessRow>): ClaudePresence[] {
   const out: ClaudePresence[] = []
-  const nearest = new Map<string, { depth: number; presence: ClaudePresence }>()
+  // Per pty: the Claude nearest its shell; null while two are as near.
+  const nearest = new Map<string, { depth: number; presence: ClaudePresence | null }>()
   for (const entry of entries) {
     const row = table.get(entry.pid)
     if (!row || (entry.procStart !== undefined && entry.procStart !== row.started)) continue
     const presence = publicPresence(entry)
-    let pid = row.ppid
-    for (let depth = 1; depth <= MAX_DEPTH && pid > 1; depth++) {
+    let pid = entry.pid
+    for (let depth = 0; depth <= MAX_DEPTH && pid > 1; depth++) {
       const ptyId = shells.get(pid)
       if (ptyId !== undefined) {
         const best = nearest.get(ptyId)
         if (!best || depth < best.depth) {
-          if (best) delete best.presence.ptyId
+          if (best?.presence) delete best.presence.ptyId
           presence.ptyId = ptyId
           nearest.set(ptyId, { depth, presence })
+        } else if (depth === best.depth) {
+          if (best.presence) delete best.presence.ptyId
+          nearest.set(ptyId, { depth, presence: null })
         }
         break
       }
@@ -134,29 +140,47 @@ interface Seen {
 }
 
 /** The presence files in `dir` (`<claude home>/sessions`), re-reading only those whose size or
- *  time changed since `cache`. A missing folder has none. */
+ *  time changed since `cache`. A missing folder has none; any other failure to list it throws, so
+ *  that look publishes nothing rather than a list with every Claude gone. */
 async function readPresence(dir: string, cache: Map<string, Seen>): Promise<PresenceEntry[]> {
-  const names = (await readdir(dir).catch(() => [] as string[])).filter((n) => PRESENCE_FILE.test(n)).sort()
+  let all: string[]
+  try {
+    all = await readdir(dir)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw err
+  }
+  const names = all.filter((n) => PRESENCE_FILE.test(n)).sort()
   const present = new Set(names)
   for (const name of cache.keys()) if (!present.has(name)) cache.delete(name)
   const entries: PresenceEntry[] = []
   for (const name of names) {
     const path = join(dir, name)
-    const st = await stat(path).catch(() => null) // removed meanwhile: null
-    if (!st || !st.isFile() || st.size > MAX_PRESENCE_BYTES) {
+    let st: Stats
+    try {
+      st = await stat(path)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+      cache.delete(name) // removed meanwhile
+      continue
+    }
+    if (!st.isFile() || st.size > MAX_PRESENCE_BYTES) {
       cache.delete(name)
       continue
     }
     let seen = cache.get(name)
     if (!seen || seen.size !== st.size || seen.mtimeMs !== st.mtimeMs) {
       const entry = parsePresence(await readFile(path, 'utf8').catch(() => ''))
-      // A file caught mid-write reads as broken: not kept, so the next look reads it again.
-      if (!entry) {
-        cache.delete(name)
-        continue
+      if (entry) {
+        seen = { size: st.size, mtimeMs: st.mtimeMs, entry }
+        cache.set(name, seen)
+      } else if (seen) {
+        // Claude Code rewrites its file in place, so a look can catch it half-written: keep the last
+        // whole read, and read it again next look.
+        seen.mtimeMs = Number.NaN
+      } else {
+        continue // never read whole yet
       }
-      seen = { size: st.size, mtimeMs: st.mtimeMs, entry }
-      cache.set(name, seen)
     }
     // A file is named after its pid: one that says otherwise isn't believed.
     if (`${seen.entry.pid}.json` === name) entries.push(seen.entry)
@@ -174,11 +198,13 @@ export function alive(pid: number): boolean {
   }
 }
 
+/** An absolute path, as Deck finds adb: never a `ps` that PATH or the current folder supplies. */
+const PS = '/bin/ps'
+
 /** The process table (macOS, Linux), with start times in UTC as Claude Code writes them. */
 export function psTable(): Promise<Map<number, ProcessRow>> {
-  const ps = process.platform === 'darwin' ? '/bin/ps' : 'ps'
   return new Promise((resolve, reject) => {
-    execFile(ps, ['-A', '-o', 'pid=,ppid=,lstart='], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' }, timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
+    execFile(PS, ['-A', '-o', 'pid=,ppid=,lstart='], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' }, timeout: 5000, maxBuffer: 8 * 1024 * 1024 },
       (err, stdout) => (err ? reject(err) : resolve(parseProcessTable(stdout))))
   })
 }
@@ -208,6 +234,9 @@ export class PresenceWatch {
   private table = new Map<number, ProcessRow>()
   /** Each looked-up Claude's pid → its start time then. */
   private known = new Map<number, string | undefined>()
+  /** The shell pids when `table` was read. */
+  private shellsAtPs = new Set<number>()
+  private psFailing = false
   private list: ClaudePresence[] = []
   private last = '[]'
   private timer: ReturnType<typeof setInterval> | null = null
@@ -221,7 +250,6 @@ export class PresenceWatch {
   /** Starts watching (once; nothing after stop()). */
   start(): void {
     if (this.timer || this.stopped) return
-    this.unwatch = (this.deps.watch ?? watchDirs)([this.deps.dir], () => void this.refresh())
     this.timer = setInterval(() => void this.refresh(), this.deps.pollMs ?? 2000)
     void this.refresh()
   }
@@ -256,14 +284,29 @@ export class PresenceWatch {
   }
 
   private async look(): Promise<void> {
+    // Watched from the first look that finds the folder: one missing at start gets its watch once
+    // Claude Code makes it (the poll covers the time between).
+    if (this.timer && !this.unwatch) this.unwatch = (this.deps.watch ?? watchDirs)([this.deps.dir], () => void this.refresh())
     const entries = (await readPresence(this.deps.dir, this.cache)).filter((e) => this.deps.alive(e.pid))
     let list: ClaudePresence[]
     if (this.deps.processes) {
-      if (entries.some((e) => !this.known.has(e.pid) || this.known.get(e.pid) !== e.procStart)) {
-        this.table = await this.deps.processes()
-        this.known = new Map(entries.map((e) => [e.pid, e.procStart]))
+      const shells = this.deps.shells()
+      const fresh = entries.some((e) => !this.known.has(e.pid) || this.known.get(e.pid) !== e.procStart)
+      // A tab's shell whose pid the table gives another process: the table is older than the shell.
+      const reused = [...shells.keys()].some((pid) => !this.shellsAtPs.has(pid) && this.table.has(pid))
+      if (fresh || reused) {
+        try {
+          this.table = await this.deps.processes()
+          this.known = new Map(entries.map((e) => [e.pid, e.procStart]))
+          this.shellsAtPs = new Set(shells.keys())
+          this.psFailing = false
+        } catch (err) {
+          // Matched with the last table meanwhile (a Claude it lacks stays out); tried again next look.
+          if (!this.psFailing) console.warn('presence: ps failed; trying again at each look', err)
+          this.psFailing = true
+        }
       }
-      list = matchProcesses(entries, this.deps.shells(), this.table)
+      list = matchProcesses(entries, shells, this.table)
     } else {
       list = entries.map(publicPresence)
     }
