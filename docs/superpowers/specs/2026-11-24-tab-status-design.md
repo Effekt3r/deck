@@ -241,8 +241,9 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
   looks in `~/.claude` and finds no presence files (as the Claude panel finds no logs).
 - Windows PowerShell 5.1 under its Restricted policy runs without Deck's hook, so a tab keeps
   Claude's last title after Claude exits and still counts as running Claude for the folder rule.
-- Only interactive sessions count (a file's `kind`, when it has one): background and print
-  sessions run under Claude Code's daemon or inside a tab's own Claude.
+- Only a terminal's interactive Claude counts: a file whose `kind` is background (bg, daemon) runs
+  under Claude Code's daemon, and a `claude -p` run (`entrypoint` sdk-cli) inside a tab's own
+  Claude; both are skipped.
 - Windows checks no process identity: a file left by a killed Claude whose pid Windows has reused
   looks alive, and makes that folder ambiguous (no status) until it's removed.
 - Windows matches by folder only, and is untested, like the rest of Deck there.

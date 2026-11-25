@@ -221,10 +221,12 @@ Things that aren't obvious from the code:
     words its "session presence PID file": `status` busy, waiting, idle or shell (idle with a
     background shell), `waitingFor` while waiting (a dialog's words, `input needed`, `dialog open`, …),
     and `procStart`, its start as `ps -o lstart` with `LC_ALL=C TZ=UTC` (read from Claude Code's
-    binary). Deck shows busy as working and shell as idle, counts only interactive sessions (`kind`;
-    background and print ones run elsewhere), reads only regular files named `<digits>.json` (`lstat`:
-    never the `<pid>.<hash>.key` files beside them, which hold peer-messaging keys, not even through a
-    link) and shows no status if a version drops the files. Undocumented; checked against 2.1.283.
+    binary). Deck shows busy as working and shell as idle, skips background sessions (`kind`) and
+    `claude -p` runs (`entrypoint` sdk-cli; Deck strips `CLAUDE_CODE_ENTRYPOINT` from its shells, so a
+    tab's own Claude writes `cli`), reads only regular files named `<digits>.json` (`lstat`, then
+    `O_NOFOLLOW`: never the `<pid>.<hash>.key` files beside them, which hold peer-messaging keys, not
+    even through a link) and shows no status if a version drops the files. Undocumented; checked
+    against 2.1.283.
   - **Which tab:** main runs `/bin/ps -A -o pid=,ppid=,lstart=` (`TZ=UTC LC_ALL=C`, 20 ms) only when a
     presence file with a pid or start time it hasn't looked up appears, or a new tab's shell has a pid
     the last table gave another process, and walks up from Claude's pid to a tab's shell
