@@ -43,6 +43,7 @@ describe('nextAttention', () => {
   })
   it('a turn that ends while seen, or the first look at an idle Claude, is not news', () => {
     expect(step(step(new Map(), { t1: 'working' }), { t1: 'idle' }, 't1').get('t1')?.unseen).toBe(false)
+    expect(step(step(new Map(), { t1: 'waiting' }), { t1: 'idle' }, 't1').get('t1')?.unseen).toBe(false)
     expect(step(new Map(), { t1: 'idle' }).get('t1')?.unseen).toBe(false)
   })
   it('a wait that ends unseen counts too; a new turn or Claude going away clears it', () => {
