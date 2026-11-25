@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -289,45 +289,117 @@ describe('PresenceWatch', () => {
     watch.stop()
   })
 
-  it('a second refresh() during a slow processes() looks again and picks up a file written meanwhile', async () => {
+  /** A processes() whose first call waits for `release()`; `reached` settles once it's waiting. */
+  function gatedPs() {
     let release!: () => void
+    let atPs!: () => void
     const gate = new Promise<void>((r) => { release = r })
+    const reached = new Promise<void>((r) => { atPs = r })
     let calls = 0
-    const { dir, published, watch } = await setup({
-      processes: async () => {
-        calls++
-        if (calls === 1) await gate
-        return table
-      },
-    })
+    const processes = async () => {
+      calls++
+      if (calls === 1) {
+        atPs()
+        await gate
+      }
+      return table
+    }
+    return { processes, release, reached, calls: () => calls }
+  }
+
+  it('a second refresh() during a slow processes() looks again and picks up a file written meanwhile', async () => {
+    const ps = gatedPs()
+    const { dir, published, watch } = await setup({ processes: ps.processes })
     await write(dir, 500)
-    const p1 = watch.refresh() // starts a look; its processes() call is about to wait on the gate
+    const p1 = watch.refresh()
+    await ps.reached // the first look has listed the folder and waits on ps
+    await write(dir, 600)
     const p2 = watch.refresh() // asks for another look once this one's done
     expect(p2).toBe(p1)
-    await write(dir, 600) // written while the first look is in flight
-    release()
+    ps.release()
     await p1
-    expect(calls).toBe(2)
+    expect(ps.calls()).toBe(2)
     expect(published[0]?.map((p) => p.pid)).toEqual([500])
     expect(published.at(-1)?.map((p) => p.pid).sort()).toEqual([500, 600])
     watch.stop()
   })
 
   it('stop() while a look waits on processes() publishes nothing', async () => {
-    let release!: () => void
-    const gate = new Promise<void>((r) => { release = r })
-    const { dir, published, watch } = await setup({
-      processes: async () => {
-        await gate
-        return table
-      },
-    })
+    const ps = gatedPs()
+    const { dir, published, watch } = await setup({ processes: ps.processes })
     await write(dir, 500)
     const p = watch.refresh()
+    await ps.reached
     watch.stop()
-    release()
+    ps.release()
     await p
     expect(published).toHaveLength(0)
+  })
+
+  it('a whole file that fails the checks drops its Claude: only a half-written one keeps the last state', async () => {
+    const { dir, published, watch } = await setup()
+    await write(dir, 500, { status: 'waiting', waitingFor: 'dialog open' })
+    await watch.refresh()
+    expect(published.at(-1)?.[0]).toMatchObject({ pid: 500, state: 'waiting' })
+    await writeFile(join(dir, '500.json'), JSON.stringify({ pid: 500, sessionId: 's500', cwd: '/w/a', procStart: started })) // no status
+    await watch.refresh()
+    expect(published.at(-1)).toEqual([])
+    watch.stop()
+  })
+
+  it('ps failing twice in a row warns once', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      let calls = 0
+      const { dir, watch } = await setup({
+        processes: async () => {
+          calls++
+          if (calls >= 2) throw new Error('ps boom')
+          return table
+        },
+      })
+      await write(dir, 500)
+      await watch.refresh()
+      await write(dir, 600) // a new pid: ps runs, and fails
+      await watch.refresh()
+      await watch.refresh() // 600 still unknown: ps runs again, and fails again
+      expect(calls).toBe(3)
+      expect(warn).toHaveBeenCalledTimes(1)
+      watch.stop()
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  describe.skipIf(process.platform === 'win32')('files and folders it can’t read', () => {
+    it('one file it can’t stat (a symlink to itself) holds up none of the others', async () => {
+      const { dir, published, watch } = await setup()
+      await symlink('500.json', join(dir, '500.json')) // stat fails with ELOOP
+      await write(dir, 600)
+      await watch.refresh()
+      expect(published.at(-1)?.map((p) => p.pid)).toEqual([600])
+      watch.stop()
+    })
+
+    it.skipIf(process.getuid?.() === 0)('a folder it can’t list publishes nothing and keeps the last list; it warns once', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const { dir, published, watch } = await setup()
+      try {
+        await write(dir, 500)
+        await watch.refresh()
+        expect(published).toHaveLength(1)
+        await chmod(dir, 0o000)
+        await watch.refresh()
+        await watch.refresh()
+        expect(published).toHaveLength(1)
+        expect(watch.current().map((p) => p.pid)).toEqual([500])
+        expect(warn).toHaveBeenCalledTimes(1)
+      } finally {
+        await chmod(dir, 0o755)
+        warn.mockRestore()
+        watch.stop()
+      }
+    })
   })
 
   it('a missing sessions folder is no Claudes', async () => {

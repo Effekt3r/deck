@@ -139,6 +139,18 @@ interface Seen {
   entry: PresenceEntry
 }
 
+/** A presence file caught mid-write: empty, or not JSON yet. A whole file that fails the checks
+ *  (no status yet, or one Deck doesn't know) isn't one. */
+function halfWritten(text: string): boolean {
+  if (text.trim() === '') return true
+  try {
+    JSON.parse(text)
+    return false
+  } catch {
+    return true
+  }
+}
+
 /** The presence files in `dir` (`<claude home>/sessions`), re-reading only those whose size or
  *  time changed since `cache`. A missing folder has none; any other failure to list it throws, so
  *  that look publishes nothing rather than a list with every Claude gone. */
@@ -156,30 +168,38 @@ async function readPresence(dir: string, cache: Map<string, Seen>): Promise<Pres
   const entries: PresenceEntry[] = []
   for (const name of names) {
     const path = join(dir, name)
+    let seen = cache.get(name)
     let st: Stats
     try {
       st = await stat(path)
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
-      cache.delete(name) // removed meanwhile
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        cache.delete(name) // removed meanwhile
+        continue
+      }
+      // Unreadable for now, not gone: it keeps its last state, if it had one, and doesn't hold up
+      // the other Claudes.
+      if (seen && `${seen.entry.pid}.json` === name) entries.push(seen.entry)
       continue
     }
     if (!st.isFile() || st.size > MAX_PRESENCE_BYTES) {
       cache.delete(name)
       continue
     }
-    let seen = cache.get(name)
     if (!seen || seen.size !== st.size || seen.mtimeMs !== st.mtimeMs) {
-      const entry = parsePresence(await readFile(path, 'utf8').catch(() => ''))
+      const text = await readFile(path, 'utf8').catch(() => '')
+      const entry = parsePresence(text)
       if (entry) {
         seen = { size: st.size, mtimeMs: st.mtimeMs, entry }
         cache.set(name, seen)
-      } else if (seen) {
+      } else if (seen && halfWritten(text)) {
         // Claude Code rewrites its file in place, so a look can catch it half-written: keep the last
         // whole read, and read it again next look.
         seen.mtimeMs = Number.NaN
       } else {
-        continue // never read whole yet
+        // Never read whole yet, or whole but failing the checks: no status for it.
+        cache.delete(name)
+        continue
       }
     }
     // A file is named after its pid: one that says otherwise isn't believed.
@@ -237,6 +257,7 @@ export class PresenceWatch {
   /** The shell pids when `table` was read. */
   private shellsAtPs = new Set<number>()
   private psFailing = false
+  private lookFailing = false
   private list: ClaudePresence[] = []
   private last = '[]'
   private timer: ReturnType<typeof setInterval> | null = null
@@ -275,7 +296,14 @@ export class PresenceWatch {
     this.running = (async () => {
       do {
         this.again = false
-        await this.look().catch((err: unknown) => console.warn("presence: reading Claude Code's sessions failed", err))
+        try {
+          await this.look()
+          this.lookFailing = false
+        } catch (err) {
+          // Once per run of failures, as for ps: the poll would otherwise repeat it every 2 s.
+          if (!this.lookFailing) console.warn("presence: reading Claude Code's sessions failed; trying again at each look", err)
+          this.lookFailing = true
+        }
       } while (this.again && !this.stopped)
     })().finally(() => {
       this.running = null
