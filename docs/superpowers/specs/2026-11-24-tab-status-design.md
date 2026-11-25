@@ -279,3 +279,28 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
   - **Dragging:** across the other tabs and back; Esc mid-drag; with enough tabs to scroll, to the
     far end.
   - **Menu:** Window → Move Tab Left and Move Tab Right.
+
+## Checked in the app (2026-11-25)
+
+A dev build with its own `--user-data-dir`, driven through the DevTools protocol (focus emulated in
+the page, so Franco's own window kept the Mac's focus), with a real `claude` (2.1.283) in a tab. Only
+local commands were sent: `/config` and Esc. No prompt, so no tokens.
+
+- **Matching:** the tab's Claude appeared in `claude:presence` with the tab's pty id within about 4 s
+  of starting. The tab's name was `Claude Code`, without Claude's `✳`.
+- **Needs you:** `/config` in the front tab gave it the amber dot and top edge, the tooltip line
+  "Claude needs you (dialog open)", and a Dock badge of 1. Switching to the other tab kept the mark.
+- **Finished, unseen:** Claude's dialog closed while the other tab was in front. The tab turned green
+  (✓ and top edge) and the Dock badge cleared. Clicking the tab cleared the ✓.
+- **Esc in a script:** Claude Code turns on the kitty keyboard protocol, so a real Esc reaches it as
+  `ESC[27u`. A bare ESC byte written to its pty doesn't close the dialog. A check that closes one in a
+  background tab writes `\x1b[27u`. Escape pressed in the front tab closed it, with no mark after, as
+  the tab was seen.
+- **Dragging** (mouse events carrying `buttons: 1`):
+  - dropping a tab past its neighbour's middle swapped them, and Esc mid-drag put the tab back;
+  - held 1 s past the strip's right end, the strip's `scrollLeft` stayed 0, and the tab landed last.
+- **Window → Move Tab Left** moved the front tab one place left.
+- **Afterwards:** no process left running. Claude Code had removed its presence file. The check's
+  folder and its session log were removed.
+- **Not checked here:** the macOS Dock bounce itself (the window was never in the background with a
+  rising count), a real permission prompt (it needs a prompt to Claude), and Windows.

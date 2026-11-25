@@ -2234,7 +2234,7 @@ Use `$S/cdp.mjs` (from the earlier probe; it exports `evaluate`, `type`, `enter`
 2. Opens two tabs (`document.querySelector('.tab-new').click()`), and in each types `cd ~/Development/.deck-probe-title && claude` + Enter. Waits 15 s.
 3. In tab A (in front): types `/config` + Enter. Expect, within 3 s, A's `.tab-mark.waiting` and `.tab.mark-waiting`, and through the main inspector (port 9339, `process.mainModule.require('electron').app.dock.getBadge()`) a badge of `"1"`.
 4. Clicks tab B. A keeps the amber mark.
-5. Finds A's pty id (the one that echoed the `/config` typing) and sends Esc to it: `window.deck.pty.write(idA, '\x1b')`. Expect A's mark to become `.tab-mark.done` with `.tab.mark-done`, and the badge `""`.
+5. Finds A's pty id (the one that echoed the `/config` typing) and sends Esc to it as Claude Code reads keys (the kitty keyboard protocol): `window.deck.pty.write(idA, '\x1b[27u')`. A bare `\x1b` doesn't close the dialog. Expect A's mark to become `.tab-mark.done` with `.tab.mark-done`, and the badge `""`.
 6. Clicks A: no mark on A.
 7. Checks the names: A's `.tab-label` doesn't start with a status glyph while its status is known.
 8. Drags: `Input.dispatchMouseEvent` `mousePressed` on tab A's centre, `mouseMoved` in 10 px steps past tab B's middle, `mouseReleased`. Every `mouseMoved` must carry `button: 'left', buttons: 1`: without them the first move has no button held, which ends the press, and nothing is dragged. Expect the labels' order to show A after B. Repeat with Esc (`Input.dispatchKeyEvent` keyDown Escape) before releasing: the order doesn't change. Then drag a tab past the strip's right end and hold it there for 1 s: `.tab-strip`'s `scrollLeft` stays at its natural maximum (0 when the tabs fit), and the tab lands last.
