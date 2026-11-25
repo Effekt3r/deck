@@ -85,7 +85,10 @@ else, such as a session's name itself staying old, these findings don't explain 
     file whose Claude died without removing it is ignored, whether its pid is gone or now belongs to
     another process.
   - **A Claude inside Claude:** a `claude -p` run by Claude's Bash tool also descends from the tab's
-    shell. The one nearest the shell is the tab's.
+    shell. The one nearest the shell is the tab's; with two as near (one suspended with Ctrl+Z, and
+    a new one), neither is. A Claude that is the shell itself (a tab command of `exec claude`) counts.
+  - **A file caught mid-write:** Claude Code rewrites its file in place, so a look can read it
+    half-written; that Claude keeps its last state until the next look reads it whole.
 - **Windows, by folder:**
   - **Why:** Windows has no `ps`, and asking WMI for parent processes means starting PowerShell.
   - **The rule:** a presence file belongs to a tab when its `cwd` is the tab's folder (ignoring case
@@ -227,6 +230,12 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
 
 - The presence files are undocumented (above).
 - A Claude under tmux or screen in a tab isn't matched: its parent is the multiplexer's server.
+  Neither are Claude Code's background sessions (presence `kind` bg or daemon), which run under its
+  own daemon.
+- Two Claudes as near a tab's shell (one suspended with Ctrl+Z, and a new one): that tab shows no
+  status until one of them ends.
+- Windows checks no process identity: a file left by a killed Claude whose pid Windows has reused
+  looks alive, and makes that folder ambiguous (no status) until it's removed.
 - Windows matches by folder only, and is untested, like the rest of Deck there.
 - Green isn't remembered across a restart.
 - A local command that makes Claude busy for a moment (e.g. `/rename`) ends a "turn" too. It would
