@@ -71,9 +71,12 @@ export function TabBar({ tabs, active, platform, statuses, onActivate, onClose, 
     latest.current = { onActivate, onMove }
   })
 
+  // The tabs' order: a drag ends when it changes under it (below), and a moved front tab is kept in view.
+  const order = tabs.map((t) => t.id).join('\n')
+
   useEffect(() => {
     stripRef.current?.querySelector('.tab.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [active, tabs.length])
+  }, [active, order])
 
   useEffect(() => {
     let frame = 0
@@ -191,7 +194,6 @@ export function TabBar({ tabs, active, platform, statuses, onActivate, onClose, 
 
   // A tab opened or closed during a drag (Cmd+W, a shell that exits, --open) moves the others
   // under it: the drag ends where it started.
-  const order = tabs.map((t) => t.id).join('\n')
   useLayoutEffect(() => {
     cancelRef.current()
   }, [order])

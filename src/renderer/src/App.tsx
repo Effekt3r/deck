@@ -101,8 +101,15 @@ export function App() {
     })
   }, [])
 
+  /** The order terminal tabs were opened in: their workspaces keep it in the page, whatever their order
+   *  in the bar. Following a reorder, React would move a workspace's node, which resets its panels'
+   *  scroll (the Claude feed back to the top, a scrolled git graph blank). */
+  const openedAt = useRef(new Map<string, number>())
+  const opened = useRef(0)
   const open = useCallback((cwd: string, command?: string) => {
-    dispatch({ type: 'open', id: crypto.randomUUID(), cwd, command })
+    const id = crypto.randomUUID()
+    openedAt.current.set(id, opened.current++)
+    dispatch({ type: 'open', id, cwd, command })
   }, [])
 
   /** A shell tab in the active terminal's folder; from Projects, the home folder (main also falls back to it). */
@@ -204,6 +211,7 @@ export function App() {
   }, [windowTitle])
 
   const terminals = state.tabs.filter(isTerminal)
+  const workspaces = [...terminals].sort((a, b) => (openedAt.current.get(a.id) ?? 0) - (openedAt.current.get(b.id) ?? 0))
 
   return (
     <div className="app">
@@ -212,7 +220,7 @@ export function App() {
       <main className="content">
         <ProjectsView active={state.active === PROJECTS_ID} openTabs={terminals} home={info?.home ?? ''}
           findRequest={findRequests[PROJECTS_ID] ?? 0} onOpen={openProject} />
-        {terminals.map((tab) => (
+        {workspaces.map((tab) => (
           <Workspace key={tab.id} tab={tab} active={tab.id === state.active} home={info?.home ?? ''}
             gitWidth={gitWidth} claudeWidth={claudeWidth} windowsBuild={info?.windowsBuild}
             findRequest={findRequests[tab.id] ?? 0} claudeToggle={claudeToggles[tab.id] ?? 0} clipItem={clipItem} usage={usage}
