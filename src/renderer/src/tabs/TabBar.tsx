@@ -4,11 +4,14 @@ import { CloseIcon, PlusIcon } from '../icons'
 import { dropIndex, edgeScroll, shownShift, slideFor, type Slot } from './drag'
 import type { Tab } from './tabs'
 import { tabTitle } from './title'
+import type { TabStatus } from './useTabStatus'
 
 interface Props {
   tabs: Tab[]
   active: string
   platform: Platform
+  /** Claude's status, for the tabs whose Claude Deck knows. */
+  statuses: ReadonlyMap<string, TabStatus>
   onActivate(id: string): void
   onClose(id: string): void
   /** A terminal tab dropped at place `index` (1 or more: Projects stays first). */
@@ -55,7 +58,7 @@ const keepFocus = (e: MouseEvent) => e.preventDefault()
 /** The window's title bar: macOS traffic lights on the left, Windows caption
  *  buttons on the right; the empty area drags the window. Terminal tabs can be
  *  dragged into another order (the Projects tab stays first). */
-export function TabBar({ tabs, active, platform, onActivate, onClose, onMove, onNew }: Props) {
+export function TabBar({ tabs, active, platform, statuses, onActivate, onClose, onMove, onNew }: Props) {
   const stripRef = useRef<HTMLDivElement>(null)
   const pressRef = useRef<Press | null>(null)
   const dragRef = useRef<Drag | null>(null)
@@ -222,17 +225,22 @@ export function TabBar({ tabs, active, platform, onActivate, onClose, onMove, on
               </div>
             )
           }
-          const title = tabTitle(tab, platform)
+          const status = statuses.get(tab.id)
+          // Deck draws the status itself where it knows it: Claude's own glyph stands still in
+          // background tabs (Claude animates it only with focus).
+          const title = tabTitle(tab, platform, { glyph: status === undefined })
+          const tip = status?.mark ? `${title}\n${status.text}` : title
           const dragged = drag?.id === tab.id
           const slide = drag === null ? 0 : dragged ? drag.dx : slideFor(i, drag.from, drag.to, drag.width)
-          const classes = ['tab', isActive && 'active', tab.exited !== undefined && 'exited', dragged && 'dragging'].filter(Boolean).join(' ')
+          const classes = ['tab', isActive && 'active', tab.exited !== undefined && 'exited', dragged && 'dragging', status?.mark && `mark-${status.mark}`].filter(Boolean).join(' ')
           return (
-            <div key={tab.id} role="tab" aria-selected={isActive} className={classes} title={title}
+            <div key={tab.id} role="tab" aria-selected={isActive} className={classes} title={tip}
               style={slide ? { transform: `translateX(${slide}px)` } : undefined}
               onMouseDown={keepFocus}
               onPointerDown={(e) => press(e, tab.id)}
               onClick={() => onActivate(tab.id)}
               onAuxClick={(e) => e.button === 1 && onClose(tab.id)}>
+              {status?.mark && <span className={`tab-mark ${status.mark}`} role="img" aria-label={status.text} />}
               <span className="tab-label">{title}</span>
               <button className="tab-close" aria-label="Close tab" tabIndex={-1}
                 onClick={(e) => {

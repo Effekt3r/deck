@@ -10,11 +10,12 @@ import { devicesNeeded, menuOrder, panelRules } from './device/pick'
 import { useDeviceList, useDeviceProject, useHeldView } from './device/useDevices'
 import { GitPanel } from './git/GitPanel'
 import { loadSize, saveSize, Splitter } from './git/Splitter'
-import { usePageVisible, useStoredFlag } from './hooks'
+import { usePageVisible, useStoredFlag, useWindowFocused } from './hooks'
 import { ProjectsView } from './projects/ProjectsView'
 import { TabBar } from './tabs/TabBar'
 import { initialTabs, isTerminal, PROJECTS_ID, tabsReducer, type TerminalPatch, type TerminalTab } from './tabs/tabs'
 import { runsClaude, tabTitle } from './tabs/title'
+import { useTabStatus } from './tabs/useTabStatus'
 import { TerminalView } from './terminal/TerminalView'
 import { UsageCard } from './usage/UsageCard'
 import { useUsage } from './usage/useUsage'
@@ -82,6 +83,9 @@ export function App() {
   const [deviceShare, setDeviceShare] = useState(() => clampShare(loadSize(DEVICE_SHARE_KEY, DEVICE_SHARE * 1000) / 1000))
   /** Device screens stream only while the window can be seen. */
   const pageVisible = usePageVisible()
+  /** Claude's status per tab; a tab is seen while it's in front and Deck has focus. */
+  const focused = useWindowFocused()
+  const statuses = useTabStatus(state.tabs, focused ? state.active : null, platform)
 
   // Menu commands and IPC events read the latest state through refs.
   const stateRef = useRef(state)
@@ -194,7 +198,7 @@ export function App() {
   }, [newTab, open, update])
 
   const activeTab = state.tabs.find((t) => t.id === state.active)
-  const windowTitle = activeTab && isTerminal(activeTab) ? tabTitle(activeTab, platform) : 'Deck'
+  const windowTitle = activeTab && isTerminal(activeTab) ? tabTitle(activeTab, platform, { glyph: !statuses.has(activeTab.id) }) : 'Deck'
   useEffect(() => {
     document.title = windowTitle
   }, [windowTitle])
@@ -203,7 +207,7 @@ export function App() {
 
   return (
     <div className="app">
-      <TabBar tabs={state.tabs} active={state.active} platform={platform}
+      <TabBar tabs={state.tabs} active={state.active} platform={platform} statuses={statuses}
         onActivate={activate} onClose={close} onMove={move} onNew={newTab} />
       <main className="content">
         <ProjectsView active={state.active === PROJECTS_ID} openTabs={terminals} home={info?.home ?? ''}

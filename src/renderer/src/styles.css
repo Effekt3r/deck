@@ -1,4 +1,4 @@
-/* Deck: dark navy chrome, teal for what's active, amber for highlights. */
+/* Deck: dark navy chrome, teal for what's active, amber for highlights and for what needs you, green for what's done. */
 
 :root {
   color-scheme: dark;
@@ -16,6 +16,7 @@
   --faint: #5d6290;
   --teal: #3ddcc1;
   --amber: #ff9f43;
+  --green: #9ece6a;
   --violet: #a78bfa;
   --red: #f7768e;
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
@@ -167,6 +168,33 @@ input, textarea { user-select: text; }
 body.dragging-tab, body.dragging-tab * { cursor: grabbing !important; }
 @media (prefers-reduced-motion: reduce) {
   .tab-strip.reordering .tab:not(.dragging) { transition: none; }
+}
+/* A tab's Claude: working (a turning ring), needs you (a pulsing dot, amber top edge), finished and
+   not yet seen (a check, green top edge). The shapes differ as well as the colours. */
+.tab-mark { flex: none; position: relative; width: 10px; height: 10px; }
+.tab-mark.working {
+  border: 1.5px solid var(--violet);
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: tab-turn 0.9s linear infinite;
+}
+.tab-mark.waiting { width: 8px; height: 8px; margin: 1px; border-radius: 50%; background: var(--amber); animation: tab-pulse 1.6s ease-in-out infinite; }
+.tab-mark.done::before {
+  content: '✓';
+  position: absolute;
+  inset: -2px 0 0;
+  color: var(--green);
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  text-align: center;
+}
+.tab.mark-waiting { border-top-color: var(--amber); }
+.tab.mark-done { border-top-color: var(--green); }
+@keyframes tab-turn { to { transform: rotate(360deg); } }
+@keyframes tab-pulse { 50% { box-shadow: 0 0 0 3px rgb(255 159 67 / 0.25); } }
+@media (prefers-reduced-motion: reduce) {
+  .tab-mark.working, .tab-mark.waiting { animation: none; }
 }
 
 /* ---------------------------------------------------------------- workspace */
