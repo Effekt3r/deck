@@ -37,6 +37,8 @@ describe('parsePresence', () => {
     expect(parsePresence(file({}))).not.toBeNull()
     expect(parsePresence(file({ kind: 'bg' }))).toBeNull()
     expect(parsePresence(file({ kind: 'daemon' }))).toBeNull()
+    expect(parsePresence(file({ kind: 'interactive', entrypoint: 'sdk-cli' }))).toBeNull() // claude -p
+    expect(parsePresence(file({ kind: 'interactive', entrypoint: 'cli' }))).not.toBeNull()
   })
   it("skips anything that isn't a presence file", () => {
     expect(parsePresence('{"pid": 500, "sessionId": "s1", "cwd": "/w/a", "status": "bu')).toBeNull() // caught mid-write

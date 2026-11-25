@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process'
+import { constants, type Stats } from 'node:fs'
 import { lstat, readdir, readFile } from 'node:fs/promises'
-import type { Stats } from 'node:fs'
 import { join } from 'node:path'
 import type { ClaudeActivity, ClaudePresence } from '@shared/types'
 import { watchDirs } from './watch'
@@ -59,9 +59,12 @@ export function parsePresence(json: string): PresenceEntry | null {
   const cwd = text(d.cwd)
   const state = activityOf(d.status)
   if (typeof pid !== 'number' || !Number.isSafeInteger(pid) || pid <= 0 || !sessionId || !cwd || !state) return null
-  // A terminal's Claude is interactive. Background and print sessions run elsewhere (under Claude Code's
-  // daemon, or inside a tab's own Claude) and would only make a folder ambiguous. No kind: an older file.
+  // A terminal's Claude is interactive. Background sessions run under Claude Code's daemon, and a
+  // `claude -p` (written as interactive, entrypoint sdk-cli) inside a tab's own Claude: they'd only make a
+  // folder ambiguous. No kind: an older file. Deck strips CLAUDE_CODE_ENTRYPOINT from its shells, so a
+  // tab's own Claude writes `cli`.
   if (d.kind !== undefined && d.kind !== 'interactive') return null
+  if (d.entrypoint === 'sdk-cli') return null
   const entry: PresenceEntry = { pid, sessionId, cwd, state }
   const waitingFor = text(d.waitingFor)
   if (state === 'waiting' && waitingFor) entry.waitingFor = waitingFor.slice(0, MAX_WAITING_FOR)
@@ -192,7 +195,8 @@ async function readPresence(dir: string, cache: Map<string, Seen>): Promise<Pres
       continue
     }
     if (!seen || seen.size !== st.size || seen.mtimeMs !== st.mtimeMs) {
-      const text = await readFile(path, 'utf8').catch(() => '')
+      // Never through a link swapped in after the lstat either (O_NOFOLLOW; Windows has none).
+      const text = await readFile(path, { encoding: 'utf8', flag: constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0) }).catch(() => '')
       const entry = parsePresence(text)
       if (entry) {
         seen = { size: st.size, mtimeMs: st.mtimeMs, entry }
