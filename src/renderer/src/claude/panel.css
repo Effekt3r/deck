@@ -1,7 +1,6 @@
 /* Claude panel: header, to-do, agents, feed (with markdown replies and images), session menu, image viewer. */
 
 .claude-panel {
-  --green: #9ece6a;
   --blue: #7aa2f7;
   --cyan: #7dcfff;
   position: relative;

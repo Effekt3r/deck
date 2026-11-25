@@ -128,6 +128,13 @@ export class PtyManager {
     for (const id of [...this.sessions.keys()]) this.kill(id)
   }
 
+  /** Each live session's shell pid → the session's id: a Claude started in a tab descends from it. */
+  shells(): Map<number, string> {
+    const out = new Map<number, string>()
+    for (const [id, s] of this.sessions) out.set(s.pty.pid, id)
+    return out
+  }
+
   private pollProcess(id: string): void {
     const s = this.sessions.get(id)
     if (!s) return

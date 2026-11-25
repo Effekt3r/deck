@@ -60,6 +60,11 @@ Images in the Claude panel (spec `…/2026-11-10-claude-panel-images-design.md`,
 images tool results held, as thumbnails in the feed, with a viewer, Open and a switch that hides them.
 Checked on macOS with a crafted log (2026-11-11); Franco's own sessions and Windows are still to do.
 
+Tabs (spec `…/2026-11-24-tab-status-design.md`, plan `docs/superpowers/plans/2026-11-25-tab-status.md`,
+built 2026-11-25): each terminal tab shows its Claude's status (working, needs you, finished and not
+yet seen) from Claude Code's presence files, the Dock's badge counts the tabs that need you, and
+terminal tabs can be dragged into another order. Windows to test.
+
 | Path | Role |
 |---|---|
 | `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, `quote.ts` (shell quoting, and `quoteImagePath` for Claude Code's image paths; used by main and the renderer), `claude-images.ts` (why the Claude panel can't show an image: the reasons main answers) and `hid.ts` (a simulator's named keys as USB HID usages); the only thing main and renderer share |
@@ -69,11 +74,11 @@ Checked on macOS with a crafted log (2026-11-11); Franco's own sessions and Wind
 | `src/main/pty/` | node-pty sessions, output batching, startup command typed when the line editor is ready |
 | `src/main/projects/` | `projects.json` (userData), scan, `.git/HEAD` branch, dirty counts, native context menu |
 | `src/main/git/` | the git runner (the only way Deck runs git), header summary, merge target, graph log, commit details, watcher + poll probe, merge-target overrides, `git:*` subscriptions |
-| `src/main/claude/` | session-log locator, incremental tail (with each line's place), the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions, images (`images.ts`: formats, sizes, ids, lookups; `pixels.ts`: thumbnails and full images read again from the log) |
+| `src/main/claude/` | session-log locator, incremental tail (with each line's place), the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions, images (`images.ts`: formats, sizes, ids, lookups; `pixels.ts`: thumbnails and full images read again from the log), the tabs' Claude status (`presence.ts`: presence files matched to tabs through `ps`; `presence-ipc.ts`) |
 | `src/main/clipboard/` | reads the clipboard (files, text, images; concealed copies skipped), decides what the card offers, saves pasted images for Claude |
 | `src/main/usage/` | Claude's plan usage: the status line command and script, Claude Code's settings (connect/disconnect), reading and merging reports, `usage.json` |
 | `src/main/devices/` | the device panel's main side: `android/` (finding and running adb, `track-devices` and identities, scrcpy's protocol, input checks and sessions), `ios/` (finding idb-companion and following the simulators; a simulator's session: its companion, gRPC on `node:http2`, `sim-video`'s fMP4, HID input), `session.ts` (one session shape for every kind), `streams.ts` (viewers, grace, retries), `registry.ts` (one list from both sources), `project.ts` (a folder's project, Android or iOS app or neither), `picks.ts` (`devices.json`), `ipc.ts` (wiring, both sources, lock and sleep) |
-| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker, images: thumbnails, viewer), `clipboard/` (card, hook), `usage/` (card, donut, view), `device/` (below) |
+| `src/renderer/src/` | React: `tabs/` (model, titles, tab bar, drag geometry, each tab's Claude status), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker, images: thumbnails, viewer), `clipboard/` (card, hook), `usage/` (card, donut, view), `device/` (below) |
 | `src/renderer/src/device/` | the device panel: which device a tab shows and the panel's rules (`pick.ts`), the screen (WebCodecs, canvas, input: `codec.ts`, `fit.ts`, `keys.ts`: Android key codes and simulators' HID usages), the menu, `useDevices.ts` |
 | `resources/` | `scrcpy-server.json` (the server's version, URL, size, SHA-256) and `THIRD-PARTY-NOTICES.txt`; the server itself is downloaded at install (`scripts/fetch-scrcpy-server.mjs`), never committed |
 
@@ -211,6 +216,50 @@ Things that aren't obvious from the code:
       backdrop drag and the switch pausing the feed, both fixed. **Not yet:** Franco's own sessions,
       real mouse clicks, Preview, a portrait phone photo's EXIF orientation, Windows
       (`docs/TESTING.md` 18z–18ab).
+- Tabs (`src/renderer/src/tabs/`, `src/main/claude/presence.ts`, `src/main/attention.ts`):
+  - **Claude's status:** each running Claude Code keeps `<claude home>/sessions/<pid>.json`, in its own
+    words its "session presence PID file": `status` busy, waiting, idle or shell (idle with a
+    background shell), `waitingFor` while waiting (a dialog's words, `input needed`, `dialog open`, …),
+    and `procStart`, its start as `ps -o lstart` with `LC_ALL=C TZ=UTC` (read from Claude Code's
+    binary). Deck shows busy as working and shell as idle, skips background sessions (`kind`) and
+    `claude -p` runs (`entrypoint` sdk-cli; Deck strips `CLAUDE_CODE_ENTRYPOINT` from its shells, so a
+    tab's own Claude writes `cli`), reads only regular files named `<digits>.json` (`lstat`, then
+    `O_NOFOLLOW`: never the `<pid>.<hash>.key` files beside them, which hold peer-messaging keys, not
+    even through a link) and shows no status if a version drops the files. Undocumented; checked
+    against 2.1.283.
+  - **Which tab:** main runs `/bin/ps -A -o pid=,ppid=,lstart=` (`TZ=UTC LC_ALL=C`, 20 ms) only when a
+    presence file with a pid or start time it hasn't looked up appears, or a new tab's shell has a pid
+    the last table gave another process, and walks up from Claude's pid to a tab's shell
+    (`PtyManager.shells()`, Claude itself included: `exec claude`). A file whose process is gone or
+    started at another time (a reused pid) doesn't count; a pty gets the Claude nearest its shell, and
+    none when two are as near (one suspended with Ctrl+Z). A failing `ps` keeps the last table. Windows
+    has no `ps`: a tab matches by folder, when it's the only Claude tab and the only file there. A tab
+    shows a status only while it runs Claude (`runsClaude`).
+  - **Reading the files:** Claude Code rewrites its file in place, so a look can catch it half-written
+    (measured: about 1 in 300 transitions). Such a file (empty, or not JSON yet) keeps its Claude's last
+    state until the next look; a whole file that fails the checks drops it; one file that can't be read
+    holds up none of the others; a folder that can't be listed publishes nothing (the last list stays).
+    Watched from the first look that finds the folder, and polled every 2 s.
+  - **Why Deck draws it:** Claude Code animates its title's ◐/◑ only while its terminal has focus, and
+    xterm's focus reporting tells background tabs they have none, so their glyph froze (found
+    2026-11-24). Wherever Deck knows a tab's Claude, its name drops Claude's glyph.
+  - **Marks:** working (violet ring), needs you (amber dot and top edge), finished and unseen (green ✓
+    and top edge). Unseen lasts until the tab is the front tab while Deck's window has focus
+    (`nextAttention`). The Dock's badge counts the tabs that need you; it bounces once (macOS) or the
+    taskbar flashes (Windows) when that count rises while Deck is in the background.
+  - **Dragging:** pointer events in `TabBar.tsx`; `drag.ts` has the geometry (where it lands, how the
+    others slide, edge scrolling, and `shownShift`, which keeps the drawn tab within the strip: drawn
+    further, it widened the strip and edge scrolling never stopped). Esc is taken in the capture phase,
+    before xterm (in a Claude tab it would interrupt Claude), and so are its repeats until its keyup. A
+    tab opening or closing mid-drag, a lost pointer or a window blur puts the tab back. Window → Move
+    Tab Left/Right: Ctrl+Shift+PageUp/PageDown off macOS, no shortcut on macOS (Cmd+Shift+←/→ select
+    text on a device's screen).
+  - **Workspaces keep the order tabs were opened in** (App.tsx's `openedAt`), not the bar's: moving a
+    workspace's node to follow a reorder resets its panels' scroll (the Claude feed jumped to the top,
+    a scrolled git graph went blank; measured in Electron 45). They're absolutely positioned, so their
+    order in the page doesn't show.
+  - **Not yet checked:** the Dock bounce and the taskbar flash for real (only mocked), a real
+    permission prompt (it needs a prompt to Claude), and Windows (`docs/TESTING.md` 18ac–18ag).
 - Clipboard (`src/main/clipboard/`):
   - **Electron 45's clipboard is async and web-like:** `read()` returns one item whose
     `types` are MIME types plus raw platform formats (`electron application/osclipboard;format="…"`).

@@ -165,6 +165,20 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
      quitting: the copy stays until Deck's next start removes it.
 18ab. The picture button in the Claude panel's header turns every tab's thumbnails into "▣ N images";
      click it again to show them.
+18ac. Tabs: run `claude` in two tabs. In one, type `/config`: that tab gets an amber dot and an amber
+     top edge, and keeps them when you switch to the other tab. Go back to it and press Esc: the mark
+     goes.
+     (No mark ever: Claude Code may not write `%USERPROFILE%\.claude\sessions` on Windows. Report it.)
+18ad. In the first tab, ask Claude to run `sleep 15; touch deck-check.txt` (in the default permission
+     mode it asks before a command that changes something) and switch to another app at once: when
+     the question appears, Deck's taskbar button flashes until you come back, and the tab shows the
+     amber mark. Allow it, and switch to the other tab within the 15 s: when Claude finishes, the
+     first tab gets a green ✓ and a green top edge; clicking it clears them. Delete `deck-check.txt`.
+18ae. Drag a terminal tab across the others and drop it; press Esc mid-drag to put one back. The
+     Projects tab stays first.
+18af. Ctrl+Shift+PageUp and Ctrl+Shift+PageDown move the front tab left and right.
+18ag. Scroll the front tab's Claude panel up, then drag that tab to the right: the panel stays
+     where you scrolled it.
 
 **Restart**
 

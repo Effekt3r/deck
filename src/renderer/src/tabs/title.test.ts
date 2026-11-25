@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { TerminalTab } from './tabs'
-import { runsClaude, tabTitle } from './title'
+import { runsClaude, tabTitle, withoutGlyph } from './title'
 
 const tab = (p: Partial<TerminalTab>): TerminalTab =>
   ({ id: 't', kind: 'terminal', cwd: '/Users/f', title: '', vars: {}, process: 'zsh', ...p })
@@ -44,4 +44,26 @@ describe('tabTitle', () => {
   })
   it("doesn't show Claude's title while Claude runs but has not set one yet", () =>
     expect(tabTitle(tab({ vars: repo, process: 'claude' }), 'darwin')).toBe('AccessControl_Guard ⎇ dev'))
+})
+
+describe('withoutGlyph', () => {
+  it("drops Claude's status glyph and its space, nothing else", () => {
+    expect(withoutGlyph('◐ Fix the login')).toBe('Fix the login')
+    expect(withoutGlyph('⠂ Thinking')).toBe('Thinking')
+    expect(withoutGlyph('vim notes.md')).toBe('vim notes.md')
+    expect(withoutGlyph('✳Claude')).toBe('✳Claude')
+  })
+})
+
+describe('tabTitle without the glyph', () => {
+  const deck = { GIT_REPO: '/Users/f/deck', GIT_BRANCH: 'main' }
+  it("drops Claude's glyph when Deck draws its own mark", () => {
+    expect(tabTitle(tab({ vars: deck, process: 'claude', title: '◐ Fix the login' }), 'darwin', { glyph: false })).toBe('deck · Fix the login')
+    expect(tabTitle(tab({ process: 'claude', title: '✳ Claude Code' }), 'darwin', { glyph: false })).toBe('Claude Code')
+    expect(tabTitle(tab({ vars: deck, process: 'claude', title: '◐ Fix the login' }), 'darwin')).toBe('deck · ◐ Fix the login')
+  })
+  it('leaves other titles alone', () => {
+    expect(tabTitle(tab({ title: 'vim notes.md' }), 'darwin', { glyph: false })).toBe('vim notes.md')
+    expect(tabTitle(tab({ vars: deck }), 'darwin', { glyph: false })).toBe('deck ⎇ main')
+  })
 })

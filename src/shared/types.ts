@@ -58,6 +58,7 @@ export type MenuCommand =
   | { type: 'toggle-git' }
   | { type: 'toggle-claude' }
   | { type: 'toggle-device' }
+  | { type: 'move-tab'; delta: -1 | 1 } // the front tab, one place left or right
 
 export type ProjectAction = 'claude' | 'shell'
 
@@ -242,6 +243,24 @@ export interface ClaudeResume {
   sessionId: string
   /** It was pinned (snapshot.following === 'pinned'). */
   pinned: boolean
+}
+
+/** What a running Claude Code is doing, from its presence file: working (a turn, or work it handed
+ *  off to an agent), waiting (something on its screen needs the user), idle (the turn ended). */
+export type ClaudeActivity = 'working' | 'waiting' | 'idle'
+
+/** A running Claude Code, from its presence file (`<claude home>/sessions/<pid>.json`). */
+export interface ClaudePresence {
+  pid: number
+  sessionId: string
+  /** The folder it was started in. */
+  cwd: string
+  state: ClaudeActivity
+  /** While waiting: what it waits on, in Claude Code's words ('dialog open', 'input needed', …). */
+  waitingFor?: string
+  /** The pty of the Deck tab whose shell started it (macOS, Linux). Unset when it isn't a Deck
+   *  tab's, and on Windows, where tabs match by folder. */
+  ptyId?: string
 }
 
 /** The item the clipboard card offers: what Cmd/Ctrl+V would paste now. */
@@ -442,6 +461,11 @@ export interface DeckApi {
     /** Opens a copy of image `id` in the default image app (the copy is removed when Deck quits):
      *  null, or why it couldn't. */
     openImage(folder: string, id: string): Promise<{ error: string } | null>
+    /** Every Claude Code running on this machine and what it's doing (their presence files), with
+     *  the pty of the Deck tab each runs in where that's known. */
+    presence(): Promise<ClaudePresence[]>
+    /** The list changed. */
+    onPresence(cb: (list: ClaudePresence[]) => void): () => void
   }
   clipboard: {
     /** The item the card offers now, or null. */
@@ -508,5 +532,8 @@ export interface DeckApi {
     onMenu(cb: (cmd: MenuCommand) => void): () => void
     /** Renderer is listening; main then delivers queued folders. */
     ready(): void
+    /** How many tabs need the user: the Dock's badge (macOS), and a bounce (macOS) or a taskbar
+     *  flash (Windows) when it rises while Deck is in the background. */
+    attention(waiting: number): void
   }
 }
