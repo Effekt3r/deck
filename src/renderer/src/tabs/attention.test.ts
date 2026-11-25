@@ -25,6 +25,9 @@ describe('presenceFor', () => {
     const other = tab({ id: 't2', cwd: 'C:\\Work\\App', process: 'pwsh.exe', title: '◐ Something else' })
     expect(presenceFor(t, [t, other], [presence({ cwd: 'c:/work/app' })], 'win32')).toBeUndefined()
     expect(presenceFor(t, [t], [presence({ cwd: 'C:\\Work' })], 'win32')).toBeUndefined()
+    // A tab whose shell has exited runs nothing, whatever its last title says.
+    const exited = tab({ id: 't3', cwd: 'C:\\Work\\App', process: 'pwsh.exe', title: '◐ An old title', exited: 1 })
+    expect(presenceFor(t, [t, exited], [presence({ cwd: 'c:/work/app' })], 'win32')?.pid).toBe(100)
   })
 })
 

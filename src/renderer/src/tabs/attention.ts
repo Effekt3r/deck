@@ -27,7 +27,8 @@ export function presenceFor(tab: TerminalTab, tabs: readonly TerminalTab[], list
   if (key === '') return undefined
   const here = list.filter((p) => folderKey(p.cwd) === key)
   if (here.length !== 1) return undefined
-  const sharing = tabs.filter((t) => folderKey(t.cwd) === key && runsClaude(t.process, t.title))
+  // A tab whose shell has exited runs nothing, whatever its last title says.
+  const sharing = tabs.filter((t) => t.exited === undefined && folderKey(t.cwd) === key && runsClaude(t.process, t.title))
   return sharing.length === 1 ? here[0] : undefined
 }
 
