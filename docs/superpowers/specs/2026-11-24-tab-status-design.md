@@ -184,7 +184,9 @@ tab's top edge, using the 2 px top border every tab already has (transparent unt
     - `pid` must be a positive integer, and `cwd` and `sessionId` strings;
     - `status` must be one of the four, else the file is skipped;
     - `waitingFor` and `procStart` must be strings when present;
-    - broken JSON (caught mid-write) is skipped this time.
+    - a file caught mid-write (empty, or not JSON yet) keeps its last whole read until the next
+      look; one never read whole is skipped, and a whole file that fails these checks drops its
+      Claude.
   - **`matchProcesses(entries, shells, table)`** (pure):
     - takes `table` (pid → {ppid, lstart}) and `shells` (shell pid → pty id);
     - gives each entry its pty id, or none;

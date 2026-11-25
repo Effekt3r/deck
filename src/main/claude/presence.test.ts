@@ -381,6 +381,36 @@ describe('PresenceWatch', () => {
       watch.stop()
     })
 
+    it('a Claude read before keeps its last state while its file can’t be stat’d', async () => {
+      const { dir, published, watch } = await setup()
+      await write(dir, 500)
+      await watch.refresh()
+      await rm(join(dir, '500.json'))
+      await symlink('500.json', join(dir, '500.json')) // stat fails with ELOOP, not ENOENT
+      await watch.refresh()
+      expect(published).toHaveLength(1)
+      expect(watch.current().map((p) => p.pid)).toEqual([500])
+      watch.stop()
+    })
+
+    it.skipIf(process.getuid?.() === 0)('a Claude read before keeps its last state while its changed file can’t be read', async () => {
+      const { dir, published, watch } = await setup()
+      await write(dir, 500)
+      await watch.refresh()
+      await write(dir, 500, { status: 'waiting', waitingFor: 'a longer reason, so the size changes' })
+      await chmod(join(dir, '500.json'), 0o000)
+      try {
+        await watch.refresh()
+        expect(published).toHaveLength(1)
+        expect(watch.current()[0]).toMatchObject({ pid: 500, state: 'working' })
+      } finally {
+        await chmod(join(dir, '500.json'), 0o644)
+      }
+      await watch.refresh()
+      expect(published.at(-1)?.[0]).toMatchObject({ pid: 500, state: 'waiting' })
+      watch.stop()
+    })
+
     it.skipIf(process.getuid?.() === 0)('a folder it can’t list publishes nothing and keeps the last list; it warns once', async () => {
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
       const { dir, published, watch } = await setup()
