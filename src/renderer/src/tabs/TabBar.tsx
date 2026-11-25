@@ -1,4 +1,4 @@
-import { type MouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
+import { type MouseEvent, type PointerEvent as ReactPointerEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Platform } from '@shared/types'
 import { CloseIcon, PlusIcon } from '../icons'
 import { dropIndex, edgeScroll, shownShift, slideFor, type Slot } from './drag'
@@ -150,6 +150,9 @@ export function TabBar({ tabs, active, platform, onActivate, onClose, onMove, on
     // Captured before xterm sees it: an Esc reaching a Claude tab would interrupt Claude.
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return
+      // A lost keyup (the window lost focus while Esc was held) must not swallow a later, separate
+      // Esc press: only the held key's own repeats are ever swallowed.
+      if (!pressRef.current?.slots && !e.repeat) swallowEsc = false
       if (pressRef.current?.slots) {
         e.preventDefault()
         e.stopPropagation()
@@ -186,7 +189,9 @@ export function TabBar({ tabs, active, platform, onActivate, onClose, onMove, on
   // A tab opened or closed during a drag (Cmd+W, a shell that exits, --open) moves the others
   // under it: the drag ends where it started.
   const order = tabs.map((t) => t.id).join('\n')
-  useEffect(() => cancelRef.current(), [order])
+  useLayoutEffect(() => {
+    cancelRef.current()
+  }, [order])
 
   const press = (e: ReactPointerEvent<HTMLDivElement>, id: string) => {
     if (e.button !== 0 || pressRef.current?.slots || (e.target as HTMLElement).closest('.tab-close')) return
