@@ -331,25 +331,32 @@ export interface UsageState {
 /** Connect's or Disconnect's outcome: the new state, or what went wrong. */
 export type UsageChange = { state: UsageState } | { error: string }
 
-/** A device Deck can show: an Android phone or emulator adb sees, or a booted simulator. */
+/** A device Deck can show: an Android phone or emulator adb sees, a booted simulator, or an iPhone
+ *  on a cable. */
 export interface DeviceInfo {
   /** The same across reconnects and connections: `android:<serial number>`,
-   *  `emulator:<AVD name>` (an emulator's adb name changes with its port), or `simulator:<UDID>`. */
+   *  `emulator:<AVD name>` (an emulator's adb name changes with its port), `simulator:<UDID>`, or
+   *  `iphone:<capture device ID>` (the ID macOS gives its screen: not the UDID, but the same across
+   *  reconnects). */
   id: string
-  kind: 'android' | 'emulator' | 'simulator'
+  kind: 'android' | 'emulator' | 'simulator' | 'iphone'
   /** The name set on the phone ("Franco's S25 FE"), else its maker and model; an emulator's AVD
-   *  name; a simulator's name. */
+   *  name; a simulator's or an iPhone's name. */
   name: string
   /** Its system and connection: "Android 13 · USB", "Android 17 · USB + Wi-Fi",
-   *  "Emulator · Android 15", "Simulator · iOS 27.0". */
+   *  "Emulator · Android 15", "Simulator · iOS 27.0", "iPhone · cable · view only". */
   detail: string
   /** ready: it can be shown; unauthorized: USB debugging isn't allowed on it yet; offline: adb
    *  can't reach it; connecting: adb is still setting it up. */
   state: 'ready' | 'unauthorized' | 'offline' | 'connecting'
 }
 
-/** What a device runs: Android phones and emulators, or iOS simulators. */
+/** What a device runs: Android phones and emulators, or iOS simulators and iPhones. */
 export type DevicePlatform = 'android' | 'ios'
+
+/** What stops a stream that only the user can change, so it isn't retried: 'camera': macOS hasn't let
+ *  Deck use the camera (an iPhone's screen is a camera to macOS). */
+export type DeviceBlock = 'camera'
 
 /** The devices Deck sees, or why it sees none. */
 export interface DeviceList {
@@ -359,7 +366,8 @@ export interface DeviceList {
   /** Simulators (macOS): 'no-idb': one is booted but idb-companion isn't installed; 'old-idb': the
    *  idb-companion found has no sim-video; { error }: its notifier failed; null otherwise. */
   iosProblem: 'no-idb' | 'old-idb' | { error: string } | null
-  /** The platforms still finding their first devices: a tab waits only for the ones it shows. */
+  /** The platforms still finding their first devices (iOS: the simulators or the iPhones): a tab
+   *  waits only for the ones it shows. */
   pending: DevicePlatform[]
 }
 
@@ -369,7 +377,7 @@ export interface DeviceProject {
   root: string
   /** It's an Android app, so it takes Android phones and emulators. */
   android: boolean
-  /** It's an iOS app (an Xcode project or workspace), so it takes simulators. */
+  /** It's an iOS app (an Xcode project or workspace), so it takes simulators and iPhones. */
   ios: boolean
   /** The devices picked in it, latest first (at most 8). */
   picks: string[]
@@ -378,8 +386,9 @@ export interface DeviceProject {
 /** News of a device's stream. */
 export type DeviceStreamEvent =
   /** connecting: starting; live: frames are coming; reconnecting: it broke and is starting again;
-   *  error: it couldn't be started (`message`), until Try again. */
-  | { type: 'state'; state: 'connecting' | 'live' | 'reconnecting' | 'error'; message?: string }
+   *  error: it couldn't be started (`message`), until Try again; `blocked`: and only the user can
+   *  change why (System Settings). */
+  | { type: 'state'; state: 'connecting' | 'live' | 'reconnecting' | 'error'; message?: string; blocked?: DeviceBlock }
   /** A capture session started (also after a rotation): the frames that follow have this size. */
   | { type: 'size'; width: number; height: number }
   /** H.264, Annex B. A config packet holds SPS and PPS, which the next key frame needs. */
@@ -496,8 +505,9 @@ export interface DeckApi {
     disconnect(): Promise<UsageChange>
   }
   devices: {
-    /** Look for devices (adb, and on macOS idb-companion for simulators) from now; the function
-     *  stops this look. Both run while any look is on, so only while some tab needs devices. */
+    /** Look for devices (adb, and on macOS idb-companion for simulators and Deck's helper for
+     *  iPhones) from now; the function stops this look. They run while any look is on, so only
+     *  while some tab needs devices. */
     watch(): () => void
     /** The devices now, while something watches (call watch() first); null until a list comes (once
      *  some source has answered; `pending` names those still looking) and whenever nothing watches.
@@ -520,6 +530,9 @@ export interface DeckApi {
     input(id: string, input: DeviceInput): void
     /** Saves a screenshot (PNG) where Claude can read it: the text that adds it to Claude's prompt. */
     screenshot(png: Uint8Array): Promise<InsertResult>
+    /** Opens System Settings at Privacy & Security → Camera (macOS), where Deck can be allowed the
+     *  camera (an iPhone's screen is one to macOS). */
+    openCameraSettings(): void
   }
   app: {
     info(): Promise<AppInfo>

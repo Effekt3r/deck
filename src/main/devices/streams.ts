@@ -1,4 +1,4 @@
-import type { DeviceStreamEvent } from '@shared/types'
+import type { DeviceBlock, DeviceStreamEvent } from '@shared/types'
 import type { DeviceSession, StreamEvents } from './session'
 
 /** How long a stream must stay live before a break counts as recovered rather than a continuation
@@ -9,7 +9,8 @@ const STEADY_MS = 5000
 export interface StreamsDeps {
   /** Starts device `id`'s stream; `signal` stops a start still under way. `events`' `size` and
    *  `packet` may arrive before this resolves; a failure before then rejects it instead of calling
-   *  `events.end()`. */
+   *  `events.end()`, so a block can only arrive through `events.end()` once start() has resolved: a
+   *  start that rejects is always retried. */
   start(id: string, events: StreamEvents, signal: AbortSignal): Promise<DeviceSession>
   /** News for the renderer. */
   send(id: string, event: DeviceStreamEvent): void
@@ -32,9 +33,10 @@ interface Stream {
   retryTimer: ReturnType<typeof setTimeout> | null
   /** The start under way's deadline; cleared once it settles, or in halt(). */
   startTimer: ReturnType<typeof setTimeout> | null
-  /** Set once the retries ran out; cleared by begin() (retry(), resume(), or a fresh view after
-   *  every viewer had left and dropped the stream). */
-  error: string | null
+  /** The error shown once the retries ran out (or at once, for a blocked stream), and again to a
+   *  viewer that joins; cleared by begin() (retry(), resume(), or a fresh view after every viewer had
+   *  left and dropped the stream). */
+  error: (Extract<DeviceStreamEvent, { type: 'state' }> & { state: 'error' }) | null
   /** The latest capture size, for a viewer that joins a running stream; cleared on a restart, since
    *  a reconnected stream's size comes with its new session. */
   size: { width: number; height: number } | null
@@ -50,9 +52,10 @@ interface Stream {
  *  viewer leaves, so switching tabs and back doesn't restart it: a viewer that comes back asks for a
  *  key frame instead. A stream that breaks is started again after 1, 2 and 5 s, then reports the
  *  error until retry() — every viewer leaving (the stream is dropped, so the next one starts clean)
- *  and resume() clear an error too. A stream only counts as recovered, resetting its failure count,
- *  once it has stayed live for STEADY_MS; breaking sooner still counts towards the error. While the
- *  Mac is locked or asleep (pause) nothing streams. */
+ *  and resume() clear an error too. A blocked one (macOS hasn't let Deck use the camera) reports it
+ *  at once: only the user can change that. A stream only counts as recovered, resetting its failure
+ *  count, once it has stayed live for STEADY_MS; breaking sooner still counts towards the error.
+ *  While the Mac is locked or asleep (pause) nothing streams. */
 export class DeviceStreams {
   private readonly streams = new Map<string, Stream>()
   private paused = false
@@ -78,7 +81,7 @@ export class DeviceStreams {
       s.graceTimer = null
     }
     if (this.paused) return this.deps.send(id, { type: 'state', state: 'connecting' }) // resume() starts it
-    if (s.error) return this.deps.send(id, { type: 'state', state: 'error', message: s.error })
+    if (s.error) return this.deps.send(id, s.error)
     if (s.session) {
       const session = s.session
       if (s.size) this.deps.send(id, { type: 'size', ...s.size })
@@ -188,7 +191,7 @@ export class DeviceStreams {
         // A viewer coming back asks for a key frame (view()).
         if (s.viewers > 0) this.deps.send(id, { type: 'packet', ...packet })
       },
-      end: (why) => {
+      end: (why, blocked) => {
         if (!current()) return
         s.generation++ // nothing more is heard from this session
         if (s.liveAt !== null && Date.now() - s.liveAt >= STEADY_MS) s.failures = 0
@@ -196,7 +199,7 @@ export class DeviceStreams {
         s.starting = null
         s.live = false
         s.liveAt = null
-        this.failed(id, s, why)
+        this.failed(id, s, why, blocked)
       },
     }
     this.deps.start(id, events, start.signal).then(
@@ -215,10 +218,11 @@ export class DeviceStreams {
     )
   }
 
-  private failed(id: string, s: Stream, why: string): void {
+  private failed(id: string, s: Stream, why: string, blocked?: DeviceBlock): void {
     if (s.viewers === 0) return this.drop(id, s)
     if (this.paused) return
-    if (s.failures < this.retryMs.length) {
+    // Blocked (the camera, in System Settings): another start would only be refused again.
+    if (!blocked && s.failures < this.retryMs.length) {
       const wait = this.retryMs[s.failures++]
       this.deps.send(id, { type: 'state', state: 'reconnecting' })
       s.retryTimer = setTimeout(() => {
@@ -227,8 +231,8 @@ export class DeviceStreams {
       }, wait)
       return
     }
-    s.error = why
-    this.deps.send(id, { type: 'state', state: 'error', message: why })
+    s.error = { type: 'state', state: 'error', message: why, ...(blocked ? { blocked } : {}) }
+    this.deps.send(id, s.error)
   }
 
   /** Stops the stream's session and timers; its news from here on is dropped. */

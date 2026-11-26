@@ -10,5 +10,7 @@
   <key>com.apple.security.cs.allow-dyld-environment-variables</key><true/>
   <!-- Claude Code and git talk to the network from the terminal -->
   <key>com.apple.security.network.client</key><true/>
+  <!-- iPhone screens: macOS treats a connected iPhone's screen as a camera (native/iphone-screen/) -->
+  <key>com.apple.security.device.camera</key><true/>
 </dict>
 </plist>

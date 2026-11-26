@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/channels'
 import type { DeviceList } from '@shared/types'
 import type { BrowserWindow } from 'electron'
+import { CAMERA_DENIED, IphoneTracker } from './ios/iphone'
 import { SimulatorTracker } from './ios/simulators'
 import { fakeProcess, type FakeProcess } from './ios/test-process'
 import { type DeviceIpc, registerDeviceIpc } from './ipc'
@@ -11,12 +12,15 @@ const ipc = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   listeners: new Map<string, (...args: unknown[]) => void>(),
 }))
+/** What System Settings' camera page was opened with. */
+const openExternal = vi.hoisted(() => vi.fn())
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: (...args: unknown[]) => unknown) => ipc.handlers.set(channel, fn),
     on: (channel: string, fn: (...args: unknown[]) => void) => ipc.listeners.set(channel, fn),
   },
   powerMonitor: { on: () => {} },
+  shell: { openExternal },
 }))
 
 /** What each test controls: findAdb/findIdb/anySimulatorBooted's answers (by default, never found),
@@ -61,6 +65,7 @@ vi.mock('node:child_process', async (importOriginal) => ({
 
 const procAt = (i: number) => spawned.procs[i] as FakeProcess
 const notifiers = () => spawned.calls.map((c, i) => ({ ...c, fp: procAt(i) })).filter((c) => c.args[0] === '--notify')
+const iphoneLists = () => spawned.calls.map((c, i) => ({ ...c, fp: procAt(i) })).filter((c) => c.args[0] === 'list')
 const adbTrackers = () => spawned.calls.map((c, i) => ({ ...c, fp: procAt(i) })).filter((c) => c.args[0] === 'track-devices')
 
 const deferred = <T>() => {
@@ -76,15 +81,20 @@ const tick = () => new Promise((r) => setTimeout(r, 20))
 const IDB = { companion: '/fake/idb_companion', simVideo: '/fake/sim-video' }
 const LINE = '[{"udid":"FAKE-UDID","name":"iPhone 17","state":"Booted","type":"Simulator","os_version":"iOS 27.0"}]\n'
 const SIM = { id: 'simulator:FAKE-UDID', kind: 'simulator' as const, name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' as const }
+/** A made-up capture device ID, and the helper's list with it. */
+const SCREEN = '0A0A0A0A-1111-2222-3333-444444444444'
+const SCREENS = `{"devices":[{"id":"${SCREEN}","name":"Franco's iPhone"}]}\n`
+const IPHONE = { id: `iphone:${SCREEN}`, kind: 'iphone' as const, name: "Franco's iPhone", detail: 'iPhone · cable · view only', state: 'ready' as const }
 
 let current: DeviceIpc | null = null
-function setup(platform: 'darwin' | 'linux' = 'darwin') {
+function setup(platform: 'darwin' | 'linux' = 'darwin', iphoneHelper: string | null = null) {
   spawned.calls.length = 0
   spawned.procs.length = 0
   h.calls.findAdb = h.calls.findIdb = h.calls.booted = 0
   h.findAdb = async () => null
   h.findIdb = async () => null
   h.booted = async () => false
+  openExternal.mockClear()
   const sent: unknown[][] = []
   const webContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: (c: string, ...a: unknown[]) => sent.push([c, ...a]) })
   const win = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents }) as unknown as BrowserWindow
@@ -95,6 +105,7 @@ function setup(platform: 'darwin' | 'linux' = 'darwin') {
     home: '/nonexistent/home',
     env: { PATH: '' },
     socketDir: '/nonexistent/s',
+    iphoneHelper,
     saveImage: async () => '',
   })
   devices.attach(win)
@@ -106,6 +117,7 @@ function setup(platform: 'darwin' | 'linux' = 'darwin') {
     watch: () => ipc.listeners.get(IPC.devicesWatch)!({}),
     unwatch: () => ipc.listeners.get(IPC.devicesUnwatch)!({}),
     focus: () => win.emit('focus'),
+    reload: () => webContents.emit('did-start-loading'),
     list: () => ipc.handlers.get(IPC.devicesList)!({}) as DeviceList | null,
     view: (id: string) => ipc.listeners.get(IPC.devicesView)!({}, id),
     unview: (id: string) => ipc.listeners.get(IPC.devicesUnview)!({}, id),
@@ -113,7 +125,7 @@ function setup(platform: 'darwin' | 'linux' = 'darwin') {
   }
 }
 afterEach(() => current?.dispose())
-// Only the booted-vs-listed test below turns these on; harmless (a no-op) for every other test.
+// The tests that fake timers turn them on themselves; harmless (a no-op) for every other test.
 afterEach(() => vi.useRealTimers())
 
 describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () => {
@@ -387,5 +399,178 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
       t.unview('simulator:FAKE-UDID')
       spy.mockRestore()
     }
+  })
+
+  it('iPhones join the list from the helper; iOS waits for the simulators and the iPhones', async () => {
+    const t = setup('darwin', '/fake/iphone-screen')
+    h.findIdb = async () => IDB
+    t.watch()
+    await tick()
+    expect(iphoneLists().map((c) => [c.cmd, c.args])).toEqual([['/fake/iphone-screen', ['list']]])
+    notifiers()[0].fp.stdout.write(LINE)
+    await tick()
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: ['ios'] })
+    iphoneLists()[0].fp.stdout.write(SCREENS)
+    await tick()
+    expect(t.list()).toEqual({ devices: [IPHONE, SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    t.unwatch()
+    expect(iphoneLists()[0].fp.killed()).toBe(true)
+  })
+
+  it('a helper that fails before it lists: no iPhones, quietly, and nothing waits on them', async () => {
+    const t = setup('darwin', '/fake/iphone-screen')
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      t.watch()
+      await tick()
+      iphoneLists()[0].fp.stderr.write('{"error":"capture","message":"CoreMediaIO failed."}\n')
+      iphoneLists()[0].fp.exit(1)
+      await tick()
+      expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: null, pending: [] })
+      expect(logged).toHaveBeenCalledWith('devices: the iPhone helper stopped:', '{"error":"capture","message":"CoreMediaIO failed."}')
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  it('a helper that had listed keeps its iPhones listed when it stops, while it starts again', async () => {
+    const t = setup('darwin', '/fake/iphone-screen')
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      t.watch()
+      await tick()
+      iphoneLists()[0].fp.stdout.write(SCREENS)
+      await tick()
+      const pushes = t.pushes().length
+      iphoneLists()[0].fp.exit(1)
+      await tick()
+      expect(logged).toHaveBeenCalledWith('devices: the iPhone helper stopped:', 'iphone-screen stopped (exit code 1).')
+      expect(t.list()).toEqual({ devices: [IPHONE], problem: 'no-adb', iosProblem: null, pending: [] })
+      expect(t.pushes()).toHaveLength(pushes)
+    } finally {
+      logged.mockRestore()
+    }
+  })
+
+  it("a helper whose first list doesn't come holds iOS 6 s at most; the list still counts when it comes", async () => {
+    vi.useFakeTimers()
+    const t = setup('darwin', '/fake/iphone-screen')
+    h.findIdb = async () => IDB
+    t.watch()
+    await vi.advanceTimersByTimeAsync(0)
+    notifiers()[0].fp.stdout.write(LINE)
+    await vi.advanceTimersByTimeAsync(5999)
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: ['ios'] })
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    iphoneLists()[0].fp.stdout.write(SCREENS)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(t.list()).toEqual({ devices: [IPHONE, SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+  })
+
+  it('an unwatch ends that wait: the next watch waits its own 6 s', async () => {
+    vi.useFakeTimers()
+    const t = setup('darwin', '/fake/iphone-screen')
+    t.watch()
+    await vi.advanceTimersByTimeAsync(4000)
+    t.unwatch()
+    t.watch()
+    await vi.advanceTimersByTimeAsync(5999) // well past the first watch's 6 s
+    expect(t.list()?.pending).toEqual(['ios'])
+    await vi.advanceTimersByTimeAsync(1)
+    expect(t.list()?.pending).toEqual([])
+  })
+
+  it('dispose stops the iPhone helper and its wait: nothing is pushed after', async () => {
+    vi.useFakeTimers()
+    const t = setup('darwin', '/fake/iphone-screen')
+    t.watch()
+    await vi.advanceTimersByTimeAsync(0)
+    const pushes = t.pushes().length
+    t.devices.dispose()
+    expect(iphoneLists()[0].fp.killed()).toBe(true)
+    await vi.advanceTimersByTimeAsync(6000)
+    expect(t.pushes()).toHaveLength(pushes)
+  })
+
+  it('a reload stops the iPhone helper', async () => {
+    const t = setup('darwin', '/fake/iphone-screen')
+    t.watch()
+    await tick()
+    t.reload()
+    expect(iphoneLists()[0].fp.killed()).toBe(true)
+  })
+
+  it('no helper (null), or not macOS: no iPhones are looked for', async () => {
+    const mac = setup('darwin', null)
+    mac.watch()
+    await tick()
+    expect(iphoneLists()).toHaveLength(0)
+    expect(mac.list()?.pending).toEqual([])
+    mac.devices.dispose()
+    const linux = setup('linux', '/fake/iphone-screen')
+    linux.watch()
+    await tick()
+    expect(iphoneLists()).toHaveLength(0)
+  })
+
+  it('streams an iPhone on offer with the helper', async () => {
+    const t = setup('darwin', '/fake/iphone-screen')
+    t.watch()
+    await tick()
+    iphoneLists()[0].fp.stdout.write(SCREENS)
+    await tick()
+    t.view(IPHONE.id)
+    await tick()
+    expect(spawned.calls.filter((c) => c.args[0] === 'stream')).toEqual([
+      { cmd: '/fake/iphone-screen', args: ['stream', SCREEN, '--max-size', '1600', '--max-fps', '60'] },
+    ])
+    expect(t.streamEvents(IPHONE.id)).toEqual([{ type: 'state', state: 'connecting' }])
+    t.unview(IPHONE.id)
+  })
+
+  it('an iPhone whose camera macOS refuses says so at once, blocked, with no retry', async () => {
+    const t = setup('darwin', '/fake/iphone-screen')
+    t.watch()
+    await tick()
+    iphoneLists()[0].fp.stdout.write(SCREENS)
+    await tick()
+    t.view(IPHONE.id)
+    await tick()
+    const helper = procAt(spawned.calls.findIndex((c) => c.args[0] === 'stream'))
+    helper.stderr.write('{"error":"camera-denied"}\n')
+    helper.exit(1)
+    await tick()
+    // No 'reconnecting' between: DeviceStreams sends one whenever it schedules a retry.
+    expect(t.streamEvents(IPHONE.id)).toEqual([
+      { type: 'state', state: 'connecting' },
+      { type: 'state', state: 'error', message: CAMERA_DENIED, blocked: 'camera' },
+    ])
+    t.unview(IPHONE.id)
+  })
+
+  it('an iPhone listed when viewed but no longer offered when its start asks says so', async () => {
+    const t = setup('darwin', '/fake/iphone-screen')
+    t.watch()
+    await tick()
+    iphoneLists()[0].fp.stdout.write(SCREENS)
+    await tick()
+    const spy = vi.spyOn(IphoneTracker.prototype, 'has').mockReturnValue(false)
+    vi.useFakeTimers()
+    try {
+      t.view(IPHONE.id)
+      await vi.advanceTimersByTimeAsync(1000 + 2000 + 5000) // DeviceStreams' own three retries
+      expect(t.streamEvents(IPHONE.id).at(-1)).toEqual({ type: 'state', state: 'error', message: "The iPhone isn't connected." })
+      expect(spawned.calls.filter((c) => c.args[0] === 'stream')).toHaveLength(0)
+    } finally {
+      t.unview(IPHONE.id)
+      spy.mockRestore()
+    }
+  })
+
+  it("opens System Settings' camera page, and only that, whatever the page sends with the call", () => {
+    setup('darwin')
+    ipc.listeners.get(IPC.devicesCameraSettings)!({}, 'https://example.com/')
+    expect(openExternal.mock.calls).toEqual([['x-apple.systempreferences:com.apple.preference.security?Privacy_Camera']])
   })
 })

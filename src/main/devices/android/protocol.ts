@@ -29,16 +29,25 @@ export type VideoEvent =
  *  Chunks are kept as a list, not concatenated: a corrupt or absurd declared size must never cost
  *  a reallocation (and recopy) of everything received so far, and a bad size is caught from the
  *  12-byte header alone, without first waiting for that many bytes to arrive. Once broken, feed()
- *  never throws and only ever returns []: a confused or hostile server can't wedge main. */
+ *  never throws and only ever returns []: a confused or hostile server can't wedge main.
+ *
+ *  Deck's iPhone helper writes the same stream from the codec id on (no tunnel, no name): `from:
+ *  'codec'`, with `sender` naming it in the errors. */
 export class VideoReader {
   private chunks: Buffer[] = []
   private len = 0
-  private stage: 'dummy' | 'name' | 'codec' | 'packets' = 'dummy'
+  private stage: 'dummy' | 'name' | 'codec' | 'packets'
+  private readonly sender: string
   /** A packet whose header is read (so its size is already validated) and is collecting its
    *  payload as chunks arrive; `data` is allocated once, up front, and never grows. */
   private filling: { data: Uint8Array; filled: number; config: boolean; key: boolean } | null = null
   private sawSize = false
   private broken = false
+
+  constructor({ from = 'dummy', sender = 'scrcpy' }: { from?: 'dummy' | 'codec'; sender?: string } = {}) {
+    this.stage = from
+    this.sender = sender
+  }
 
   feed(chunk: Buffer): VideoEvent[] {
     if (this.broken) return []
@@ -75,7 +84,7 @@ export class VideoReader {
           const width = head.readUInt32BE(4)
           const height = head.readUInt32BE(8)
           if (width === 0 || width > 0xffff || height === 0 || height > 0xffff) {
-            this.fail(events, `scrcpy sent a ${width}×${height} screen.`)
+            this.fail(events, `${this.sender} sent a ${width}×${height} screen.`)
             break
           }
           this.sawSize = true
@@ -84,11 +93,11 @@ export class VideoReader {
         }
         const size = head.readUInt32BE(8)
         if (size === 0 || size > MAX_PACKET) {
-          this.fail(events, `scrcpy sent a ${size}-byte packet.`)
+          this.fail(events, `${this.sender} sent a ${size}-byte packet.`)
           break
         }
         if (!this.sawSize) {
-          this.fail(events, "scrcpy sent a frame before the screen's size.")
+          this.fail(events, `${this.sender} sent a frame before the screen's size.`)
           break
         }
         const flags = head.readBigUInt64BE(0)

@@ -15,3 +15,6 @@ dist/
 # scrcpy's server, downloaded at install (scripts/fetch-scrcpy-server.mjs)
 /resources/scrcpy-server
 /resources/scrcpy-server.*.tmp
+
+# Deck's iPhone helper, built at install (scripts/build-iphone-helper.mjs)
+/native/iphone-screen/out/

@@ -143,9 +143,11 @@ function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, o
         <span className="cp-spacer" />
         {open && ready && device && (
           <span className="dp-buttons">
-            {device.kind === 'simulator' ? (
+            {/* An iPhone is view only: it gets the camera alone. */}
+            {device.kind === 'simulator' && (
               <IconButton label="Home" onClick={() => window.deck.devices.input(device.id, { type: 'button', button: 'home' })}><HomeIcon /></IconButton>
-            ) : (
+            )}
+            {(device.kind === 'android' || device.kind === 'emulator') && (
               <>
                 <IconButton label="Back" onClick={() => press(KEYCODE.BACK)}><BackIcon /></IconButton>
                 <IconButton label="Home" onClick={() => press(KEYCODE.HOME)}><HomeIcon /></IconButton>
@@ -212,9 +214,11 @@ function Nothing({ problem, iosProblem, wants, looking }: { problem: DeviceList[
     }
     if (problem) return <State error title="adb couldn't list the devices" detail={problem.error} />
   }
+  // iOS is wanted only on macOS, where iPhones show too: unlocked, since one isn't listed while it's
+  // locked or doesn't trust the Mac.
   const detail = wants.android && wants.ios
-    ? 'Plug in an Android phone with USB debugging on, start an emulator, or boot a simulator.'
-    : wants.ios ? 'Boot a simulator in Xcode or with simctl.' : 'Plug in an Android phone with USB debugging on, or start an emulator.'
+    ? 'Plug in an unlocked iPhone or an Android phone with USB debugging on, start an emulator, or boot a simulator.'
+    : wants.ios ? 'Plug in an unlocked iPhone, or boot a simulator in Xcode or with simctl.' : 'Plug in an Android phone with USB debugging on, or start an emulator.'
   return <State title="No devices connected" detail={detail} />
 }
 

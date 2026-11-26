@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { statSync } from 'node:fs'
 import { homedir, release } from 'node:os'
 import { join, resolve } from 'node:path'
-import { app, type BrowserWindow, clipboard, ipcMain, Menu, shell } from 'electron'
+import { app, type BrowserWindow, clipboard, ipcMain, Menu, session, shell } from 'electron'
 import { IPC } from '@shared/channels'
 import type { AppInfo, Platform, PtyCreateOptions } from '@shared/types'
 import { registerAttention } from './attention'
@@ -17,6 +17,7 @@ import { registerDeviceIpc } from './devices/ipc'
 import { socketDirFor } from './devices/ios/simulator-io'
 import { registerGitIpc } from './git/ipc'
 import { folderFromArgv } from './open-args'
+import { denyMedia } from './permissions'
 import { registerProjectsIpc } from './projects/ipc'
 import { PtyManager } from './pty/manager'
 import { installShellIntegration } from './shell/install'
@@ -46,6 +47,19 @@ function openFolder(folder: string | null): void {
   if (!folder || !isDir(folder)) return
   if (rendererReady) send(IPC.appOpenFolder, folder)
   else pendingFolders.push(folder)
+}
+
+/** Deck's iPhone helper (macOS): in the app's resources when packaged, where `npm ci` builds it in a
+ *  dev build (scripts/build-iphone-helper.mjs). null off macOS, and without one: a Mac without
+ *  Xcode's command line tools builds none, and then shows no iPhones. */
+function iphoneHelper(): string | null {
+  if (process.platform !== 'darwin') return null
+  const path = app.isPackaged ? join(process.resourcesPath, 'iphone-screen') : join(app.getAppPath(), 'native', 'iphone-screen', 'out', 'iphone-screen')
+  try {
+    return statSync(path).isFile() ? path : null
+  } catch {
+    return null
+  }
 }
 
 function hasPwsh(): Promise<boolean> {
@@ -144,10 +158,13 @@ async function start(): Promise<void> {
     env: process.env,
     // Keyed by this instance like the clipboard's folder, so a dev build has its own.
     socketDir: socketDirFor(app.getPath('temp'), instance, process.getuid?.() ?? 0),
+    iphoneHelper: iphoneHelper(),
     saveImage: (png) => clip.saveImage(png),
   })
 
   Menu.setApplicationMenu(buildMenu((cmd) => send(IPC.appMenu, cmd)))
+  // The camera entitlement is the iPhone helper's: the page never gets the camera.
+  denyMedia(session.defaultSession)
   win = createWindow()
   clip.attach(win)
   usage.attach(win)

@@ -89,6 +89,7 @@ const api: DeckApi = {
     retry: (id) => ipcRenderer.send(IPC.devicesRetry, id),
     input: (id, input) => ipcRenderer.send(IPC.devicesInput, id, input),
     screenshot: (png) => ipcRenderer.invoke(IPC.devicesScreenshot, png),
+    openCameraSettings: () => ipcRenderer.send(IPC.devicesCameraSettings),
   },
   app: {
     info: () => ipcRenderer.invoke(IPC.appInfo),

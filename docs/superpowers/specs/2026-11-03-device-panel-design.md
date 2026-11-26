@@ -31,6 +31,66 @@ four places, written into the sections below:
   most 8 pictures), else `sim-video` is started again: it can't be asked for a key frame, and a long
   replay would trip the view's 10-picture backlog rule.
 
+Updated 2026-11-11 with step 3's first check (iPhones), made with Franco's iPhone 17 Pro on a cable
+through a throwaway probe app (macOS 27.2, iOS 27). It passed, with one change to this design: an
+iPhone is known by its screen capture device's ID, not its UDID (below, under "iPhones").
+
+- **The screen appears:** once screen capture devices are allowed, the phone is offered as
+  "Franco's iPhone", model `iOS Device`, muxed (one format, `muxx`, with no size until frames come),
+  0.5 s after the probe started with the phone already plugged in, 2.5 s after it was plugged in
+  again.
+- **Frames come:** 60 a second at the screen's own 1206×2622, none dropped, the first 2.7 s after the
+  capture started.
+- **Its ID** (`0A156111-…`, a UUID) isn't the phone's UDID (`00008150-…`), nor derived from it
+  by any common hash, but it stayed the same from run to run and across unplugging the phone and
+  plugging it in again. Whether it survives a restart of the Mac isn't known; if it doesn't, a project
+  that picked the phone asks again.
+- **The camera prompt** shows on the Mac, for the app that started the capture, and is answered
+  there; the phone asks nothing (its consent is the Trust prompt it showed when first paired).
+- **The phone's own camera is listed too,** as a Continuity Camera ("Franco's iPhone Camera", model
+  `iPhone18,1`, video only, over the air). It isn't the screen, and Deck never opens it.
+
+Updated 2026-11-12 with step 3 (iPhones), built 2026-11-11/12
+(`docs/superpowers/plans/2026-11-11-device-panel-iphones.md`) and not yet run against a phone. It
+refines this design in these places, written into the sections below:
+
+- **A config packet before every key frame,** not only at a new size: a viewer that joins and a
+  decoder that fell behind ask for a key frame, and the view can decode one only after an SPS and a
+  PPS. scrcpy's reset video restarts its encoder, which sends them again; the helper's `key` forces a
+  key frame from the same encoder, which doesn't.
+- **The start resolves once the helper runs,** not at the first picture: macOS's camera prompt waits
+  for Franco's answer, and the streams' 20 s start deadline would kill a helper still waiting for it.
+  The helper bounds its own waits instead: the screen not offered within 10 s (`not-found`), no
+  picture 15 s after the capture starts (`no-picture`).
+- **A camera macOS refuses is shown at once, not retried** (`blocked: 'camera'` on the error): retrying
+  after 1, 2 and 5 s can't change System Settings. Try again clears it.
+- **More failures** than a refused camera and a screen not found: `no-picture`, `disconnected`,
+  `capture` and `encoder` (with a message) and `usage`, so the panel can say what happened. `usage`
+  exits 64, every other failure 1.
+- **The list also looks every 5 s** (an unchanged list isn't sent again), in case a screen comes or
+  goes without macOS's connect or disconnect notice, which the first check didn't watch.
+- **One `LineTracker`** (`ios/tracker.ts`, moved out of the simulators' notifier) runs both the
+  notifier and the helper's `list`: one copy of the restarts, the first-list deadline and the SIGKILL
+  after an ignored SIGTERM. The notifier's 30 tests pass unchanged on it.
+- **iOS waits at most 6 s for the helper's first list,** which comes at 3 s: a helper that never lists
+  would otherwise hold every iOS tab at "Looking for devices…" for the tracker's 20 s, even with a
+  simulator listed and picked.
+- **iPhones are listed with the phones:** Android phones, then iPhones, then emulators, then
+  simulators.
+- **The helper is looked for once, at start** (`index.ts`): without one, iPhones aren't a source at
+  all, so nothing waits for them and no list says "no iPhones" late.
+- **The page is refused the camera, the microphone and the screen** (`src/main/permissions.ts`): with
+  the camera entitlement and macOS's yes, Electron would otherwise grant a page's `getUserMedia` too,
+  and the page has no use for any of them.
+- **A helper that doesn't compile stops `npm ci`;** only a Mac without Xcode's command line tools
+  skips it, with a note, and then has no iPhones. A packaged Mac build builds it again when a source
+  changed since, so it never ships a stale one, and stops without one; so does CI, which must run its
+  selftest.
+- **Only Android phones, emulators and simulators take input:** the screen's list of kinds that do is
+  an allow-list, so an iPhone (and any kind added later, until it says otherwise) is view only and its
+  screen never takes the keyboard. Clicks beside the screen, and on a failed screen's buttons, leave
+  the keyboard where it was, for every kind: Try again used to take it.
+
 ## Goal
 
 In a tab whose project is an Android or iOS app, show the device the app runs on, live, at the top of
@@ -73,7 +133,7 @@ Franco's choice (2026-11-03): live video for all three, decoded by one view in D
   devices), through a small Swift helper inside Deck that encodes H.264.
   - Over a cable only, and view only: Apple offers no way to tap a real iPhone remotely.
   - macOS treats an iPhone's screen as a camera, so the first use asks to let Deck use the camera.
-  - **Not tried yet** (the iPhone wasn't plugged in): checked first in step 3.
+  - **Tried 2026-11-11** with Franco's iPhone 17 Pro: it works (see the update at the top).
 - **Decoding:** WebCodecs in the renderer, in hardware.
 
 Rejected:
@@ -150,16 +210,17 @@ Rejected:
 - **The first list waits:** when Deck starts following the devices, or adb's server has restarted,
   it waits until every connected device has said what it is, 3 s at most from adb's first list, so
   a project with two devices asks rather than showing whichever answered first. The simulators'
-  first list is the notifier's first line, about 2.5 s after it starts. A tab waits only for the
-  kinds it may show (its project's apps', those of the devices picked there or by the tab, and every
-  kind when the panel was asked for), so a project with a phone and a simulator asks rather than
-  showing whichever kind came first. Meanwhile the panel says "Looking for devices…".
+  first list is the notifier's first line, about 2.5 s after it starts, and the iPhones' is the
+  helper's, 3 s after it starts; iOS waits for both, for the iPhones' 6 s at most. A tab waits only
+  for the kinds it may show (its project's apps', those of the devices picked there or by the tab,
+  and every kind when the panel was asked for), so a project with a phone and a simulator asks rather
+  than showing whichever kind came first. Meanwhile the panel says "Looking for devices…".
 - **Picking:** the device's name in the panel's header opens a menu, the devices that fit first, then
   any others, each with its kind and connection: `Android 13 · USB`, `Android 17 · USB + Wi-Fi`,
   `Emulator · Android 15`, `Simulator · iOS 27.0`, `iPhone · cable · view only`. One that isn't ready
   says so instead: `not allowed yet`, `offline`, `connecting`. A pick sets the tab's device and the
   project's; choosing the device already shown picks it too. Within each group the menu lists
-  phones, then emulators, then simulators, each by name.
+  Android phones, then iPhones, then emulators, then simulators, each by name.
 - **Names:**
   - an Android phone's own name (`settings get global device_name`: "Franco's S25 FE", "C66"), else
     its maker and model;
@@ -168,7 +229,8 @@ Rejected:
 - **One device, two connections:** the S25 FE over USB and over Wi-Fi is one device, used over USB
   while that's connected and over Wi-Fi when it isn't.
 - **Telling devices apart:** phones by serial number (`ro.serialno`), emulators by AVD name (their
-  `emulator-5554` changes with the port), simulators and iPhones by UDID. A device is listed only once
+  `emulator-5554` changes with the port), simulators by UDID, and iPhones by their screen capture
+  device's ID (a UUID that isn't the UDID but stays the same across reconnects). A device is listed only once
   it has said what it is (or didn't answer three times), and an emulator still starting not at all,
   so a device's id never changes under the panel. A phone still starting up is asked again every 3 s,
   for two minutes at most, so one rebooted while plugged in gets its own name back.
@@ -219,12 +281,15 @@ Rejected:
 - **The keyboard:** clicking the screen gives it the keyboard, which a teal ring shows. Clicking the
   terminal gives it back, and so do folding the panel and another device taking the screen's place.
   Tab and Esc go to the device, so the way out is a click elsewhere or one of Deck's shortcuts.
-  Clicks in the header and the chooser leave the keyboard where it was, and a pick from the ▾ menu
-  gives it back to where it was when the menu opened (the terminal, after a click).
+  Clicks in the header and the chooser, beside the screen, and on a failed screen's **Try again** and
+  **Open System Settings** leave the keyboard where it was, and a pick from the ▾ menu gives it back
+  to where it was when the menu opened (the terminal, after a click). An iPhone's screen never takes
+  the keyboard: a click on it does nothing.
 
 ### Using the device from Deck
 
-Android phones, emulators and simulators. iPhones are view only.
+Android phones, emulators and simulators. iPhones are view only, and so is any kind of device added
+later until it says it takes input: the screen lists the kinds that do.
 
 - A click taps, a drag swipes and a held click is a long press, with one finger: one pointer at a
   time. A finger still down when the screen goes (a tab switch, a fold) is lifted, and so is one held
@@ -261,12 +326,15 @@ Android phones, emulators and simulators. iPhones are view only.
 - **Looking for devices…**, with a spinner, until the first list of every kind the tab may show is in
   (above).
 - **Connecting:** "Connecting to C66…" until the first frame, about a second. A start that takes more
-  than 20 s has failed.
+  than 20 s has failed. An iPhone's start is done once its helper runs, so the 20 s don't cover
+  macOS's camera prompt, and the panel says "Connecting to …" while the prompt is up; the helper
+  bounds its own waits (How › iPhones).
 - **Still being set up:** "C66 is connecting…" while adb sets a device up, or while one just allowed
   says what it is.
 - **Reconnecting:** a stream that breaks is started again after 1, 2 and 5 s, with "Reconnecting…"
   over the dimmed last frame. It counts as working again only after 5 s live, so one that breaks right
-  after its first frame still runs out of tries. After that, the error and **Try again**.
+  after its first frame still runs out of tries. After that, the error and **Try again**. A camera
+  macOS refuses isn't retried (below).
 - **Disconnected:** "C66 disconnected" over the dimmed last frame for 10 s, then the next device that
   fits, or no panel. A cable that wiggles doesn't make the pane jump.
 - **Unauthorized:** "Allow USB debugging on C66: check its screen."
@@ -275,8 +343,9 @@ Android phones, emulators and simulators. iPhones are view only.
 - **Couldn't show it:** the reason (the last error of scrcpy's server, a Java exception's message or
   its root cause; `sim-video`'s `Error:` line, or its or the companion's last line that reads as a
   failure, such as "Target is no longer booted, companion going offline", else how the process
-  ended; the helper's last error line) and **Try again**. A screen that fails to decode three times
-  in a row, with no picture in between, says so the same way.
+  ended; the iPhone helper's failure in Deck's words, such as "The iPhone sent no picture. Unlock it,
+  and check that its screen is on.", or its own message) and **Try again**. A screen that fails to
+  decode three times in a row, with no picture in between, says so the same way.
 - **adb fails**, when the panel was asked for: "adb couldn't list the devices", with adb's own error.
 - **No adb**, only when the panel was asked for: "Deck can't find adb, so it can't see Android
   devices. Install Android Studio or Android's platform tools."
@@ -289,11 +358,15 @@ Android phones, emulators and simulators. iPhones are view only.
 - **idb-companion fails** before its notifier lists anything, when the panel was asked for: "Deck
   couldn't list the simulators", with the notifier's last words (or "idb_companion listed nothing in
   20 s."). One that had listed keeps its list while it's started again.
-- **Camera not allowed:** "macOS hasn't let Deck use the camera, which is how it shows an iPhone's
-  screen." **Open System Settings** (Privacy & Security → Camera).
-- **Nothing connected**, when asked for: "No devices connected. Plug in an Android phone with USB
-  debugging on, start an emulator, or boot a simulator." Windows leaves out the simulator; iPhones
-  join in step 3.
+- **Camera not allowed**, at once, with no "Reconnecting…" before it: "macOS hasn't let Deck use the
+  camera, which is how it shows an iPhone's screen." **Open System Settings** (Privacy & Security →
+  Camera) and **Try again**, which starts the stream afresh. A camera a profile restricts reads the
+  same.
+- **Nothing connected**, when asked for: "No devices connected." On macOS, "Plug in an unlocked
+  iPhone or an Android phone with USB debugging on, start an emulator, or boot a simulator." where
+  both platforms are wanted, and "Plug in an unlocked iPhone, or boot a simulator in Xcode or with
+  simctl." for iOS alone; for Android alone, and always on Windows, "Plug in an Android phone with
+  USB debugging on, or start an emulator."
 - **A panel that fails to draw** says "The device panel couldn't show this", with the error and **Try
   again**, without taking the pane with it. Another device or view gets another try by itself.
 
@@ -302,9 +375,10 @@ Android phones, emulators and simulators. iPhones are view only.
 ### Finding devices
 
 Deck follows devices only while a tab needs them: its project is an Android or iOS app, it has picked
-a device, or its panel was asked for. One watch then follows both kinds, adb's devices and, on macOS
-with idb-companion, the simulators, and merges them into one list (`registry.ts`) that says which
-kinds are still finding their first devices (`pending`).
+a device, or its panel was asked for. One watch then follows every source, adb's devices and, on
+macOS, the simulators (with idb-companion) and the iPhones (with Deck's helper), and merges them into
+one list (`registry.ts`) that says which kinds are still finding their first devices (`pending`; iOS
+while the simulators or the iPhones are).
 
 - **adb:** first `ANDROID_HOME` or `ANDROID_SDK_ROOT` in Deck's environment, then the SDK's usual place
   (`~/Library/Android/sdk/platform-tools/adb`; `%LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe`),
@@ -347,7 +421,17 @@ kinds are still finding their first devices (`pending`).
   - **For checks:** `DECK_SIMULATOR_SET` points the notifier, the companion and `sim-video` at another
     device set (a throwaway simulator's), and `DECK_IDB_COMPANION` replaces where `idb_companion` is
     looked for (`/nowhere` hides it).
-- **iPhones:** the helper reports screen capture devices as they come and go.
+- **iPhones:** `iphone-screen list` (How › iPhones) prints every screen on offer as one JSON line: the
+  first 3 s after it starts, then 200 ms after the last connect or disconnect, and it looks again
+  every 5 s (an unchanged list isn't sent again). Each is listed by its name, as
+  `iPhone · cable · view only`.
+  - Main follows it as it does the notifier, with the same `LineTracker` (`ios/tracker.ts`): started
+    again after 1 s, doubling to 30 s; 20 s for a first list, doubling to 2 minutes. Its stdin is a
+    pipe it ends on, so it never outlives Deck.
+  - A helper that fails lists no iPhones, quietly (main's log); one that had listed keeps its list
+    while it's started again.
+  - iOS is pending until both the simulators and the iPhones have listed, the iPhones for 6 s at
+    most: a later list still counts.
 
 ### Android
 
@@ -440,19 +524,83 @@ kinds are still finding their first devices (`pending`).
 
 ### iPhones
 
-- **The helper** (`native/iphone-screen/`, Swift, macOS only) turns on
-  `kCMIOHardwarePropertyAllowScreenCaptureDevices`, then:
-  - lists the iPhone and iPad screens macOS offers (plugged in, unlocked, trusting this Mac) as they
-    come and go;
-  - streams one: AVFoundation capture, VideoToolbox H.264 (the long side within 1600 px, a key frame
-    on request), frames on stdout behind a small header; closing its stdin stops it.
-- **Built** with `swiftc` on macOS (dev and CI), shipped in the app's resources, signed and notarised
-  with the app.
-- **Camera:** Deck's Info.plist says why ("Deck shows a connected iPhone's screen, which macOS treats
-  as a camera."), and the hardened runtime gets `com.apple.security.device.camera`. macOS asks once;
-  if Franco says no, the panel says so.
-- **Checked first in step 3:** the phone appears, frames come, and the capture device's ID is the
-  phone's UDID.
+- **The helper** (`native/iphone-screen/`, Swift, macOS only) first turns on
+  `kCMIOHardwarePropertyAllowScreenCaptureDevices` (QuickTime's switch, for its own process), then
+  runs one of three commands:
+  - `iphone-screen list`: the iPhone and iPad screens macOS offers (plugged in, unlocked, trusting
+    this Mac), as `{"devices":[{"id","name"}]}` lines (Finding devices): the capture devices whose
+    model is `iOS Device` and which carry muxed media. Not the phone's own camera, which macOS lists
+    too, over the air (a Continuity Camera, model `iPhone18,1`). Each is known by its capture device's
+    ID;
+  - `iphone-screen stream <id> --max-size 1600 --max-fps 60`: asks for the camera, waits up to 10 s
+    for the screen, then captures it with AVFoundation (420v; the input's audio ports off, so the
+    capture shouldn't take the phone's sound) and encodes it:
+    - scaled with `VTPixelTransferSession` to even sizes, the long side within 1600 px and never
+      larger (1206×2622 → 736×1600);
+    - H.264 High in real time, with no frame reordering, at 8 Mbit/s and a key frame at least every
+      10 s; a frame sooner than ¾ of `--max-fps`'s gap after the last is skipped;
+    - written to stdout as scrcpy's video stream from its codec id on, so main reads it with scrcpy's
+      reader: a session header for each frame size (a rotation gets a new encoder), and a config
+      packet before every key frame;
+    - a line `key` on stdin forces a key frame. A still screen most likely sends no frames, so the
+      newest frame is kept, and when nothing has been encoded 100 ms after a `key` it's encoded again
+      as that key frame;
+  - `iphone-screen selftest`: made-up frames through the scaler, the encoder and the framing, with no
+    device and no camera, for CI.
+- **Its failures** are one JSON line on stderr, `{"error":"<code>","message":"…"}`, then exit 1 (64 for
+  `usage`). The end of its stdin exits 0, so it never outlives Deck, a crashed one included:
+  - `camera-denied`: macOS hasn't let Deck use the camera (asked now or before; AVError −11852 too);
+  - `not-found`: the screen wasn't offered within 10 s;
+  - `no-picture`: no frame 15 s after the capture started. `startRunning()` runs on a queue of its
+    own, so a start that hangs can't hold this check up;
+  - `disconnected`: the device went (its own notice, or AVError −11808);
+  - `capture`: any other capture error, with its message; also a session interrupted (another app
+    took the screen), which would otherwise just stop sending frames;
+  - `encoder`: VideoToolbox failed, or gave a frame that can't be read. That ends the stream, which is
+    started again: a lost key frame would leave the view blank for up to 10 s;
+  - `usage`: Deck started it wrongly.
+- **In main** (`ios/iphone.ts`):
+  - **The list's IDs** are checked where they're read, and again in a device id (`screenIdOf`):
+    letters, digits and dashes, never starting with a dash, since an ID goes into the helper's
+    arguments. A list that drops entries is logged once per run; a repeated ID keeps its first entry;
+    a nameless screen is "iPhone".
+  - **A session** (`startIphone`) resolves once the helper runs, not at the first picture, so the
+    streams' 20 s start deadline doesn't cut the camera prompt short (it waits for Franco's answer;
+    the first picture follows about 3 s after it). It drops input (view only) and asks for key frames
+    on the helper's stdin. A view of a screen the last list didn't offer fails with "The iPhone isn't
+    connected."
+  - **The helper's words:** only stderr lines that start with `{` are parsed, and nothing once the
+    stream has ended. `camera-denied` ends it blocked (States: "Camera not allowed"); `not-found`:
+    "The iPhone didn't offer its screen. Unlock it, and check that it trusts this Mac.";
+    `no-picture`: "The iPhone sent no picture. Unlock it, and check that its screen is on.";
+    `disconnected`: "The iPhone was disconnected."; `usage`: "Deck started its iPhone helper wrongly
+    (usage)."; `capture` and `encoder`: the helper's message, cut at 500 characters. Any other line
+    counts only when it reads as a failure, else the reason is how the helper ended.
+  - **Its path** is settled at start (`index.ts`): `Resources/iphone-screen` in the app, the build's
+    `native/iphone-screen/out/` in a dev build, else none and no iPhones.
+- **The camera:** macOS treats an iPhone's screen as a camera, so the first capture asks, once, for
+  the app responsible for the helper: Deck, packaged; a dev build's launcher otherwise (`npm run dev`
+  from a terminal is that terminal's child, so start it through LaunchServices with `open` to be
+  asked as Electron). Deck's `Info.plist` says why ("Deck shows a connected iPhone's screen, which
+  macOS treats as a camera."), and `com.apple.security.device.camera` is in the one entitlements
+  file the app and every binary in it are signed with. Whether macOS checks it on the app or on the
+  helper isn't documented, so both have it. The phone asks nothing: its consent is the Trust prompt.
+- **The page never gets the camera, the microphone or the screen** (`src/main/permissions.ts`:
+  `media` and `display-capture`, asked for or checked): Electron grants every permission request it
+  isn't told about, so once macOS has let Deck use the camera a page's `getUserMedia` would get it
+  too. Every other permission keeps Electron's own answer; the check keeps
+  `deprecated-sync-clipboard-read` denied, as Electron does without a handler.
+- **Built** with `swiftc` at install (`scripts/build-iphone-helper.mjs`, from postinstall;
+  `npm run build:iphone` by hand): macOS 13 (Electron 45's minimum), arm64, Swift 5 mode, into
+  `native/iphone-screen/out/` (not committed), and only when a source, their folder (a source
+  deleted) or the script is newer than the helper. A Mac without Xcode's command line tools, or whose
+  developer folder is gone, skips it with a note and then shows no iPhones; on CI that stops the
+  install, since CI must run the selftest. A helper that doesn't compile stops the install. A
+  packaged Mac build runs the same build first (`before-pack.cjs`: a current helper is left alone, a
+  stale one built again, a failed build stops the package), then stops if there's still none.
+- **Checked first in step 3** (2026-11-11, the update at the top): the phone appears, frames come
+  (60 a second at 1206×2622), and the capture device's ID, though not the UDID, stays the same across
+  runs and reconnects. Deck's own helper hasn't met a phone yet (Testing).
 
 ### The view
 
@@ -472,14 +620,15 @@ kinds are still finding their first devices (`pending`).
 - **Keeping up:** if the decoder falls more than 10 frames behind, the view skips to the next key
   frame and asks for one, at most once a second (each one restarts the device's encoder). One held
   back by that second is asked for once it has passed, on a timer: a still simulator sends no next
-  frame to check on. That's scrcpy's reset video, the helper's request, and on a simulator a replay
-  of a short group of pictures or a new `sim-video` (above): `sim-video` sends a key frame every 2 s
-  only while the screen changes.
+  frame to check on. That's scrcpy's reset video; a key frame the iPhone helper forces, behind a
+  config packet (on a still screen, its newest frame encoded again); and on a simulator a replay of a
+  short group of pictures or a new `sim-video` (above): `sim-video` sends a key frame every 2 s only
+  while the screen changes.
 - **Input:** a point on the canvas maps through the letterbox to the frame, then to the device:
   scrcpy takes frame pixels with the frame's size, idb takes points. A touch held while the frame
   changes size is let go at its last point, once for each size: scrcpy drops a touch made for another
   size, and may switch before or after it says so. Keys become Android key codes for scrcpy and USB
-  HID usages for idb.
+  HID usages for idb. An iPhone takes none: nothing is sent.
 
 ### Streaming and its cost
 
@@ -491,10 +640,13 @@ kinds are still finding their first devices (`pending`).
 - **10 seconds' grace:** a stream no panel shows stops after 10 s, so leaving a tab and coming back
   doesn't restart it (a restart takes about a second). Meanwhile nothing is sent to the window; a
   panel coming back gets a key frame. Tabs showing the same device share its stream.
-- **Size and rate:** the long side within 1600 px (the C66 as it is, the S25 FE at about 740×1600), up to
-  60 frames a second, no audio. A still screen costs little: scrcpy repeats a frame every 100 ms,
-  and `sim-video` sends none. A simulator's stream runs its own `idb_companion` (about 29 MB) and
-  `sim-video`, besides the notifier that runs while devices are followed.
+- **Size and rate:** the long side within 1600 px (the C66 as it is, the S25 FE at about 740×1600, an
+  iPhone 17 Pro at 736×1600), up to 60 frames a second, no audio. A still screen costs little:
+  scrcpy repeats a frame every 100 ms, `sim-video` sends none, and an iPhone's capture most likely
+  sends none either (not yet checked). A simulator's stream runs its own `idb_companion` (about
+  29 MB) and `sim-video`, besides the notifier that runs while devices are followed; an iPhone's runs
+  one `iphone-screen stream`, besides the `iphone-screen list` that runs while devices are followed
+  on macOS. The helper's cost isn't measured yet.
 - **Measured in step 1** (2026-11-04, a dev build, two phones on their lock screens, so almost no
   frames): Deck's main, GPU and renderer processes used about 0.5% of a core each. A moving screen's
   cost isn't measured yet.
@@ -516,8 +668,9 @@ kinds are still finding their first devices (`pending`).
 
 - `src/shared/`: `DeviceInfo` (id, kind, name, detail, state), `DeviceList` (the devices, adb's
   problem and the simulators', the kinds still pending), `DeviceProject` (root, Android app, iOS app,
-  picks), a stream's events (size, packet, state) and input (touch, scroll, key, a simulator's HID
-  key and Home button, text, paste); `DeckApi.devices` and the `devices:*` channels;
+  picks), a stream's events (size, packet, state, with `DeviceBlock` on an error only the user can
+  change: `'camera'`) and input (touch, scroll, key, a simulator's HID key and Home button, text,
+  paste); `DeckApi.devices` (with `openCameraSettings`) and the `devices:*` channels;
   `quoteImagePath` in `quote.ts`; `hid.ts`, a simulator's named keys as USB HID usages and Deck's
   modifier bits.
 - `src/main/devices/`:
@@ -525,24 +678,28 @@ kinds are still finding their first devices (`pending`).
   - `picks.ts`: `devices.json` (each project's picks, latest first), written beside and renamed
     (`fs/atomic.ts`);
   - `session.ts`: the shape every kind of stream has (`input`, `keyframe`, `stop`, none of which
-    throws); `android/session.ts` wraps scrcpy's in it;
+    throws; its events' `end(why, blocked)`); `android/session.ts` wraps scrcpy's in it;
   - `streams.ts`: a stream's viewers, its 10 s grace, its retries and its start deadline, for every
-    kind;
-  - `registry.ts`: one list from both sources, with each one's problem and the kinds still pending (a
-    pure merge);
-  - `ipc.ts`: wiring, the 30 s project cache, starting and stopping both sources as tabs need them,
-    and lock and sleep. Every listener checks its arguments;
+    kind, and a blocked stream's error at once;
+  - `registry.ts`: one list from the three sources (Android phones, iPhones, emulators, simulators),
+    with each one's problem and the kinds still pending (a pure merge);
+  - `ipc.ts`: wiring, the 30 s project cache, starting and stopping the three sources as tabs need
+    them, iOS's 6 s wait for the iPhones' first list, System Settings' camera page, and lock and
+    sleep. Every listener checks its arguments;
   - `android/adb.ts`: finding adb and running it, like `git/runner.ts`;
   - `android/devices.ts`: `track-devices -l` frames and identity parsing, USB and Wi-Fi merged (pure);
   - `android/tracker.ts`: the long-running `track-devices`, identity asks, restarts and the first
     list's wait;
-  - `android/protocol.ts`: the video stream's reader and the control messages (pure);
+  - `android/protocol.ts`: the video stream's reader (from scrcpy's dummy byte, or from the codec id
+    for the iPhone helper) and the control messages (pure);
   - `android/input.ts`: the renderer's input, checked and turned into control messages (pure);
   - `android/server.ts`: the server file and its version;
   - `android/scrcpy.ts`: push, tunnel, start, sockets and stop;
   - `ios/tools.ts`: finding `idb_companion` and `sim-video`, and whether any simulator is booted,
     asked without idb;
   - `ios/simulators.ts`: the notifier's lines (pure) and the long-running notifier;
+  - `ios/tracker.ts`: `LineTracker`, a long-running program that prints lists, restarted and timed
+    out: the notifier and the iPhone helper's `list`;
   - `ios/simulator.ts`: one simulator's session (companion, socket, `describe`, `sim-video`, input,
     the group of pictures kept for a key frame); `ios/simulator-io.ts`: the real processes, the
     socket folder and its removal;
@@ -553,7 +710,15 @@ kinds are still finding their first devices (`pending`).
   - `ios/input.ts`: the renderer's input for a simulator, checked and turned into HID events (pure);
   - `ios/test-process.ts` and `ios/test-fixtures.ts`: fake child processes, fMP4 and `describe`
     fixtures for the tests;
-  - step 3: `ios/iphone.ts` (the helper).
+  - `ios/iphone.ts`: the helper's lists and failures (pure), `IphoneTracker`, an iPhone's session
+    (`startIphone`) and the real helper (`iphoneIo`); `ios/iphone-helper.test.ts` runs the built
+    helper's selftest (macOS).
+- `src/main/permissions.ts`: the page refused the camera, the microphone and the screen;
+  `src/main/index.ts` settles the helper's path.
+- `native/iphone-screen/` (Swift): `main.swift` (the commands), `Output.swift` (whole writes to stdout
+  under a lock, failures as JSON on stderr, stdin's lines and end), `Encoder.swift` (scaling, H.264
+  and scrcpy's framing), `Screens.swift` (the screens on offer, and capturing one), `SelfTest.swift`
+  (made-up frames through the encoder).
 - `src/renderer/src/device/`:
   - `pick.ts`: which device a tab shows, and the holds; which devices fit (by platform), the menu's
     order, whether a tab still waits (`stillLooking`), and the panel's rules (`devicesNeeded`,
@@ -561,26 +726,31 @@ kinds are still finding their first devices (`pending`).
   - `fit.ts`: letterboxing, and a point on the screen as a pixel of the frame (pure);
   - `keys.ts`: keys to Android key codes, a simulator's HID usages, or text (pure);
   - `codec.ts`: NAL units and the avc1 codec string (pure);
-  - `DevicePanel.tsx`: header, chooser and states, inside an error boundary; `DeviceMenu.tsx`: the
-    menu;
-  - `DeviceScreen.tsx`: canvas, decoder, input and the screenshot;
+  - `DevicePanel.tsx`: header (an iPhone's has only the camera), chooser and states, inside an error
+    boundary; `DeviceMenu.tsx`: the menu;
+  - `DeviceScreen.tsx`: canvas, decoder, input (the kinds that take it) and the screenshot, and a
+    failed stream's buttons (Open System Settings for the camera);
   - `useDevices.ts` and `device.css`.
 - `App.tsx`:
   - the right pane holds the device panel, a horizontal splitter and the Claude panel;
   - `TerminalTab.device` (the tab's pick) and `deviceHidden`;
   - the fold and the height share, one each for the window.
 - `menu.ts` and `terminal/keys.ts`: View → Device Panel.
-- `scripts/fetch-scrcpy-server.mjs`, run by `postinstall` (or `npm run fetch:scrcpy`), and
+- `scripts/fetch-scrcpy-server.mjs`, run by `postinstall` (or `npm run fetch:scrcpy`);
+  `scripts/build-iphone-helper.mjs`, run by `postinstall` on macOS (or `npm run build:iphone`); and
   `scripts/before-pack.cjs`, electron-builder's `beforePack`, which stops a build without the right
-  server. Step 3: `native/iphone-screen/` with `scripts/build-iphone-helper.mjs`.
+  server and, on macOS, builds a stale helper again and stops a build without one.
 - **Packaging:**
-  - `electron-builder.yml`: `extraResources` for the server and, on macOS, the helper (step 3);
-    `NSCameraUsageDescription` (step 3);
-  - the camera entitlement in `build/entitlements.mac.plist` (step 3);
+  - `electron-builder.yml`: `extraResources` for the server and, in `mac:`, the helper
+    (`Resources/iphone-screen`); `NSCameraUsageDescription` in `extendInfo`;
+  - the camera entitlement in `build/entitlements.mac.plist`, which is both `entitlements` and
+    `entitlementsInherit`: electron-builder signs every binary in the app with that one file (the
+    helper too, with the hardened runtime and a timestamp), so all of Deck's processes carry the
+    camera entitlement, and `permissions.ts` keeps the page off it;
   - scrcpy's license (Apache 2.0) in `resources/THIRD-PARTY-NOTICES.txt`, shipped with the app;
-    idb's (MIT) joined it in step 2, for `ios/proto.ts`;
-  - step 2 adds no dependency: no `@grpc/grpc-js`, and idb-companion is the user's own, from
-    Homebrew, never shipped.
+    idb's (MIT) joined it in step 2, for `ios/proto.ts`. The helper is Deck's own code;
+  - steps 2 and 3 add no dependency: no `@grpc/grpc-js`, idb-companion is the user's own, from
+    Homebrew, never shipped, and the helper uses only macOS's frameworks.
 - **Docs:** CLAUDE.md (paths and the facts above), README, DECK.md (M5), TESTING.md and CHANGELOG.
 
 ## Build order
@@ -589,7 +759,8 @@ kinds are still finding their first devices (`pending`).
    panel, scrcpy video and input, and the screenshot. This covers Guard and AccessControl_Android.
    Built 2026-11-03/04.
 2. **Simulators**, macOS: idb-companion's video and input. Built 2026-11-10.
-3. **iPhones**, macOS: the helper, once it has been seen working with Franco's iPhone.
+3. **iPhones**, macOS: the helper, once it had been seen working with Franco's iPhone (2026-11-11).
+   Built 2026-11-11/12; the check with his iPhone is still to do.
 
 Each step gets its own plan and pull request and works without the next.
 
@@ -649,7 +820,22 @@ Each step gets its own plan and pull request and works without the next.
 - **Emulators** may encode in software, so their stream may be slower: not measured yet.
 - **A lit screen:** a device shown for hours stays on while plugged in, and a still image can mark an
   OLED screen. Fold the panel, or press Power, when not watching.
-- **iPhones** need a cable, an unlocked phone and trust in this Mac, and are view only.
+- **iPhones:**
+  - they need a cable, an unlocked phone and trust in this Mac, and are view only;
+  - an iPad lists as `iPhone · cable · view only`;
+  - while macOS's camera prompt is up, the panel says "Connecting to …";
+  - a camera restricted by a profile reads as "Camera not allowed" too;
+  - whether the screen's ID survives a restart of the Mac isn't known; if it doesn't, a project that
+    picked the phone asks again;
+  - a Mac without Xcode's command line tools builds no helper and shows no iPhones, yet its "No
+    devices connected" still says "Plug in an unlocked iPhone";
+  - an iOS tab waits about 3 s (6 s at most) for the first iPhone list, even with a simulator
+    booted;
+  - only a signed, notarised build settles three things: that notarisation accepts the helper,
+    whether macOS checks the camera entitlement on the app or on the helper, and that the prompt
+    names Deck;
+  - once Deck is allowed the camera, programs run in its tabs most likely are too, without a prompt:
+    macOS answers for the app responsible for them, as it does for Terminal's (unverified).
 - **iOS needs a Mac:** Windows shows Android devices only.
 - **A Mac-only Xcode project** counts as an iOS app, so a booted simulator shows there too.
 - **Client data:** device screens can show residents' and visitors' details. Frames are kept in memory
@@ -687,10 +873,15 @@ Each step gets its own plan and pull request and works without the next.
     keys, a simulator's HID usages included;
   - `idb_companion --notify` output, the notifier's restarts and its first list's deadline;
     `sim-video`'s fMP4 split anywhere; idb's messages byte for byte against protobufjs's; gRPC
-    against a local HTTP/2 server on a Unix socket; a simulator's session against fake processes; and
-    the helper's frames;
-  - main's wiring, including arguments checked, both sources' races, and simulators listed beside a
-    fake adb.
+    against a local HTTP/2 server on a Unix socket; a simulator's session against fake processes;
+  - the iPhone helper's `selftest` (made-up frames: 6 at 1206×2622, a key frame asked for at the
+    fourth, then 6 turned) read with scrcpy's reader, on macOS: 736×1600, then 1600×736, and every key
+    frame behind a config packet (`|ckppckpp|ckppppp`). CI runs it and fails without the helper; a
+    Mac without one skips it. Then the helper's lists and IDs, `LineTracker`'s own tests, an iPhone's
+    session against fake processes, its failures in Deck's words, and the page's permissions;
+  - main's wiring, including arguments checked, the three sources' list and races (iOS's 6 s wait
+    included), a stream the camera blocks, System Settings' camera page, and simulators listed beside
+    a fake adb.
 - **In the app** (a dev build with its own userData, Franco's devices):
   - Guard's tab shows the C66; AccessControl_Android asks, then remembers; two tabs, two devices;
   - taps, swipes, typing, paste, Back, Home, Recent apps, Power, rotation and the wheel;
@@ -708,5 +899,10 @@ Each step gets its own plan and pull request and works without the next.
   that arrived whole, and a tap after ten minutes idle (details in CLAUDE.md). Not yet: the camera
   with Claude running, a landscape app, the "old-idb" hint, the notifier failing for real, two Decks
   at once.
-- **iPhone:** the Camera prompt, the stream, unplugging and locking.
+- **iPhone:** Franco's iPhone with a dev build started through LaunchServices, so macOS asks for the
+  camera as Electron and not as the terminal: the list, the prompt, the picture, a rotation, tab
+  switches within 10 s, locking the phone, pulling the cable, the camera refused and allowed again,
+  the cost, and no helper left after a quit or a crash (the step 3 plan's Task 12); the packaged app's
+  own prompt; after the merge, the signed app's entitlements and prompt. Not done yet. The installed
+  app's steps are in `docs/TESTING.md` (macOS: an iPhone on a cable).
 - **Windows:** the Android steps, in `docs/TESTING.md`.

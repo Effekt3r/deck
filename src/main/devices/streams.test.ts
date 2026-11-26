@@ -97,6 +97,41 @@ describe('DeviceStreams', () => {
     expect(started).toHaveLength(2)
   })
 
+  it('a blocked stream (the camera not allowed) says so at once, to every viewer, until retry()', async () => {
+    const { streams, started, sent, attempts } = setup()
+    streams.view('iphone:A1')
+    await flush()
+    started[0].events.end("macOS hasn't let Deck use the camera.", 'camera')
+    const blocked = { type: 'state', state: 'error', message: "macOS hasn't let Deck use the camera.", blocked: 'camera' }
+    expect(sent.at(-1)).toEqual(['iphone:A1', blocked])
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(attempts()).toBe(1) // not retried: only System Settings can change it
+    streams.view('iphone:A1') // a second tab
+    expect(sent.at(-1)).toEqual(['iphone:A1', blocked])
+    expect(states(sent)).toEqual(['connecting', 'error', 'error']) // never 'reconnecting': no retry was ever sent
+    streams.retry('iphone:A1') // Try again, once allowed
+    expect(states(sent).at(-1)).toBe('connecting') // "Camera not allowed" is cleared at once
+    await flush()
+    expect(attempts()).toBe(2)
+  })
+
+  it("a block doesn't outlive retry(): the next, ordinary failure's error carries no blocked field", async () => {
+    let failing = false
+    const { streams, started, sent } = setup(() => failing)
+    streams.view('iphone:A1')
+    await flush()
+    started[0].events.end("macOS hasn't let Deck use the camera.", 'camera')
+    expect(sent.at(-1)).toEqual(['iphone:A1', { type: 'state', state: 'error', message: "macOS hasn't let Deck use the camera.", blocked: 'camera' }])
+
+    streams.retry('iphone:A1') // Try again, once allowed
+    await flush()
+    failing = true // the retried session, and every one after, now breaks the ordinary way
+    started[1].events.end('gone') // not blocked
+    expect(sent.at(-1)).toEqual(['iphone:A1', { type: 'state', state: 'reconnecting' }])
+    await vi.advanceTimersByTimeAsync(1000 + 2000 + 5000)
+    expect(sent.at(-1)).toEqual(['iphone:A1', { type: 'state', state: 'error', message: 'device offline' }])
+  })
+
   it('a viewer joining before the first packet gets connecting and no key-frame reset; a viewer joining while paused gets connecting', async () => {
     const { streams, started, sent } = setup()
     streams.view('android:1')

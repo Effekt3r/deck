@@ -19,20 +19,20 @@ export interface ChoiceInput {
   devices: DeviceInfo[]
 }
 
-/** What a device runs: phones and emulators Android, simulators iOS. */
-const platformOf = (kind: DeviceInfo['kind']): DevicePlatform => (kind === 'simulator' ? 'ios' : 'android')
+/** What a device runs: phones and emulators Android, simulators and iPhones iOS. */
+const platformOf = (kind: DeviceInfo['kind']): DevicePlatform => (kind === 'simulator' || kind === 'iphone' ? 'ios' : 'android')
 
 /** A stored id's platform, from its prefix, connected or not. */
-const platformOfId = (id: string): DevicePlatform => (id.startsWith('simulator:') ? 'ios' : 'android')
+const platformOfId = (id: string): DevicePlatform => (id.startsWith('simulator:') || id.startsWith('iphone:') ? 'ios' : 'android')
 
 /** The project is an app for the device's platform. */
 const fits = (device: DeviceInfo, project: { android: boolean; ios: boolean }) => project[platformOf(device.kind)]
 
 /** The device a tab's panel shows: its own pick, else the latest of its project's picks that's
  *  connected. Nothing picked yet, the only device that fits an app for its platform (phones and
- *  emulators an Android one, simulators an iOS one); with several the panel asks. Once something
- *  has been picked, a device the project never picked doesn't open the panel (the C66's project
- *  doesn't open on the S25 meanwhile), unless it was asked for. With none there's no panel. */
+ *  emulators an Android one, simulators and iPhones an iOS one); with several the panel asks. Once
+ *  something has been picked, a device the project never picked doesn't open the panel (the C66's
+ *  project doesn't open on the S25 meanwhile), unless it was asked for. With none there's no panel. */
 export function choosePanel({ tab, project, android, ios, byHand, devices }: ChoiceInput): PanelChoice {
   const find = (id: string | undefined) => (id ? devices.find((d) => d.id === id) : undefined)
   const picked = find(tab) ?? project.map(find).find((d) => d !== undefined)

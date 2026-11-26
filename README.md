@@ -24,6 +24,10 @@ npm run dist:mac     # dist/ (dmg + zip; unsigned unless signing secrets are set
 
 If `npm run dev` says Electron failed to install, run `node node_modules/electron/install.js`.
 
+On macOS, `npm install` also builds Deck's iPhone helper (`native/iphone-screen/`, Swift) with
+Xcode's command line tools (`xcode-select --install`). Without them Deck shows no iPhones and
+`npm run dist:mac` stops. After changing the helper, run `npm run build:iphone`.
+
 **Releases:** bump `version` in `package.json` and add its section to
 [`CHANGELOG.md`](CHANGELOG.md), then run the **release** workflow on `main`
 (`gh workflow run release.yml --ref main`) or push the tag `v<version>`. It makes
@@ -84,17 +88,20 @@ Windows installer; publish it once it looks right.
     hides its footer hints. **Disconnect** puts back what was there and forgets the
     numbers.
 - **Device panel** (top of the right pane in an Android or iOS app's tabs; Cmd/Ctrl+Shift+D hides it,
-  or shows it in any other tab): the phone, emulator or (on macOS, with idb-companion from Homebrew)
-  simulator the app runs on, live. Click to tap, drag to swipe, scroll with the wheel (drag on a
-  simulator), and type and paste with the screen selected (Option and Cmd editing keys work as on a
-  Mac); Back, Home, Recent apps and Power in its header (Home for a simulator) and, while Claude
-  runs, a camera that adds a screenshot to Claude's prompt. Each project remembers the devices picked
-  in it and opens only on those (the ▾ menu picks another, per tab). It streams only while you can
-  see it. Android devices need adb (Android Studio or Android's platform tools): Deck runs scrcpy's
-  server on the device over adb; the server deletes itself, and the screen setting it changes while
-  shown is put back. A paste goes through the device's clipboard and stays there. Simulators need
-  `brew install facebook/fb/idb-companion`, which the panel offers to copy when a simulator is
-  booted without it; a paste there is typed, as a US keyboard would, up to 1,000 characters.
+  or shows it in any other tab): the phone, emulator or, on macOS, simulator (with idb-companion from
+  Homebrew) or iPhone on a cable the app runs on, live. Click to tap, drag to swipe, scroll with the
+  wheel (drag on a simulator), and type and paste with the screen selected (Option and Cmd editing
+  keys work as on a Mac); Back, Home, Recent apps and Power in its header (Home for a simulator) and,
+  while Claude runs, a camera that adds a screenshot to Claude's prompt. An iPhone needs to be
+  unlocked and to trust this Mac, and is view only (its header has just the camera); the first time,
+  macOS asks to let Deck use the camera, which is how it shows an iPhone's screen. Each project
+  remembers the devices picked in it and opens only on those (the ▾ menu picks another, per tab). It
+  streams only while you can see it. Android devices need adb (Android Studio or Android's platform
+  tools): Deck runs scrcpy's server on the device over adb; the server deletes itself, and the screen
+  setting it changes while shown is put back. A paste goes through the device's clipboard and stays
+  there. Simulators need `brew install facebook/fb/idb-companion`, which the panel offers to copy
+  when a simulator is booted without it; a paste there is typed, as a US keyboard would, up to 1,000
+  characters.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 

@@ -12,12 +12,19 @@ const ipc = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   listeners: new Map<string, (...args: unknown[]) => void>(),
 }))
+/** The URLs shell.openExternal was asked to open. */
+const opened = vi.hoisted(() => [] as string[])
 vi.mock('electron', () => ({
   ipcMain: {
     handle: (channel: string, fn: (...args: unknown[]) => unknown) => ipc.handlers.set(channel, fn),
     on: (channel: string, fn: (...args: unknown[]) => void) => ipc.listeners.set(channel, fn),
   },
   powerMonitor: { on: () => {} },
+  shell: {
+    openExternal: async (url: string) => {
+      opened.push(url)
+    },
+  },
 }))
 
 describe.skipIf(process.platform === 'win32')('registerDeviceIpc on macOS', () => {
@@ -61,6 +68,7 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc on macOS', () =
       home: join(root, 'home'),
       env: { PATH: '', ANDROID_HOME: join(root, 'sdk'), DECK_IDB_COMPANION: join(libexec, 'idb_companion') },
       socketDir: join(root, 's'),
+      iphoneHelper: null,
       saveImage: async () => '',
     })
     devices.attach(win)
@@ -84,4 +92,9 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc on macOS', () =
     ipc.listeners.get(IPC.devicesUnwatch)!({})
     expect(await ipc.handlers.get(IPC.devicesList)!({})).toBeNull()
   }, 20_000)
+
+  it('opens System Settings at Privacy & Security › Camera', () => {
+    ipc.listeners.get(IPC.devicesCameraSettings)!({})
+    expect(opened).toEqual(['x-apple.systempreferences:com.apple.preference.security?Privacy_Camera'])
+  })
 })
