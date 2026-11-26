@@ -140,10 +140,10 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     expect(notifiers()).toHaveLength(1)
     notifiers()[0].fp.stdout.write(LINE)
     await tick()
-    expect(t.pushes()).toEqual([{ devices: [SIM], problem: null, iosProblem: null, pending: ['android'] }])
+    expect(t.pushes()).toEqual([{ devices: [SIM], problem: null, iosProblem: null, pending: ['android'], startable: [], noAvds: false }])
     adb.resolve(null)
     await tick()
-    expect(t.pushes().at(-1)).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    expect(t.pushes().at(-1)).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
     expect(t.pushes()).toHaveLength(2)
   })
 
@@ -162,12 +162,12 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     h.findIdb = () => idb.promise
     t.watch()
     await tick()
-    expect(t.pushes()).toEqual([{ devices: [], problem: 'no-adb', iosProblem: null, pending: ['ios'] }])
+    expect(t.pushes()).toEqual([{ devices: [], problem: 'no-adb', iosProblem: null, pending: ['ios'], startable: [], noAvds: false }])
     idb.resolve(IDB)
     await tick()
     notifiers()[0].fp.stdout.write(LINE)
     await tick()
-    expect(t.pushes().at(-1)).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    expect(t.pushes().at(-1)).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
   })
 
   it('a focus during the first idb look starts nothing more', async () => {
@@ -234,7 +234,7 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     await tick()
     b1.resolve(true) // look 1's stale "booted" must not turn into a stale no-idb
     await tick()
-    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: null, pending: [] })
+    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
   })
 
   it('dispose during a look starts nothing', async () => {
@@ -257,7 +257,7 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     h.booted = async () => true
     t.watch()
     await tick()
-    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: 'no-idb', pending: [] })
+    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: 'no-idb', pending: [], startable: [], noAvds: false })
     h.findIdb = async () => IDB
     t.focus()
     await tick()
@@ -265,10 +265,10 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     // The stale "no-idb" hint stays exactly as it was: no "Looking…" flash — which would drop, say,
     // an Android device already shown in a tab that also wants iOS — for the ~2.5 s the notifier
     // takes to list. Only its own first list replaces it.
-    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: 'no-idb', pending: [] })
+    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: 'no-idb', pending: [], startable: [], noAvds: false })
     notifiers()[0].fp.stdout.write(LINE)
     await tick()
-    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
   })
 
   it('an idb with no sim-video: the hint only while a simulator is booted', async () => {
@@ -296,11 +296,11 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     first.stderr.write('Error: boom\n')
     first.exit(3)
     await tick()
-    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: { error: 'Error: boom' }, pending: [] })
+    expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: { error: 'Error: boom' }, pending: [], startable: [], noAvds: false })
     await vi.waitFor(() => expect(notifiers()).toHaveLength(2), { timeout: 3000 })
     notifiers()[1].fp.stdout.write(LINE)
     await tick()
-    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
   })
 
   it('the notifier failing after it listed: the list stands', async () => {
@@ -314,7 +314,7 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     const pushes = t.pushes().length
     first.exit(3)
     await tick()
-    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
     expect(t.pushes()).toHaveLength(pushes)
   })
 
@@ -322,7 +322,7 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     const t = setup('linux')
     t.watch()
     await tick()
-    expect(t.pushes()).toEqual([{ devices: [], problem: 'no-adb', iosProblem: null, pending: [] }])
+    expect(t.pushes()).toEqual([{ devices: [], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false }])
     t.focus()
     await tick()
     expect(t.pushes()).toHaveLength(1)
@@ -409,10 +409,10 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     expect(iphoneLists().map((c) => [c.cmd, c.args])).toEqual([['/fake/iphone-screen', ['list']]])
     notifiers()[0].fp.stdout.write(LINE)
     await tick()
-    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: ['ios'] })
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: ['ios'], startable: [], noAvds: false })
     iphoneLists()[0].fp.stdout.write(SCREENS)
     await tick()
-    expect(t.list()).toEqual({ devices: [IPHONE, SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    expect(t.list()).toEqual({ devices: [IPHONE, SIM], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
     t.unwatch()
     expect(iphoneLists()[0].fp.killed()).toBe(true)
   })
@@ -426,7 +426,7 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
       iphoneLists()[0].fp.stderr.write('{"error":"capture","message":"CoreMediaIO failed."}\n')
       iphoneLists()[0].fp.exit(1)
       await tick()
-      expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: null, pending: [] })
+      expect(t.list()).toEqual({ devices: [], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
       expect(logged).toHaveBeenCalledWith('devices: the iPhone helper stopped:', '{"error":"capture","message":"CoreMediaIO failed."}')
     } finally {
       logged.mockRestore()
@@ -445,7 +445,7 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
       iphoneLists()[0].fp.exit(1)
       await tick()
       expect(logged).toHaveBeenCalledWith('devices: the iPhone helper stopped:', 'iphone-screen stopped (exit code 1).')
-      expect(t.list()).toEqual({ devices: [IPHONE], problem: 'no-adb', iosProblem: null, pending: [] })
+      expect(t.list()).toEqual({ devices: [IPHONE], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
       expect(t.pushes()).toHaveLength(pushes)
     } finally {
       logged.mockRestore()
@@ -460,12 +460,12 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
     await vi.advanceTimersByTimeAsync(0)
     notifiers()[0].fp.stdout.write(LINE)
     await vi.advanceTimersByTimeAsync(5999)
-    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: ['ios'] })
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: ['ios'], startable: [], noAvds: false })
     await vi.advanceTimersByTimeAsync(1)
-    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    expect(t.list()).toEqual({ devices: [SIM], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
     iphoneLists()[0].fp.stdout.write(SCREENS)
     await vi.advanceTimersByTimeAsync(0)
-    expect(t.list()).toEqual({ devices: [IPHONE, SIM], problem: 'no-adb', iosProblem: null, pending: [] })
+    expect(t.list()).toEqual({ devices: [IPHONE, SIM], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
   })
 
   it('an unwatch ends that wait: the next watch waits its own 6 s', async () => {

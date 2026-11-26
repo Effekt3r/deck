@@ -13,10 +13,13 @@ export type IosState = SourceState<DeviceList['iosProblem']>
 /** iPhones have no problem to show: without the helper, or with one that fails, there are none. */
 export type IphoneState = SourceState<null>
 
+/** The devices the three sources found, before ipc.ts adds what can be started. */
+export type FoundDevices = Omit<DeviceList, 'startable' | 'noAvds'>
+
 /** One list from the three sources, phones first (Android's, as adb's tracker orders them, then
  *  iPhones), then emulators, then simulators. iOS is pending while the simulators or the iPhones
  *  are. */
-export function combineLists(android: AndroidState, ios: IosState, iphones: IphoneState): DeviceList {
+export function combineLists(android: AndroidState, ios: IosState, iphones: IphoneState): FoundDevices {
   const pending: DevicePlatform[] = []
   if (android.pending) pending.push('android')
   if (ios.pending || iphones.pending) pending.push('ios')

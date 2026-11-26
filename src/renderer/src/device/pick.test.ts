@@ -72,7 +72,7 @@ describe('menuOrder', () => {
 })
 
 describe('stillLooking', () => {
-  const list = (pending: ('android' | 'ios')[]): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending })
+  const list = (pending: ('android' | 'ios')[]): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending, startable: [], noAvds: false })
   const android = { android: true, ios: false, picks: [] }
   it('waits for the list, and for the kinds the tab shows', () => {
     expect(stillLooking(null, android, false, undefined)).toBe(true)
@@ -163,7 +163,7 @@ describe('panelView', () => {
 })
 
 describe('panelRules', () => {
-  const list = (over: Partial<DeviceList> = {}): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending: [], ...over })
+  const list = (over: Partial<DeviceList> = {}): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false, ...over })
   const iosApp: DeviceProject = { root: '/ios-app', android: false, ios: true, picks: [] }
   const androidApp: DeviceProject = { root: '/android-app', android: true, ios: false, picks: [] }
   const base = { tabDevice: undefined, tabHidden: undefined, list: null }

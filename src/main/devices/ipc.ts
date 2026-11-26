@@ -4,8 +4,9 @@ import { type BrowserWindow, ipcMain, powerMonitor, shell } from 'electron'
 import { IPC } from '@shared/channels'
 import { quoteImagePath } from '@shared/quote'
 import type { DeviceList, DeviceProject, InsertResult, Platform } from '@shared/types'
-import { adbCandidates, findAdb, runAdb } from './android/adb'
+import { adbCandidates, findAdb, runAdb, sdkRoots } from './android/adb'
 import { IDENTITY_SCRIPT, parseIdentity } from './android/devices'
+import { findEmulator, listAvds, startableEmulators } from './android/emulators'
 import { adbIo, startScrcpy } from './android/scrcpy'
 import { scrcpyServer } from './android/server'
 import { androidSession } from './android/session'
@@ -18,6 +19,7 @@ import { anySimulatorBooted, defaultSimulatorSet, findIdb, idbCandidates, type I
 import { PicksStore } from './picks'
 import { describeProject } from './project'
 import { type AndroidState, combineLists, type IosState, type IphoneState } from './registry'
+import { Starts } from './starts'
 import { DeviceStreams } from './streams'
 
 export interface DeviceIpcOptions {
@@ -94,6 +96,15 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   let disposed = false
   /** A custom device set, for checks (Xcode's own otherwise). */
   const simulatorSet = opts.env.DECK_SIMULATOR_SET || null
+  /** The SDK's emulator, found again at each read of the AVDs; null without one. */
+  let emulator: string | null = null
+  /** The AVDs it listed last; null without an emulator, and until its first answer since watching
+   *  started. */
+  let avds: string[] | null = null
+  /** The read of the AVDs under way, if any: a newer read's token replaces it. */
+  let avdLook: object | null = null
+  /** Emulators and simulators started from the panel, until they're listed. */
+  const starts = new Starts(() => refresh())
 
   const send = (channel: string, ...args: unknown[]) => {
     if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, ...args)
@@ -128,9 +139,45 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   /** The list, once some source has answered (or, with one already shown, once any source's pending
    *  flag changes): until a first list, a tab waits rather than taking "no devices" for an answer.
    *  Without `list !== null`, setting a settled source back to pending while the others are already
-   *  pending would leave the old list showing instead of saying so. */
+   *  pending would leave the old list showing instead of saying so. With it, what can be started:
+   *  the AVDs and shut-down simulators not running, and the starts not listed yet. */
   const update = () => {
-    if (watchers > 0 && (list !== null || !android.pending || !ios.pending || !iphones.pending)) publish(combineLists(android, ios, iphones))
+    if (disposed || watchers === 0 || (list === null && android.pending && ios.pending && iphones.pending)) return
+    const found = combineLists(android, ios, iphones)
+    starts.listed(found.devices)
+    const offered = [...startableEmulators(avds ?? []), ...(simulators?.shutDown() ?? [])]
+    publish({ ...found, startable: starts.merge(offered, found.devices), noAvds: avds !== null && avds.length === 0 })
+  }
+  /** What can be started changed: a list already out is sent again. The first list still waits for
+   *  a device source (update's rule), and has what's known by then. */
+  const refresh = () => {
+    if (list !== null) update()
+  }
+
+  /** The AVDs the SDK's emulator lists: read at each start of watching, when Deck comes to the front
+   *  (one made in Android Studio meanwhile), and after an emulator's start or stop. The newest read
+   *  wins; one that fails keeps what the last one found. */
+  const readAvds = async (mine: number) => {
+    const look = (avdLook = {})
+    try {
+      const found = await findEmulator(sdkRoots(opts.env, opts.platform, opts.home), opts.platform)
+      let failure: unknown = null
+      const names = found
+        ? await listAvds(found).catch((err: unknown) => {
+            failure = err
+            return null
+          })
+        : null
+      // A stale read (watching stopped or restarted, or a newer read began) says nothing.
+      if (mine !== generation || avdLook !== look) return
+      if (failure) console.error('devices: listing the AVDs failed', failure)
+      emulator = found
+      if (!found) avds = null
+      else if (names) avds = names
+      refresh()
+    } finally {
+      if (avdLook === look) avdLook = null
+    }
   }
 
   const watchAndroid = async (mine: number, focus = false) => {
@@ -244,10 +291,15 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     iphones = { pending: iphoneHelper !== null, devices: [], problem: null }
     void watchAndroid(mine)
     void watchSimulators(mine)
+    void readAvds(mine)
     if (iphoneHelper) watchIphones(iphoneHelper)
   }
   const stopWatching = () => {
     generation++
+    // A start under way goes on by itself (an emulator is detached, a simulator's boot runs in
+    // CoreSimulator): the next watch lists it once it's up.
+    starts.clear()
+    avds = null
     tracker?.stop()
     tracker = null
     simulators?.stop()
@@ -357,6 +409,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
         if (disposed || watchers === 0) return
         if (!tracker) void watchAndroid(generation, true)
         if (opts.platform === 'darwin' && !simulators) void watchSimulators(generation, true)
+        // An AVD made in Android Studio meanwhile.
+        if (!avdLook) void readAvds(generation)
       })
       // A locked screen or a sleeping Mac: nobody's watching, and the device may sleep. Waking with
       // a password fires resume, then unlock-screen: stream again only once unlocked.
@@ -376,6 +430,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     },
     dispose() {
       disposed = true
+      starts.clear()
       streams.stopAll()
       generation++
       tracker?.stop()

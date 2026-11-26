@@ -388,6 +388,13 @@ export interface DeviceList {
   /** The platforms still finding their first devices (iOS: the simulators or the iPhones): a tab
    *  waits only for the ones it shows. */
   pending: DevicePlatform[]
+  /** What the panel can start: emulators (the AVDs the SDK's emulator lists), then simulators (the
+   *  shut-down ones; macOS, with idb-companion), each by name, without those running; and those
+   *  starting, or whose start failed. */
+  startable: StartableDevice[]
+  /** The SDK's emulator lists no AVDs: none made yet in Android Studio's Device Manager. False with
+   *  no SDK emulator, and until it has answered. */
+  noAvds: boolean
 }
 
 /** A tab's project, for the device panel. */

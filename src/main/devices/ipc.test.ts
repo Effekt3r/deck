@@ -91,8 +91,8 @@ describe('registerDeviceIpc', () => {
   it("answers null until the first list, says so when adb can't be found, and forgets it when nothing needs devices", async () => {
     expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
     emit(IPC.devicesWatch)
-    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [] }]]))
-    expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [], problem: 'no-adb', iosProblem: null, pending: [] })
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false }]]))
+    expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false })
     const pushes = sent.length
     emit(IPC.devicesUnwatch)
     // Nobody listens any more: nothing is pushed, and the list is unknown again.
@@ -177,7 +177,7 @@ describe('registerDeviceIpc', () => {
 
   it("a reload forgets the watches: devices:watch publishes no-adb again, and the old page's late unwatch does nothing", async () => {
     emit(IPC.devicesWatch)
-    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [] }]]))
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false }]]))
 
     win.webContents.emit('did-start-loading')
     expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
@@ -187,7 +187,7 @@ describe('registerDeviceIpc', () => {
     expect(sent).toHaveLength(pushes)
 
     emit(IPC.devicesWatch) // the new page watches again
-    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [] }]]))
+    await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false }]]))
     emit(IPC.devicesUnwatch) // leave watchers at 0 for later tests
   })
 
@@ -213,7 +213,7 @@ describe('registerDeviceIpc', () => {
         () =>
           expect(sent.at(-1)).toEqual([
             IPC.devicesChanged,
-            [{ devices: [{ id: 'android:FAKE01', kind: 'android', name: 'FAKE01', detail: 'USB', state: 'unauthorized' }], problem: null, iosProblem: null, pending: [] }],
+            [{ devices: [{ id: 'android:FAKE01', kind: 'android', name: 'FAKE01', detail: 'USB', state: 'unauthorized' }], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false }],
           ]),
         { timeout: 3000 },
       )
@@ -247,11 +247,11 @@ describe('registerDeviceIpc', () => {
     chmodSync(join(lateAdbDir, 'adb'), 0o755)
     try {
       emit(IPC.devicesWatch)
-      await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [] }]]))
+      await vi.waitFor(() => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [], problem: 'no-adb', iosProblem: null, pending: [], startable: [], noAvds: false }]]))
       env.PATH = lateAdbDir // the platform tools are installed now
       win.emit('focus')
       await vi.waitFor(
-        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE03', state: 'unauthorized' })], problem: null, iosProblem: null, pending: [] }]]),
+        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE03', state: 'unauthorized' })], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false }]]),
         { timeout: 3000 },
       )
     } finally {
@@ -275,10 +275,10 @@ describe('registerDeviceIpc', () => {
       expect(await call<DeviceList | null>(IPC.devicesList)).toBeNull()
       expect(pushes()).toBe(before)
       await vi.waitFor(
-        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE02', state: 'unauthorized' })], problem: null, iosProblem: null, pending: [] }]]),
+        () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE02', state: 'unauthorized' })], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false }]]),
         { timeout: 3000 },
       )
-      expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [expect.objectContaining({ id: 'android:FAKE02' })], problem: null, iosProblem: null, pending: [] })
+      expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [expect.objectContaining({ id: 'android:FAKE02' })], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false })
     } finally {
       emit(IPC.devicesUnwatch)
       env.PATH = ''
