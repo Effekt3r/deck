@@ -2804,9 +2804,10 @@ In "Device panel", insert this bullet just before `  - **Which projects** (`proj
       list, a stale one says nothing. `noAvds`: the SDK's emulator lists none ("No emulators: make one
       in Android Studio's Device Manager", where emulators fit).
     - **An emulator** starts as `emulator -avd <name>`, detached, `unref()`: it keeps running when
-      Deck quits, in its own window. Its stdout and stderr go to `<temp>/Deck emulators/<instance>/<AVD
-      name>.log` (overwritten at each start; `<instance>` is the same per-userData hash the clipboard's
-      folder uses). A failed start's reason is the log's own first ERROR/PANIC/FATAL line (its own
+      Deck quits, in its own window. Its stdout and stderr go to a new file for each start,
+      `<temp>/Deck emulators/<instance>/<AVD name>-<ms since 1970>.log` (`<instance>` is the same
+      per-userData hash the clipboard's folder uses), and each start first removes that AVD's earlier
+      logs (`<AVD name>-<digits>.log` only). A failed start's reason is the log's own first ERROR/PANIC/FATAL line (its own
       "LEVEL | " prefix stripped, cut to 500 characters), else the exit code or signal's wording ("The
       emulator stopped (exit code 1)."); without a log (the folder or file couldn't be made) the start
       still works, with nothing read back. No `windowsHide`: `detached: true` already starts it with no
@@ -2935,7 +2936,8 @@ go in as 18ah–18ai instead, in the same place (after item 18ag, before "**Rest
      window opens, and the panel shows its screen once Android has started, without "Couldn't show".
      Note it if a console window opens beside the emulator, or the emulator's window doesn't show. If
      it fails instead, its reason should be in
-     `%TEMP%\Deck emulators\<8 characters>\<AVD>.log` (the AVD's own name, `_` not spaces).
+     `%TEMP%\Deck emulators\<8 characters>\<AVD>-<digits>.log` (the AVD's own name, `_` not spaces;
+     the newest file, one per start).
 18ai. ▾ → **Stop <AVD>**: the emulator closes; "disconnected", then the panel stays with its Start
      button first. View → Device Panel on a new tab in the same folder offers that Start button too
      (a fresh tab no longer opens the panel by itself for a stopped device). Start it again from

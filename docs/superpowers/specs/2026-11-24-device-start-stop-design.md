@@ -224,12 +224,22 @@ Found while building and reviewing the panel's rules, past what planning had wor
 - **Stop sets only the tab's own pick, not the project's**, which stays whatever it was — why: so the
   panel keeps its Start button even for a device that was only ever shown without a pick, without
   moving the project's own remembered device out from under other tabs.
-  - Consequence: because `tab ?? project[0]` is the same stopped device for every tab of the project
-    until some tab picks another, a phone connecting afterwards doesn't take the Start view away from
-    *any* tab, the one that stopped it included — `shownHere` only ever decides whether a tab shows
-    the panel by itself, never which device it would show. A fresh tab stays closed rather than
-    popping its Start view open uninvited; View → Device Panel there opens to the same Start view, not
-    to the phone.
+  - Consequence: the device in force is `tab ?? project[0]`. When the stopped device is also the
+    project's latest pick, it's the same in every tab without a pick of its own, so a phone the project
+    never picked, connecting afterwards, takes the Start view from none of them, the one that stopped
+    it included; a fresh tab stays closed rather than popping its Start view open uninvited, and View →
+    Device Panel there opens to the same Start view, not to the phone. When it was only ever shown
+    without a pick, only the tab that stopped it holds it (its own pick); a fresh tab follows the usual
+    rules, the only device that fits included. `shownHere` only decides whether a tab shows the panel
+    by itself, never which device it shows.
+- **A simulator boot that fails stays `booting` for 10 s more** (`failedBootGraceMs`) — why: idb's
+  command can end before the notifier says `Shutdown`; turned ready in between, the simulator would end
+  its start without its error, and could be streamed as it goes down. One that stays up anyway turns
+  ready after the 10 s.
+- **A log file per emulator start** (`<AVD name>-<ms>.log`, each start removing that AVD's earlier
+  ones) — why: an older emulator of the same AVD may still be writing to its file (Stop then Start
+  while it saves its snapshot), and sharing one would give the new start its reason. Likewise a clean
+  exit forgets only its own start.
 - **Microphone, corrected:** Electron's default Info.plist already carries `NSMicrophoneUsageDescription`
   ("This app needs access to the microphone"), and the installed Deck has it (`extendInfo` only
   overrides the camera's string); Deck's entitlements have no `com.apple.security.device.audio-input`.

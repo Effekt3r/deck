@@ -743,12 +743,17 @@ Things that aren't obvious from the code:
       list, a stale one says nothing. `noAvds`: the SDK's emulator lists none ("No emulators: make one
       in Android Studio's Device Manager", where emulators fit).
     - **An emulator** starts as `emulator -avd <name>`, detached, `unref()`: it keeps running when
-      Deck quits, in its own window. Its stdout and stderr go to `<temp>/Deck emulators/<instance>/<AVD
-      name>.log` (overwritten at each start; `<instance>` is the same per-userData hash the clipboard's
-      folder uses). A failed start's reason is the log's own first ERROR/PANIC/FATAL line (its own
-      "LEVEL | " prefix stripped, cut to 500 characters), else the exit code or signal's wording ("The
-      emulator stopped (exit code 1)."); without a log (the folder or file couldn't be made) the start
-      still works, with nothing read back. No `windowsHide`: `detached: true` already starts it with no
+      Deck quits, in its own window. Its stdout and stderr go to a new file for each start,
+      `<temp>/Deck emulators/<instance>/<AVD name>-<ms since 1970>.log` (`<instance>` is the same
+      per-userData hash the clipboard's folder uses), and each start first removes that AVD's earlier
+      logs (`<AVD name>-<digits>.log` only, never another AVD's; on Windows one an emulator still has
+      open stays until a later start). A file per start: an older emulator of the same AVD can still be
+      writing to its own (Stop then Start while it saves its snapshot, Try again after the deadline
+      while it still boots), and a shared file would give the new start its reason. A failed start's
+      reason is the log's own first ERROR/PANIC/FATAL line (its own "LEVEL | " prefix stripped, cut to
+      500 characters), else the exit code or signal's wording ("The emulator stopped (exit code 1).");
+      without a log (the folder or file couldn't be made) the start still works, with nothing read
+      back. No `windowsHide`: `detached: true` already starts it with no
       console window (Microsoft documents `CREATE_NO_WINDOW` as ignored for a detached process), and
       `windowsHide`'s `SW_HIDE` could instead hide the emulator's own window — unverified on Windows;
       note it if a console opens beside the emulator, or its window doesn't show. Once it answers, its
@@ -768,7 +773,12 @@ Things that aren't obvious from the code:
       one still saying so after the tracker's 40 asks (about 2 minutes) is taken as started. A
       simulator Deck boots keeps this flag, even once the notifier already says `Booted`, until idb's
       own boot command ends — each boot carries its own token, so Start → Stop → Start can't let an
-      older boot's end clear a newer one's flag or let its video stream early. The panel says
+      older boot's end clear a newer one's flag or let its video stream early. A boot whose command
+      fails keeps the flag 10 s longer (`failedBootGraceMs`), since the command can end before the
+      notifier says `Shutdown`: turned ready in between, the simulator would end its start without its
+      error and could be streamed as it goes down. So its error shows once it's gone; one that stays up
+      anyway (booted some other way meanwhile) turns ready after the 10 s, its start ended with no
+      error. A boot that works, or one ended by Deck quitting, clears the flag at once. The panel says
       "Starting <name>…" with the spinner and doesn't stream it; the menu says `starting`.
     - **Starts** (`starts.ts`): from the click until the device is listed and not booting, 3 minutes at
       most. A failed command or the deadline keeps its reason (the tool's last line, or "It didn't
@@ -779,30 +789,31 @@ Things that aren't obvious from the code:
       device is gone: while it's still merely listed as `booting`, the device counts as running and the
       failure stays unseen rather than flash for a moment. Stop forgets the start outright, deadline
       included, so a Stop during a boot is never a failed start, and nor is an emulator that exits
-      cleanly (code 0, no signal, nothing wrong in its log) once it had already been listed — that's
-      the user closing its own window. Forgotten too when nothing watches: a start under way carries on
-      by itself.
+      cleanly (code 0, no signal, nothing wrong in its log) while its start is under way: that's the
+      user closing its window mid-boot. A clean exit forgets only its own start (`begin()`'s handle),
+      so an older emulator of the same AVD closing late, after Stop then Start, leaves the newer start
+      alone. Forgotten too when nothing watches: a start under way carries on by itself.
     - **The panel:** the tab's pick (else the project's latest) that's starting or failed to is the
       tab's view: "Starting <name>…", or "Couldn't start <name>" with the reason and Try again — only
-      for the tab's own device in force, never a failure elsewhere in the project's picks. The device
-      in force, stopped, keeps the panel on its Start view against whichever phone is plugged in —
-      shown by hand too, and the same for every tab of the project, since `tab ?? project[0]` is the
-      same device until some tab picks another: only a device the project's picks already reach past
-      it, and that's connected, shows instead. A start picks for the tab and the project, as choosing a
-      connected device does; **Stop picks only for the tab**, leaving the project's own remembered
-      device as it was, so the panel stays on its Start button even for a device that was only ever
-      shown without a pick. Picking a device in a tab, or stopping one there, counts as having shown it
-      in that tab too (`shownHere`), same as actually streaming it live: **the panel opens by itself
-      for a stopped device only in a tab that has shown, picked or stopped it this session** — a fresh
-      tab whose project's latest pick is already stopped stays closed on its own; View → Device Panel
-      there still only offers its Start button rather than opening it outright. `shownHere` decides
-      only whether the panel shows itself, never which device it shows. The empty panel's title is
-      "<name> isn't running" ("Start it below, or choose another device in the ▾ menu.") once other
-      devices are connected, else "No devices connected" — including when nothing at all is connected.
-      The ▾ menu has a Start section (those that fit first; `starting…`, `didn't start`) and, for an
-      emulator or simulator on screen, Stop, with no confirmation; the keyboard moves over all of it.
-      An empty panel offers up to 3 Start buttons, then "More in the ▾ menu". A refused start or a
-      failed stop says so under the header.
+      for the tab's own device in force, never a failure elsewhere in the project's picks. The device in
+      force (`tab ?? project[0]`), stopped, keeps the panel on its Start view against a phone the
+      project never picked, shown by hand too; only a connected device among the project's picks shows
+      instead. So a stopped device that's the project's latest pick holds every tab without a pick of
+      its own, and one only the tab picked (by Stop) holds just that tab. A start picks for the tab and
+      the project, as choosing a connected device does; **Stop picks only for the tab**, leaving the
+      project's own remembered device as it was, so the panel stays on its Start button even for a
+      device that was only ever shown without a pick. Picking a device in a tab, or stopping one there,
+      counts as having shown it in that tab too (`shownHere`), same as actually streaming it live: **the
+      panel opens by itself for a stopped device only in a tab that has shown, picked or stopped it this
+      session** — a fresh tab whose project's latest pick is already stopped stays closed; View → Device
+      Panel opens it there on that device's Start button. `shownHere` decides only whether the panel
+      shows itself, never which device it shows. The empty panel's title is "<name> isn't running"
+      ("Start it below, or choose another device in the ▾ menu.") once other devices are connected, else
+      "No devices connected" — including when nothing at all is connected. The ▾ menu has a Start
+      section (those that fit first; `starting…`, `didn't start`) and, for an emulator or simulator on
+      screen, Stop, with no confirmation; the keyboard moves over all of it. An empty panel offers up to
+      3 Start buttons, then "More in the ▾ menu". A refused start or a failed stop says so under the
+      header.
     - **Unit tests:** `sdkRoots`; AVD names, finding and running the emulator and `emu kill` (shell
       stand-ins); the log file and its failure line, `startAvd` without one; `--boot`/`--shutdown`
       arguments, the failure's line, abort and timeout; the shut-down simulators; `booting` in
@@ -810,7 +821,11 @@ Things that aren't obvious from the code:
       `registerDeviceIpc` with stand-ins for the SDK's adb and emulator and for idb_companion
       (`ipc.start.test.ts`, skipped on Windows), including a boot's own token surviving a Stop and a
       restart, and a boot that fails after the notifier said Booted showing its error only once the
-      device is gone; `pick.ts`'s starting view, `startButtons` and `startPick`; the menu's entries.
+      device is gone, whichever ends first, its command or the notifier's `Booted` (and one that stays
+      up turning ready after the grace); each emulator start's own log, and the cleanup of that AVD's
+      older ones; an older start's clean exit leaving a newer one alone; dispose mid-boot and unwatch
+      mid-start (`ipc.watch.test.ts`); `pick.ts`'s starting view, `startButtons` and `startPick`; the
+      menu's entries.
     - **Not yet checked:** an emulator started from Deck, and whether macOS prompts for its microphone
       use, in whose name. Electron's default Info.plist already has `NSMicrophoneUsageDescription`
       ("This app needs access to the microphone"), which the installed Deck carries unchanged

@@ -187,7 +187,8 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
      window opens, and the panel shows its screen once Android has started, without "Couldn't show".
      Note it if a console window opens beside the emulator, or the emulator's window doesn't show. If
      it fails instead, its reason should be in
-     `%TEMP%\Deck emulators\<8 characters>\<AVD>.log` (the AVD's own name, `_` not spaces).
+     `%TEMP%\Deck emulators\<8 characters>\<AVD>-<digits>.log` (the AVD's own name, `_` not spaces;
+     the newest file, one per start).
 18ai. ▾ → **Stop <AVD>**: the emulator closes; "disconnected", then the panel stays with its Start
      button first. View → Device Panel on a new tab in the same folder offers that Start button too
      (a fresh tab no longer opens the panel by itself for a stopped device). Start it again from
