@@ -241,4 +241,13 @@ describe('mergeDevices', () => {
     const namedMoto = mergeDevices([{ entry: entry('BBB222 device usb:1 transport_id:2\n'), identity: moto }])
     expect(namedMoto.devices[0].name).toBe('motorola edge')
   })
+
+  it('sorts within a kind numerically, so "Pixel 9" comes before "Pixel 10", as the Start section does', () => {
+    const pixel10 = 'emulator-5556          device product:sdk_gphone64_arm64 model:sdk_gphone64_arm64 device:emu64a transport_id:30146\n'
+    const { devices } = mergeDevices([
+      { entry: entry(pixel10), identity: { ...emu, serialNo: 'EMULATOR37X2X12X1', avd: 'Pixel_10' } },
+      { entry: entry(EMULATOR), identity: emu }, // Pixel_9
+    ])
+    expect(devices.map((d) => d.name)).toEqual(['Pixel 9', 'Pixel 10'])
+  })
 })

@@ -70,19 +70,19 @@ describe.skipIf(process.platform === 'win32')('running the emulator', () => {
     await expect(listAvds(script('list-slow', 'emulator', 'exec sleep 5'), 200)).rejects.toMatchObject({ killed: true, signal: 'SIGTERM' })
   })
 
-  it('startAvd starts the AVD, and hears when the emulator ends', async () => {
+  it('startAvd starts the AVD, and hears when the emulator ends cleanly (a plain exit, code 0)', async () => {
     const emulator = script('start', 'emulator', 'echo "$@" > "$DIR/args"\nexec sleep 0.3')
     const ended = vi.fn()
     await startAvd(emulator, 'Pixel_9', ended)
     expect(ended).not.toHaveBeenCalled() // it runs for 0.3 s
-    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped.'), { timeout: 3000 })
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped.', { clean: true }), { timeout: 3000 })
     expect(argsOf('start')).toBe('-avd Pixel_9\n')
   })
 
-  it('startAvd says how an emulator that fails ended', async () => {
+  it('startAvd says how an emulator that fails ended, and that it was not clean', async () => {
     const ended = vi.fn()
     await startAvd(script('start-fail', 'emulator', 'exit 1'), 'Pixel_9', ended)
-    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).'), { timeout: 3000 })
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).', { clean: false }), { timeout: 3000 })
   })
 
   it("startAvd rejects an emulator that can't be started, and a name that isn't an AVD's", async () => {
@@ -109,22 +109,46 @@ describe.skipIf(process.platform === 'win32')('running the emulator', () => {
     ].join('\n'))
     const ended = vi.fn()
     await startAvd(emulator, 'Pixel_9', ended, join(root, 'logs-fail'))
-    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('Unknown AVD name [X], use -list-avds to see valid list.'), { timeout: 3000 })
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('Unknown AVD name [X], use -list-avds to see valid list.', { clean: false }), { timeout: 3000 })
     expect(argsOf('start-log-fail')).toBe('-avd Pixel_9\n')
   })
 
   it('startAvd falls back to the exit-code wording when the log has no failure line', async () => {
     const ended = vi.fn()
     await startAvd(script('start-log-silent', 'emulator', 'exit 1'), 'Pixel_9', ended, join(root, 'logs-silent'))
-    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).'), { timeout: 3000 })
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).', { clean: false }), { timeout: 3000 })
   })
 
   it("startAvd still starts when logDir can't be made (a file sits where a folder in it should be)", async () => {
     const notADir = script('not-a-dir', 'file', '') // root/not-a-dir/file: a file, not a folder
     const ended = vi.fn()
     await startAvd(script('start-bad-logdir', 'emulator', 'exit 1'), 'Pixel_9', ended, join(notADir, 'nested'))
-    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).'), { timeout: 3000 })
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).', { clean: false }), { timeout: 3000 })
   })
+
+  it("a code-0 exit with an ERROR line in its log (the AVD broke right as it closed) is not 'clean'", async () => {
+    const emulator = script('start-log-weird', 'emulator', [
+      "echo 'ERROR        | A problem, even though the process itself exited 0.'",
+      'exit 0',
+    ].join('\n'))
+    const ended = vi.fn()
+    await startAvd(emulator, 'Pixel_9', ended, join(root, 'logs-weird'))
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('A problem, even though the process itself exited 0.', { clean: false }), { timeout: 3000 })
+  })
+
+  it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
+    "falls back to the exit-code wording, not an earlier start's stale log, when the log can't be opened for writing",
+    async () => {
+      const dir = join(root, 'logs-stale')
+      mkdirSync(dir, { recursive: true })
+      const logFile = join(dir, 'Pixel_9.log')
+      writeFileSync(logFile, 'ERROR        | A reason from an earlier start\n')
+      chmodSync(logFile, 0o444) // read-only: this start's own open for writing fails
+      const ended = vi.fn()
+      await startAvd(script('start-stale-log', 'emulator', 'exit 1'), 'Pixel_9', ended, dir)
+      await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).', { clean: false }), { timeout: 3000 })
+    },
+  )
 
   it('killEmulator tells the emulator to close through adb', async () => {
     const adb = script('kill', 'adb', `echo "$@" > "$DIR/args"\necho 'OK: killing emulator, bye bye'`)

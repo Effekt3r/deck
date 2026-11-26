@@ -205,9 +205,9 @@ export class AndroidTracker {
         asked.identity = identity
         // Still starting up: Android's settings, and with them the phone's own name, aren't there yet.
         // Counted before publishing, so the answer that uses up the tries is published as started.
-        const stillBooting = !identity.booted && ++asked.boots < BOOT_TRIES
+        const askAgain = !identity.booted && ++asked.boots < BOOT_TRIES
         this.publish(null)
-        if (stillBooting) this.askLater(key, asked, this.retry.booting)
+        if (askAgain) this.askLater(key, asked, this.retry.booting)
       },
       () => {
         if (this.asked.get(key) !== asked) return

@@ -105,4 +105,50 @@ describe('Starts', () => {
     expect(changed).not.toHaveBeenCalled()
     expect(starts.merge([], [])).toEqual([])
   })
+
+  it('a start whose device is listed as booting then fails keeps its error once the device has gone', () => {
+    // ipc.ts's update() excludes a booting device from listed(), so its start stays here while the
+    // device is merely visible (booting): merge() alone hides it, the same as a running device would.
+    const changed = vi.fn()
+    const starts = new Starts(changed)
+    const fail = starts.begin(iphone)!
+    expect(starts.merge([], [running(iphone)])).toEqual([])
+    fail('boom')
+    expect(changed).toHaveBeenCalledTimes(1)
+    // Once it's gone (never passed to listed()), the error stands.
+    expect(starts.merge([], [])).toEqual([{ ...iphone, error: 'boom' }])
+  })
+
+  it('forget(id) clears a start outright: no error, even if its command fails after', () => {
+    const changed = vi.fn()
+    const starts = new Starts(changed)
+    const fail = starts.begin(pixel)!
+    starts.forget(pixel.id)
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(starts.merge([pixel], [])).toEqual([pixel]) // plain again: not starting, no error
+    fail('too late')
+    expect(changed).toHaveBeenCalledTimes(1) // the forgotten start's late failure changes nothing
+    expect(starts.merge([pixel], [])).toEqual([pixel])
+  })
+
+  it('forget() does nothing, and does not call changed(), without a start to forget', () => {
+    const changed = vi.fn()
+    const starts = new Starts(changed)
+    starts.forget('emulator:Nothing')
+    expect(changed).not.toHaveBeenCalled()
+    starts.begin(pixel)
+    starts.listed([running(pixel)]) // already ended by listed()
+    starts.forget(pixel.id)
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it("forget() also clears the start's deadline: it never fires for a forgotten start", () => {
+    const changed = vi.fn()
+    const starts = new Starts(changed)
+    starts.begin(pixel)
+    starts.forget(pixel.id)
+    expect(changed).toHaveBeenCalledTimes(1) // forget() itself
+    vi.advanceTimersByTime(START_DEADLINE_MS)
+    expect(changed).toHaveBeenCalledTimes(1) // the deadline never fires for it
+  })
 })

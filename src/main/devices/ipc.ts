@@ -110,10 +110,15 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   let avdLook: object | null = null
   /** Emulators and simulators started from the panel, until they're listed. */
   const starts = new Starts(() => refresh())
-  /** Simulators Deck is booting. The notifier says "Booted" as soon as a boot begins (19 s before it
-   *  had finished, on a first boot), so each is listed as booting until idb's boot command ends. */
-  const booting = new Set<string>()
-  /** Ends the boots and shutdowns under way when Deck quits. */
+  /** Simulators Deck is booting, each with its own boot's token. The notifier says "Booted" as soon as
+   *  a boot begins (19 s before it had finished, on a first boot), so each is listed as booting until
+   *  idb's boot command ends. A token (not just the id) tells two overlapping boots of the same
+   *  simulator apart (Start, Stop, Start again while the first `--boot` still runs): only the boot
+   *  whose own token is still current may clear the flag, so an older boot ending can't mark a newer
+   *  one's simulator ready while it's still starting. */
+  const booting = new Map<string, object>()
+  /** Ends idb's boot/shutdown commands under way when Deck quits; the boot itself completes anyway
+   *  (measured), since it runs in CoreSimulator, not in the command Deck ran. */
   const quitting = new AbortController()
 
   const send = (channel: string, ...args: unknown[]) => {
@@ -155,7 +160,11 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     if (disposed || watchers === 0 || (list === null && android.pending && ios.pending && iphones.pending)) return
     const simulatorDevices = ios.devices.map((d) => (booting.has(d.id) ? { ...d, state: 'booting' as const } : d))
     const found = combineLists(android, { ...ios, devices: simulatorDevices }, iphones)
-    starts.listed(found.devices)
+    // Ends a start only once its device is listed and no longer booting: a booting device (a
+    // simulator Deck is booting; an emulator mid cold-boot) can still fail, or close cleanly, before
+    // it's really up, and that must still reach its start (via fail() or forget(), not lost because
+    // listed() already ended it the moment it was merely visible).
+    starts.listed(found.devices.filter((d) => d.state !== 'booting'))
     const offered = [...startableEmulators(avds ?? []), ...(simulators?.shutDown() ?? [])]
     publish({ ...found, startable: starts.merge(offered, found.devices), noAvds: avds !== null && avds.length === 0 })
   }
@@ -169,6 +178,11 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
    *  (one made in Android Studio meanwhile), and after an emulator's start or stop. The newest read
    *  wins; one that fails keeps what the last one found. */
   const readAvds = async (mine: number) => {
+    // A start or stop's own re-read shouldn't outlive the watch it began in, or Deck quitting: its
+    // caller captures `mine` when it's clicked, so this can still be stale by its own generation check
+    // below once the read itself settles, but there's no point even starting it once nothing's
+    // watching any more or Deck's on its way out.
+    if (disposed || watchers === 0) return
     const look = (avdLook = {})
     try {
       const found = await findEmulator(sdkRoots(opts.env, opts.platform, opts.home), opts.platform)
@@ -368,8 +382,10 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   })
   ipcMain.on(IPC.devicesView, (_e, id: unknown) => {
     // A stale id (the renderer's own state, or a device that's since disconnected) would only ever
-    // fail to start: skip the doomed connecting → retrying → error cycle for it.
-    if (typeof id === 'string' && id && list?.devices.some((d) => d.id === id)) streams.view(id)
+    // fail to start: skip the doomed connecting → retrying → error cycle for it. Likewise a device
+    // still booting: there's nothing to stream yet, and the panel's own pick (which drives this) holds
+    // off until it's ready.
+    if (typeof id === 'string' && id && list?.devices.some((d) => d.id === id && d.state !== 'booting')) streams.view(id)
   })
   ipcMain.on(IPC.devicesUnview, (_e, id: unknown) => {
     if (typeof id === 'string') streams.unview(id)
@@ -390,17 +406,32 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   // ids come from adb's, the emulator's and idb's own lists, checked where they're read.
   ipcMain.handle(IPC.devicesStart, (_e, id: unknown): DeviceActionResult => {
     if (!list) return { error: "Deck isn't looking for devices." }
-    // Started some other way meanwhile: the pick shows it.
-    if (list.devices.some((d) => d.id === id)) return null
+    // Started some other way meanwhile: the pick shows it. Only an emulator or a simulator is ever
+    // started from here, so any other kind already listed (a phone, an iPhone) isn't "already
+    // running" from this call's point of view either — it gets the same answer an id Deck doesn't
+    // know at all does.
+    const already = list.devices.find((d) => d.id === id)
+    if (already) return already.kind === 'emulator' || already.kind === 'simulator' ? null : { error: 'Deck no longer sees it.' }
     const device = list.startable.find((d) => d.id === id)
     if (!device) return { error: 'Deck no longer sees it.' }
     const fail = starts.begin(device)
     if (!fail) return null // already starting
     refresh()
+    // Captured now (the click), not read lazily once this start's own async work settles: a watch
+    // that stops and starts again while it's in flight must still look stale to readAvds below.
+    const mine = generation
     const failWith = (err: unknown) => fail(err instanceof Error ? err.message : String(err))
     if (device.kind === 'emulator') {
       if (!emulator) fail("Deck can't find Android's emulator.")
-      else startAvd(emulator, device.id.slice('emulator:'.length), fail, opts.emulatorLogDir ?? null).then(() => void readAvds(generation), failWith)
+      else {
+        const ended = (how: string, info: { clean: boolean }) => {
+          // A clean exit (code 0, nothing wrong in its log) once the device was up is the user
+          // closing its own window, not a failed start: forget it rather than show an error.
+          if (info.clean) starts.forget(device.id)
+          else fail(how)
+        }
+        startAvd(emulator, device.id.slice('emulator:'.length), ended, opts.emulatorLogDir ?? null).then(() => void readAvds(mine), failWith)
+      }
       return null
     }
     const udid = udidOf(device.id)
@@ -408,13 +439,16 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       fail("Deck can't find idb-companion.")
       return null
     }
-    booting.add(device.id)
+    const boot = {}
+    booting.set(device.id, boot)
     bootSimulator(idb.companion, udid, { set: simulatorSet, signal: quitting.signal })
       .catch((err: unknown) => {
         if (!quitting.signal.aborted) failWith(err)
       })
       .finally(() => {
-        booting.delete(device.id)
+        // Only if this is still the current boot: an older boot ending (Start, Stop, Start again
+        // while the first `--boot` still runs) must not clear the newer one's flag.
+        if (booting.get(device.id) === boot) booting.delete(device.id)
         refresh()
       })
     return null
@@ -422,12 +456,18 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   ipcMain.handle(IPC.devicesStop, async (_e, id: unknown): Promise<DeviceActionResult> => {
     const device = typeof id === 'string' ? list?.devices.find((d) => d.id === id) : undefined
     if (!device || (device.kind !== 'emulator' && device.kind !== 'simulator')) return { error: 'Only a running emulator or simulator can be stopped.' }
+    // A Stop during a boot (a simulator still booting; an emulator mid cold-boot) ends its start too:
+    // its command's own outcome, even a late failure once this has already answered, must never show
+    // as a failed start once the user asked to stop it (Starts itself ignores a fail() for a start it
+    // no longer has, so a stray one after this changes nothing).
+    const mine = generation // captured now, for the same reason devices:start captures it
+    starts.forget(device.id)
     try {
       if (device.kind === 'emulator') {
         const serial = tracker?.serialFor(device.id)
         if (!adb || !serial) return { error: "adb doesn't list it." }
         await killEmulator(adb, serial)
-        void readAvds(generation)
+        void readAvds(mine)
         return null
       }
       const udid = udidOf(device.id)

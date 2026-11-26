@@ -57,6 +57,17 @@ export class Starts {
     }
   }
 
+  /** Forgets `id`'s start outright, deadline included: it wasn't a failure (Stop was clicked, or it
+   *  ended cleanly on its own), so its command's own outcome, even a late one, must never show as an
+   *  error. A silent no-op without a start to forget (already ended, or never began). */
+  forget(id: string): void {
+    const start = this.starts.get(id)
+    if (!start) return
+    if (start.timer) clearTimeout(start.timer)
+    this.starts.delete(id)
+    this.changed()
+  }
+
   /** What the panel can start: `offered` (the AVDs, the shut-down simulators) less the devices
    *  running, each with its start's state, and the starts no longer offered (a simulator booting);
    *  emulators first, each kind by name. Stands on its own: a start whose device is among `devices`

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/channels'
-import type { DeviceList, DeviceProject, InsertResult } from '@shared/types'
+import type { DeviceActionResult, DeviceList, DeviceProject, InsertResult } from '@shared/types'
 import type { BrowserWindow } from 'electron'
 import { commit, makeRepo, removeRepos } from '../git/test-repo'
 import { registerDeviceIpc } from './ipc'
@@ -254,6 +254,31 @@ describe('registerDeviceIpc', () => {
         () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE03', state: 'unauthorized' })], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false }]]),
         { timeout: 3000 },
       )
+    } finally {
+      emit(IPC.devicesUnwatch)
+      env.PATH = ''
+    }
+  })
+
+  it.skipIf(process.platform === 'win32')('devices:start refuses a phone (or an iPhone) already listed, the same way as an unknown id', async () => {
+    const phoneAdbDir = join(root, 'phone-adb')
+    mkdirSync(phoneAdbDir, { recursive: true })
+    writeFileSync(join(phoneAdbDir, 'adb'), ['#!/bin/sh', 'if [ "$1" = "track-devices" ]; then', "  printf '0013FAKE09\\tunauthorized'", '  exec sleep 60', 'fi', 'exit 0', ''].join('\n'))
+    chmodSync(join(phoneAdbDir, 'adb'), 0o755)
+    env.PATH = phoneAdbDir
+    try {
+      emit(IPC.devicesWatch)
+      await vi.waitFor(() =>
+        expect(sent.at(-1)).toEqual([
+          IPC.devicesChanged,
+          [{ devices: [{ id: 'android:FAKE09', kind: 'android', name: 'FAKE09', detail: 'USB', state: 'unauthorized' }], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false }],
+        ]),
+        { timeout: 3000 },
+      )
+      // A phone (kind: 'android', not emulator/simulator) already listed can't be "started": the same
+      // "Deck no longer sees it" an id it doesn't know at all gets, not the null an emulator or
+      // simulator already running answers (the pick already shows it there instead).
+      expect(await call<DeviceActionResult>(IPC.devicesStart, 'android:FAKE09')).toEqual({ error: 'Deck no longer sees it.' })
     } finally {
       emit(IPC.devicesUnwatch)
       env.PATH = ''

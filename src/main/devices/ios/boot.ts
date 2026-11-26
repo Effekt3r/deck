@@ -16,7 +16,7 @@ const STAMP = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?[+-]\d{4} /
 /** A log line that reads as a failure, without its timestamp; null for any other. */
 const failureLine = (line: string): string | null => asFailure(line.replace(STAMP, '')) || null
 
-/** A simulator's UDID, as Xcode and idb_companion print it: hex, in four dashed groups. Checked
+/** A simulator's UDID, as Xcode and idb_companion print it: hex, in five dashed groups. Checked
  *  before it reaches idb_companion's argv, as startAvd checks an AVD's name and killEmulator an
  *  emulator's serial. */
 const UDID = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/

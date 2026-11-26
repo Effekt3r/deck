@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/channels'
-import type { DeviceList } from '@shared/types'
+import type { DeviceActionResult, DeviceList } from '@shared/types'
 import type { BrowserWindow } from 'electron'
 import { CAMERA_DENIED, IphoneTracker } from './ios/iphone'
 import { SimulatorTracker } from './ios/simulators'
@@ -119,6 +119,7 @@ function setup(platform: 'darwin' | 'linux' = 'darwin', iphoneHelper: string | n
     focus: () => win.emit('focus'),
     reload: () => webContents.emit('did-start-loading'),
     list: () => ipc.handlers.get(IPC.devicesList)!({}) as DeviceList | null,
+    start: (id: string) => Promise.resolve(ipc.handlers.get(IPC.devicesStart)!({}, id)) as Promise<DeviceActionResult>,
     view: (id: string) => ipc.listeners.get(IPC.devicesView)!({}, id),
     unview: (id: string) => ipc.listeners.get(IPC.devicesUnview)!({}, id),
     streamEvents: (id: string) => sent.filter((s) => s[0] === IPC.devicesStream && s[1] === id).map((s) => s[2]),
@@ -399,6 +400,39 @@ describe('registerDeviceIpc: the watch state machine (macOS unless noted)', () =
       t.unview('simulator:FAKE-UDID')
       spy.mockRestore()
     }
+  })
+
+  it('devices:view ignores a device still booting, as it ignores one not listed at all', async () => {
+    // A UDID bootSimulator accepts (its own shape check), unlike the FAKE-UDID the view-only fixtures
+    // above use.
+    const udid = 'FACADE00-0000-0000-0000-0000FACEFACE'
+    const booting = { id: `simulator:${udid}`, kind: 'simulator' as const, name: 'Booting Sim', detail: 'Simulator · iOS 27.0', state: 'ready' as const }
+    const t = setup()
+    h.findIdb = async () => IDB
+    t.watch()
+    await tick()
+    // Shut down at first, so it's offered (startable), not listed.
+    notifiers()[0].fp.stdout.write(`[{"udid":"${udid}","name":"Booting Sim","state":"Shutdown","type":"Simulator","os_version":"iOS 27.0"}]\n`)
+    await tick()
+    expect(t.list()?.startable).toContainEqual({ id: `simulator:${udid}`, kind: 'simulator', name: 'Booting Sim', detail: 'Simulator · iOS 27.0' })
+
+    expect(await t.start(`simulator:${udid}`)).toBeNull()
+    await tick()
+    const boot = spawned.calls.findIndex((c) => c.args[0] === '--boot')
+    expect(boot).toBeGreaterThanOrEqual(0)
+
+    // The notifier says Booted on its own (idb's real timing), independently of the --boot command,
+    // which is still running (held here, by never exiting its fake process).
+    notifiers()[0].fp.stdout.write(`[{"udid":"${udid}","name":"Booting Sim","state":"Booted","type":"Simulator","os_version":"iOS 27.0"}]\n`)
+    await tick()
+    expect(t.list()?.devices).toEqual([{ ...booting, state: 'booting' }])
+
+    t.view(`simulator:${udid}`)
+    await tick()
+    expect(t.streamEvents(`simulator:${udid}`)).toEqual([])
+
+    procAt(boot).exit(0) // let the held boot settle, so afterEach's dispose has nothing left running
+    await tick()
   })
 
   it('iPhones join the list from the helper; iOS waits for the simulators and the iPhones', async () => {

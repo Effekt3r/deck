@@ -97,16 +97,18 @@ function logFailure(file: string): string | null {
 
 /** Starts AVD `name` in the emulator's own window, as Android Studio does: detached, so it keeps
  *  running when Deck quits. Resolves once it runs; rejects when it can't be started (ENOENT, EACCES).
- *  `ended` hears if it ends while Deck runs, and how, so a start that dies early (a broken AVD, a
- *  missing system image) needn't wait out its 3 minutes: with `logDir`, the emulator's stdout and
- *  stderr go to `<logDir>/<name>.log` (overwritten each start) rather than a pipe, since a file, unlike
- *  a pipe, can't ever break the emulator once Deck quits; `ended`'s reason then comes from the log's
- *  own first ERROR/PANIC/FATAL line, read back once it exits. Without `logDir`, or when it can't be
- *  made or the file can't be opened, the start still runs, with nothing read from it, as before. */
+ *  `ended` hears if it ends while Deck runs, how, and whether that was clean (code 0, no signal, no
+ *  ERROR/PANIC/FATAL log line): a start that dies early (a broken AVD, a missing system image) needn't
+ *  wait out its 3 minutes, and a clean exit after the device was up is the user closing its window, not
+ *  a failure. With `logDir`, the emulator's stdout and stderr go to `<logDir>/<name>.log` (overwritten
+ *  each start) rather than a pipe, since a file, unlike a pipe, can't ever break the emulator once Deck
+ *  quits; `ended`'s reason then comes from the log's own first ERROR/PANIC/FATAL line, read back once
+ *  it exits. Without `logDir`, or when it can't be made or the file can't be opened, the start still
+ *  runs, with nothing read from it, as before. */
 export function startAvd(
   emulator: string,
   name: string,
-  ended: (how: string) => void = () => {},
+  ended: (how: string, info: { clean: boolean }) => void = () => {},
   logDir: string | null = null,
 ): Promise<void> {
   if (!isAvdName(name)) return Promise.reject(new Error(`"${name}" isn't an AVD's name.`))
@@ -118,7 +120,11 @@ export function startAvd(
       mkdirSync(logDir, { recursive: true })
       fd = openSync(logFile, 'w')
     } catch {
-      fd = null // the start must still work: stdio falls back to 'ignore' below
+      // The start must still work, with nothing read from it (stdio falls back to 'ignore' below):
+      // without a file of its own, reading back the one from an earlier start would report its reason
+      // instead of this one's.
+      logFile = null
+      fd = null
     }
   }
   return new Promise((resolve, reject) => {
@@ -140,7 +146,10 @@ export function startAvd(
       child.unref()
       resolve()
     })
-    child.once('exit', (code, signal) => ended((logFile && logFailure(logFile)) || endedAs(code, signal)))
+    child.once('exit', (code, signal) => {
+      const failure = (logFile && logFailure(logFile)) || null
+      ended(failure || endedAs(code, signal), { clean: failure === null && code === 0 && signal === null })
+    })
   })
 }
 

@@ -38,8 +38,8 @@ describe.skipIf(process.platform === 'win32')('bootSimulator and shutdownSimulat
   })
 
   it('rejects with its last line that reads as a failure, without the timestamp', async () => {
-    // As idb-companion 1.6.1 said it, booting a UDID its set doesn't have (2026-11-25), its UDID
-    // shortened here to keep the fixture readable (boot.ts only checks the shape of what it's given).
+    // As idb-companion 1.6.1 said it, booting a UDID its set doesn't have (2026-11-25); boot.ts only
+    // checks the shape of what it's given, not whether the UDID is real.
     const file = idb('fail', [
       "echo '2026-11-25 15:22:03.140+0200 Booting 00000000-0000-0000-0000-000000000000' >&2",
       "echo '2026-11-25 15:22:03.218+0200 00000000-0000-0000-0000-000000000000 could not be resolved to any target in [FBSimulatorControl.SimulatorSet]' >&2",
@@ -88,5 +88,9 @@ describe.skipIf(process.platform === 'win32')('bootSimulator and shutdownSimulat
     writeFileSync(file, 'not a script\n')
     chmodSync(file, 0o755)
     await expect(bootSimulator(file, 'DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF', { set: null })).rejects.toThrow('spawn ENOEXEC')
+  })
+
+  it("rejects asynchronously (idb_companion's own 'error' event) when its path doesn't exist (ENOENT)", async () => {
+    await expect(bootSimulator(join(root, 'missing', 'idb_companion'), 'DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF', { set: null })).rejects.toThrow('ENOENT')
   })
 })
