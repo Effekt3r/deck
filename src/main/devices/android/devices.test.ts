@@ -208,6 +208,15 @@ describe('mergeDevices', () => {
     expect(mergeDevices([{ entry: entry(C66), identity: null }]).devices[0].state).toBe('ready')
   })
 
+  it('takes booting from the connection that streams (best), not the first with an answer in adb order', () => {
+    // A stale Wi-Fi answer (already booted) listed before a fresh, still-booting USB answer: the
+    // stream reaches the device over USB (best, ranked above an offline connection), so booting
+    // must come from that USB identity, not whichever connection happened to answer first.
+    const stale: Seen = { entry: { ...entry(S25_WIFI), state: 'offline' }, identity: { ...s25, booted: true } }
+    const fresh: Seen = { entry: entry(S25_USB), identity: { ...s25, booted: false } }
+    expect(mergeDevices([stale, fresh]).devices[0].state).toBe('booting')
+  })
+
   it('lists nothing for an emulator still starting (offline, unanswered)', () => {
     expect(mergeDevices([{ entry: entry('emulator-5554 offline transport_id:9\n'), identity: null }]).devices).toEqual([])
   })

@@ -99,6 +99,22 @@ describe('AndroidTracker', () => {
     tracker.stop()
   })
 
+  it('takes a device that said it was still starting, then stopped answering, as started once its re-asks run out', async () => {
+    let call = 0
+    const identify = vi.fn(async (): Promise<Identity> => {
+      call += 1
+      if (call === 1) return { ...emu, booted: false }
+      throw new Error('closed')
+    })
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(EMULATOR))
+    await vi.waitFor(() => expect(published.at(-1)?.devices.map((d) => d.state)).toEqual(['ready']))
+    // One answer (booting), then three failed re-asks: nothing asks a fourth time.
+    expect(identify).toHaveBeenCalledTimes(4)
+    tracker.stop()
+  })
+
   it("starts again after adb's server goes away, waiting longer each time, and says why", () => {
     vi.useFakeTimers()
     const { tracker, children, published } = setup(async () => c66)

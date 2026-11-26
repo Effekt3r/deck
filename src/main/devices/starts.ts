@@ -4,6 +4,12 @@ import type { DeviceInfo, StartableDevice } from '@shared/types'
  *  emulator's cold boot can be over a minute. */
 export const START_DEADLINE_MS = 3 * 60_000
 
+/** "1 minute", "3 minutes": whole minutes, singular only for exactly one. */
+function minutesText(ms: number): string {
+  const minutes = Math.round(ms / 60_000)
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`
+}
+
 interface Start {
   /** As it was offered when started. */
   device: StartableDevice
@@ -37,7 +43,7 @@ export class Starts {
       start.error = why
       this.changed()
     }
-    start.timer = setTimeout(() => fail(`It didn't start within ${Math.round(this.deadlineMs / 60_000)} minutes.`), this.deadlineMs)
+    start.timer = setTimeout(() => fail(`It didn't start within ${minutesText(this.deadlineMs)}.`), this.deadlineMs)
     return fail
   }
 
@@ -53,17 +59,20 @@ export class Starts {
 
   /** What the panel can start: `offered` (the AVDs, the shut-down simulators) less the devices
    *  running, each with its start's state, and the starts no longer offered (a simulator booting);
-   *  emulators first, each kind by name. */
+   *  emulators first, each kind by name. Stands on its own: a start whose device is among `devices`
+   *  is skipped here too, so a running device never comes back as starting even without a prior
+   *  `listed()` call for it. */
   merge(offered: readonly StartableDevice[], devices: readonly DeviceInfo[]): StartableDevice[] {
     const running = new Set(devices.map((d) => d.id))
     const items = new Map<string, StartableDevice>()
     for (const device of offered) if (!running.has(device.id)) items.set(device.id, device)
     for (const [id, start] of this.starts) {
+      if (running.has(id)) continue
       const base = items.get(id) ?? start.device
       items.set(id, start.error === null ? { ...base, starting: true } : { ...base, error: start.error })
     }
     return [...items.values()].sort((a, b) =>
-      a.kind === b.kind ? a.name.localeCompare(b.name) || a.id.localeCompare(b.id) : a.kind === 'emulator' ? -1 : 1)
+      a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true }) || a.id.localeCompare(b.id) : a.kind === 'emulator' ? -1 : 1)
   }
 
   /** Forgets every start: nothing watches any more, or Deck quits. */

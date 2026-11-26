@@ -64,6 +64,14 @@ describe('simulatorDevices', () => {
     expect(udidOf('simulator:A')).toBe('A')
     expect(udidOf('android:A')).toBeNull()
   })
+
+  it('sorts names numerically, so "iPhone 9" comes before "iPhone 10"', () => {
+    const targets = new Map<string, SimTarget>([
+      ['A', { udid: 'A', name: 'iPhone 10', state: 'Booted', osVersion: 'iOS 27.0' }],
+      ['B', { udid: 'B', name: 'iPhone 9', state: 'Booted', osVersion: 'iOS 27.0' }],
+    ])
+    expect(simulatorDevices(targets).map((d) => d.name)).toEqual(['iPhone 9', 'iPhone 10'])
+  })
 })
 
 describe('startableSimulators', () => {

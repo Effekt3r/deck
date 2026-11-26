@@ -29,6 +29,12 @@ describe('Starts', () => {
     expect(changed).not.toHaveBeenCalled()
   })
 
+  it('merge stands on its own: a running device is itself, not starting, without a prior listed()', () => {
+    const starts = new Starts(() => {})
+    starts.begin(pixel)
+    expect(starts.merge([], [running(pixel)])).toEqual([])
+  })
+
   it('a second click while it starts does nothing', () => {
     const starts = new Starts(() => {})
     expect(starts.begin(pixel)).not.toBeNull()
@@ -60,6 +66,21 @@ describe('Starts', () => {
     vi.advanceTimersByTime(1)
     expect(changed).toHaveBeenCalledTimes(1)
     expect(starts.merge([pixel], [])).toEqual([{ ...pixel, error: "It didn't start within 3 minutes." }])
+  })
+
+  it('says "1 minute" in the singular for a one-minute deadline', () => {
+    const changed = vi.fn()
+    const starts = new Starts(changed, 60_000)
+    starts.begin(pixel)
+    vi.advanceTimersByTime(60_000)
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(starts.merge([pixel], [])).toEqual([{ ...pixel, error: "It didn't start within 1 minute." }])
+  })
+
+  it('sorts within a kind numerically, so "Pixel 9" comes before "Pixel 10"', () => {
+    const pixel10: StartableDevice = { id: 'emulator:Pixel_10', kind: 'emulator', name: 'Pixel 10', detail: 'Emulator' }
+    const starts = new Starts(() => {})
+    expect(starts.merge([pixel10, pixel], [])).toEqual([pixel, pixel10])
   })
 
   it('a listed device ends its start, failed or not, and its deadline with it', () => {

@@ -46,7 +46,7 @@ export function readNotifyLine(line: string, known: ReadonlyMap<string, SimTarge
   return next
 }
 
-const byName = (a: SimTarget, b: SimTarget) => a.name.localeCompare(b.name) || a.udid.localeCompare(b.udid)
+const byName = (a: SimTarget, b: SimTarget) => a.name.localeCompare(b.name, undefined, { numeric: true }) || a.udid.localeCompare(b.udid)
 const detailOf = (t: SimTarget) => (t.osVersion ? `Simulator · ${t.osVersion}` : 'Simulator')
 
 /** The booted simulators, by name, as devices. */
