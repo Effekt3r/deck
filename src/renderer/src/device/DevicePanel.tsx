@@ -5,7 +5,7 @@ import { BackIcon, CameraIcon, Caret, HomeIcon, PowerIcon, RecentsIcon } from '.
 import { DeviceMenu, type MenuClose } from './DeviceMenu'
 import { DeviceScreen, type ScreenHandle } from './DeviceScreen'
 import { KEYCODE } from './keys'
-import { type PanelView, startButtons } from './pick'
+import { emptyTitle, type PanelView, startButtons } from './pick'
 import '../claude/panel.css'
 import './device.css'
 
@@ -108,6 +108,9 @@ function PanelBody({ view, devices, startable, noAvds, pick, problem, iosProblem
     viewNow.current = viewKey
   })
   const [actionError, setActionError] = useState<{ view: string; text: string } | null>(null)
+  // A new view (another device, or the same one's kind changing) clears a start/stop error, rather
+  // than letting a stale one reappear if the view later matches again.
+  useEffect(() => setActionError(null), [viewKey])
   const say = (text: string) => setActionError({ view: viewNow.current, text })
   // Choosing one to start picks it for the tab and the project, as choosing a connected device does;
   // the list then says how the start goes.
@@ -211,7 +214,13 @@ function PanelBody({ view, devices, startable, noAvds, pick, problem, iosProblem
           )}
           {starting && (starting.error !== undefined ? (
             <State error title={`Couldn't start ${starting.name}`} detail={starting.error}>
-              <button className="button" onMouseDown={keepFocus} onClick={() => start(starting)}>Try again</button>
+              <button className="button" onMouseDown={keepFocus} onClick={(e) => {
+                // From the keyboard, the button had it, and it goes with the view once "Starting …"
+                // replaces this button.
+                const k = e.currentTarget === document.activeElement
+                start(starting)
+                if (k) onFocusLost()
+              }}>Try again</button>
             </State>
           ) : (
             <State busy title={`Starting ${starting.name}…`} />
@@ -233,7 +242,7 @@ function PanelBody({ view, devices, startable, noAvds, pick, problem, iosProblem
             </div>
           )}
           {view.kind === 'none' && (
-            <Nothing problem={problem} iosProblem={iosProblem} wants={wants} looking={looking} startable={startable} noAvds={noAvds} pick={pick}
+            <Nothing devices={devices} problem={problem} iosProblem={iosProblem} wants={wants} looking={looking} startable={startable} noAvds={noAvds} pick={pick}
               onStart={(item, fromKeyboard) => {
                 start(item)
                 // From the keyboard, the button had it, and it goes with the empty panel.
@@ -251,6 +260,8 @@ function PanelBody({ view, devices, startable, noAvds, pick, problem, iosProblem
 }
 
 interface NothingProps {
+  /** Every device Deck sees, just to say whether any are connected (`emptyTitle`). */
+  devices: DeviceInfo[]
   problem: DeviceList['problem']
   iosProblem: DeviceList['iosProblem']
   wants: { android: boolean; ios: boolean }
@@ -264,7 +275,7 @@ interface NothingProps {
 
 /** The panel was asked for (or a simulator can't be shown) and there's nothing to show: why, and
  *  Start buttons for up to 3 emulators or simulators that fit. */
-function Nothing({ problem, iosProblem, wants, looking, startable, noAvds, pick, onStart }: NothingProps) {
+function Nothing({ devices, problem, iosProblem, wants, looking, startable, noAvds, pick, onStart }: NothingProps) {
   if (looking) return <State busy title="Looking for devices…" />
   // Nested so each problem narrows.
   if (wants.ios) {
@@ -285,6 +296,7 @@ function Nothing({ problem, iosProblem, wants, looking, startable, noAvds, pick,
     if (problem) return <State error title="adb couldn't list the devices" detail={problem.error} />
   }
   const { buttons, more } = startButtons(startable, wants, pick)
+  const title = emptyTitle(devices, startable.find((d) => d.id === pick) ?? null)
   // iOS is wanted only on macOS, where iPhones show too: unlocked, since one isn't listed while it's
   // locked or doesn't trust the Mac.
   const plugIn = wants.android && wants.ios
@@ -296,12 +308,14 @@ function Nothing({ problem, iosProblem, wants, looking, startable, noAvds, pick,
       ? `${plugIn}, start an emulator, or boot a simulator.`
       : wants.ios ? `${plugIn}, or boot a simulator in Xcode or with simctl.` : `${plugIn}, or start an emulator.`
   return (
-    <State title="No devices connected" detail={detail}>
+    <State title={title} detail={detail}>
       {buttons.length > 0 && (
         <span className="dp-starts">
           {buttons.map((item) => (
-            <button key={item.id} className="button" title={item.error ?? item.detail} onMouseDown={keepFocus}
-              onClick={(e) => onStart(item, e.currentTarget === document.activeElement)}>Start {item.name}</button>
+            <button key={item.id} className="button" title={`${item.name}\n${item.error ?? item.detail}`} onMouseDown={keepFocus}
+              onClick={(e) => onStart(item, e.currentTarget === document.activeElement)}>
+              <span className="dp-start-label">Start {item.name}</span>
+            </button>
           ))}
         </span>
       )}

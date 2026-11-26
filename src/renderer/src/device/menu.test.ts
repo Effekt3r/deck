@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DeviceInfo, StartableDevice } from '@shared/types'
-import { menuEntries, startHint } from './menu'
+import { cursorAfter, type MenuEntry, menuEntries, startHint } from './menu'
 
 const c66: DeviceInfo = { id: 'android:8d2e61a', kind: 'android', name: 'C66', detail: 'Android 13 · USB', state: 'ready' }
 const emu: DeviceInfo = { id: 'emulator:Pixel_9', kind: 'emulator', name: 'Pixel 9', detail: 'Emulator · Android 15', state: 'ready' }
@@ -33,5 +33,36 @@ describe('startHint', () => {
     expect(startHint({ ...avd, starting: true })).toBe('starting…')
     expect(startHint({ ...avd, error: 'The emulator stopped (exit code 1).' })).toBe("didn't start")
     expect(startHint(shutSim)).toBe('Simulator · iOS 27.0')
+  })
+})
+
+describe('cursorAfter', () => {
+  const pixelStart: StartableDevice = { id: 'emulator:Pixel_9', kind: 'emulator', name: 'Pixel 9', detail: 'Emulator' }
+  const deviceEntry = (device: DeviceInfo): MenuEntry => ({ key: `device:${device.id}`, type: 'device', device })
+  const startEntry = (device: StartableDevice): MenuEntry => ({ key: `start:${device.id}`, type: 'start', device })
+  const stopEntry = (device: DeviceInfo): MenuEntry => ({ key: 'stop', type: 'stop', device })
+
+  it('keeps the same key when it still exists', () => {
+    expect(cursorAfter([deviceEntry(c66), deviceEntry(emu)], 'device:emulator:Pixel_9')).toBe('device:emulator:Pixel_9')
+  })
+
+  it('maps a start entry to its device entry once the device is listed, instead of jumping to the top', () => {
+    expect(cursorAfter([deviceEntry(emu)], 'start:emulator:Pixel_9')).toBe('device:emulator:Pixel_9')
+  })
+
+  it('maps the other way too: a device that stopped becomes its start entry', () => {
+    expect(cursorAfter([startEntry(pixelStart)], 'device:emulator:Pixel_9')).toBe('start:emulator:Pixel_9')
+  })
+
+  it("doesn't follow onto Stop, a different entry for the same device already on screen", () => {
+    expect(cursorAfter([deviceEntry(emu), stopEntry(emu)], 'device:emulator:Pixel_9')).toBe('device:emulator:Pixel_9')
+  })
+
+  it('falls back to null when the device is gone entirely (the caller falls back to the first entry)', () => {
+    expect(cursorAfter([deviceEntry(c66)], 'device:emulator:Pixel_9')).toBeNull()
+  })
+
+  it('null stays null', () => {
+    expect(cursorAfter([deviceEntry(emu)], null)).toBeNull()
   })
 })

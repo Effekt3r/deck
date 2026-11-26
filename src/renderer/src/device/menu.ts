@@ -22,3 +22,15 @@ export function menuEntries(devices: DeviceInfo[], startable: StartableDevice[],
 /** What a Start item says beside its name: starting, that its start failed, or what it is. */
 export const startHint = (device: StartableDevice): string =>
   device.starting ? 'starting…' : device.error !== undefined ? "didn't start" : device.detail
+
+/** The cursor's key once the entries change under it: unchanged while it's still there; else, if the
+ *  same device moved between its start entry and its device entry (started and got listed, or
+ *  stopped again), that device's new key, so the cursor stays on it instead of jumping to the top;
+ *  else null (the caller falls back to the first entry). */
+export function cursorAfter(entries: MenuEntry[], key: string | null): string | null {
+  if (key === null) return null
+  if (entries.some((e) => e.key === key)) return key
+  const id = key.slice(key.indexOf(':') + 1)
+  const moved = entries.find((e) => e.type !== 'stop' && e.device.id === id)
+  return moved?.key ?? null
+}

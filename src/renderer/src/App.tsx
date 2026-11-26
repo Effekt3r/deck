@@ -346,10 +346,18 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const deviceNeeded = devicesNeeded({ project, tabDevice, tabHidden, platform })
   const deviceList = useDeviceList(deviceNeeded)
   const devices = deviceList?.devices ?? NO_DEVICES
-  const { byHand, apps, wants, looking: deviceLooking, choice, iosHint, startPick } = panelRules({ project, tabDevice, tabHidden, list: deviceList, platform })
-  /** The tab's device: its own pick, else the project's latest. */
-  const devicePick = tabDevice ?? project?.picks[0] ?? null
+  // Device ids this tab has streamed (shown as `{ kind: 'device' }`) this session: panelRules only
+  // keeps the panel open for a stopped device (startPick) once it's in here, so a fresh tab whose
+  // project's latest pick is already stopped stays closed (View → Device Panel still offers to start
+  // it by hand). Never cleared: device ids are globally unique, so stale entries from an earlier
+  // project in this tab are harmless.
+  const shownHere = useRef<Set<string>>(new Set())
+  const { byHand, apps, wants, looking: deviceLooking, choice, iosHint, startPick, pick: devicePick } =
+    panelRules({ project, tabDevice, tabHidden, list: deviceList, platform }, shownHere.current)
   const deviceView = useHeldView(choice, devices, deviceRoot, devicePick)
+  // Written while rendering (like pick.ts's held.current): idempotent, so a StrictMode double-render
+  // or a discarded one just adds the same id again.
+  if (deviceView.kind === 'device') shownHere.current.add(deviceView.device.id)
   const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand || iosHint || startPick)
   const shownDevice = deviceView.kind === 'device' ? deviceView.device.id : null
   const showRight = showClaude || showDevice

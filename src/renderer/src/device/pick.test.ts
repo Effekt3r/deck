@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DeviceInfo, DeviceList, DeviceProject, StartableDevice } from '@shared/types'
-import { choosePanel, GONE_MS, MAX_START_BUTTONS, menuOrder, panelRules, panelView, startButtons, stillLooking } from './pick'
+import { choosePanel, emptyTitle, GONE_MS, MAX_START_BUTTONS, menuOrder, panelRules, panelView, startButtons, stillLooking } from './pick'
 
 const device = (id: string, name: string): DeviceInfo => ({ id, kind: id.startsWith('emulator:') ? 'emulator' : 'android', name, detail: '', state: 'ready' })
 const c66 = device('android:8d2e61a', 'C66')
@@ -84,6 +84,22 @@ describe('choosePanel: devices started from the panel', () => {
     expect(choosePanel({ ...base, project: [avd.id, c66.id], startable: [avd] })).toEqual({ kind: 'device', device: c66 })
     expect(choosePanel({ ...base, tab: avd.id, startable: [avd] })).toEqual({ kind: 'none' })
   })
+
+  it('by hand, a stopped device in force keeps the panel on its Start view rather than falling back to a connected phone', () => {
+    // devices: [c66] (from base) is connected; avd (stopped, in startable) is the tab's own pick.
+    expect(choosePanel({ ...base, tab: avd.id, byHand: true, startable: [avd] })).toEqual({ kind: 'none' })
+    // Without a stopped device in force, by hand still falls back to the connected phone as before.
+    expect(choosePanel({ ...base, byHand: true, startable: [avd] })).toEqual({ kind: 'device', device: c66 })
+  })
+
+  it('an old failure only shows for the device in force, not a deeper project pick', () => {
+    const failed = { ...avd, error: "It didn't start within 3 minutes." }
+    // C66 (the project's latest pick) is unplugged; avd failed earlier but is only the second pick:
+    // no failure view, and no falling back to a phone that isn't there.
+    expect(choosePanel({ ...base, devices: [], project: [c66.id, avd.id], startable: [failed] })).toEqual({ kind: 'none' })
+    // avd is the tab's own pick now (the device in force): its old failure shows again.
+    expect(choosePanel({ ...base, devices: [], tab: avd.id, project: [c66.id], startable: [failed] })).toEqual({ kind: 'starting', device: failed })
+  })
 })
 
 describe('menuOrder', () => {
@@ -116,6 +132,21 @@ describe('startButtons', () => {
   it('leaves out one already starting, and offers one that failed (to try again)', () => {
     const failed = { ...avds[1], error: 'The emulator stopped (exit code 1).' }
     expect(startButtons([{ ...avds[0], starting: true }, failed], { android: true, ios: false }, null)).toEqual({ buttons: [failed], more: false })
+  })
+})
+
+describe('emptyTitle', () => {
+  it('says none are connected when none are, whatever would otherwise keep the panel open', () => {
+    expect(emptyTitle([], null)).toBe('No devices connected')
+    expect(emptyTitle([], avd)).toBe('No devices connected')
+  })
+
+  it("names the device it's waiting to start, once other devices are connected", () => {
+    expect(emptyTitle([c66], avd)).toBe("Pixel 9 isn't running")
+  })
+
+  it('says none are connected when devices are connected but nothing keeps the panel open for a stopped one', () => {
+    expect(emptyTitle([c66], null)).toBe('No devices connected')
   })
 })
 
@@ -268,15 +299,27 @@ describe('panelRules', () => {
     expect(rules.choice).toEqual({ kind: 'device', device: c66 })
   })
 
-  it("stays open while the tab's device (its pick, else the project's latest) can be started", () => {
+  it("stays open while the tab's device (its pick, else the project's latest) can be started, once this tab has shown it this session", () => {
     const listed = list({ devices: [], startable: [avd, shutSim] })
-    expect(panelRules({ ...base, project: androidApp, tabDevice: avd.id, list: listed, platform: 'darwin' })).toMatchObject({ choice: { kind: 'none' }, startPick: true })
-    expect(panelRules({ ...base, project: { ...androidApp, picks: [avd.id] }, list: listed, platform: 'darwin' }).startPick).toBe(true)
+    const shownAvd = new Set([avd.id])
+    expect(panelRules({ ...base, project: androidApp, tabDevice: avd.id, list: listed, platform: 'darwin' }, shownAvd))
+      .toMatchObject({ choice: { kind: 'none' }, startPick: true, pick: avd.id })
+    expect(panelRules({ ...base, project: { ...androidApp, picks: [avd.id] }, list: listed, platform: 'darwin' }, shownAvd).startPick).toBe(true)
+    // Not shown in this tab this session (the default, nothing passed): no panel by itself, even
+    // though it's the device in force and startable — View → Device Panel still offers it (fix 1).
+    expect(panelRules({ ...base, project: androidApp, tabDevice: avd.id, list: listed, platform: 'darwin' }).startPick).toBe(false)
+    expect(panelRules({ ...base, project: { ...androidApp, picks: [avd.id] }, list: listed, platform: 'darwin' }).startPick).toBe(false)
     // An unplugged phone can't be started; nothing picked, nothing to keep open for.
-    expect(panelRules({ ...base, project: { ...androidApp, picks: [c66.id] }, list: listed, platform: 'darwin' }).startPick).toBe(false)
-    expect(panelRules({ ...base, project: androidApp, list: listed, platform: 'darwin' }).startPick).toBe(false)
+    expect(panelRules({ ...base, project: { ...androidApp, picks: [c66.id] }, list: listed, platform: 'darwin' }, new Set([c66.id])).startPick).toBe(false)
+    expect(panelRules({ ...base, project: androidApp, list: listed, platform: 'darwin' }, shownAvd).startPick).toBe(false)
     // Not before the list is in.
-    expect(panelRules({ ...base, project: androidApp, tabDevice: avd.id, list: null, platform: 'darwin' }).startPick).toBe(false)
+    expect(panelRules({ ...base, project: androidApp, tabDevice: avd.id, list: null, platform: 'darwin' }, shownAvd).startPick).toBe(false)
+  })
+
+  it("returns the device in force (the tab's pick, else the project's latest, else null)", () => {
+    expect(panelRules({ ...base, project: androidApp, tabDevice: c66.id, list: list(), platform: 'darwin' }).pick).toBe(c66.id)
+    expect(panelRules({ ...base, project: { ...androidApp, picks: [s25.id, c66.id] }, list: list(), platform: 'darwin' }).pick).toBe(s25.id)
+    expect(panelRules({ ...base, project: androidApp, list: list(), platform: 'darwin' }).pick).toBeNull()
   })
 
   it("passes what's starting to choosePanel: the tab's started pick shows as starting", () => {

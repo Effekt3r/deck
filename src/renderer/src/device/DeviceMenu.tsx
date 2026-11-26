@@ -2,7 +2,7 @@ import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef,
 import { createPortal } from 'react-dom'
 import type { DeviceInfo, StartableDevice } from '@shared/types'
 import { placeBelow } from '../claude/SessionPicker'
-import { type MenuEntry, menuEntries, startHint } from './menu'
+import { cursorAfter, type MenuEntry, menuEntries, startHint } from './menu'
 
 interface DeviceMenuProps {
   devices: DeviceInfo[]
@@ -32,8 +32,19 @@ const STATE_WORDS: Record<DeviceInfo['state'], string> = { ready: '', booting: '
  *  emulator or a simulator on screen. Rendered into <body> like the session menu. */
 export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor, onPick, onStart, onStop, onClose }: DeviceMenuProps) {
   const entries = menuEntries(devices, startable, shown)
-  // The cursor is an item, not a place in the list, which can change under it (one unplugged).
-  const [cursor, setCursor] = useState<string | null>(() => (current ? `device:${current}` : (entries[0]?.key ?? null)))
+  // The cursor is an item, not a place in the list, which can change under it (one unplugged, or a
+  // start item becoming its device item once listed, or back): cursorAfter keeps it on the same
+  // device rather than letting it jump to the top. The initial guess (`device:<current>`) also goes
+  // through it, which corrects it to `start:<current>` when the menu opens on a device that's only
+  // starting (current isn't a connected device yet).
+  const [cursor, setCursor] = useState<string | null>(() =>
+    cursorAfter(entries, current ? `device:${current}` : (entries[0]?.key ?? null)))
+  // A later render whose entries changed under the same cursor (the mapping above, mid-session):
+  // calling the setter conditionally during render is the documented way to adjust state from
+  // changed props without an extra effect-driven render (react.dev: "storing information from
+  // previous renders"). cursorAfter is idempotent, so this can't loop.
+  const mappedCursor = cursorAfter(entries, cursor)
+  if (mappedCursor !== cursor) setCursor(mappedCursor)
   // Placed once: the menu closes when the window resizes.
   const [place] = useState(() => placeBelow(anchor))
   const menuRef = useRef<HTMLDivElement>(null)
@@ -119,8 +130,8 @@ export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor,
     if (entry.type === 'start') {
       const { device } = entry
       return (
-        <div key={entry.key} role="menuitem" className={className} title={`Start ${device.name}\n${device.error ?? device.detail}`}
-          onMouseMove={hover} onClick={() => choose(entry)}>
+        <div key={entry.key} role="menuitem" aria-label={`Start ${device.name}`} aria-disabled={device.starting || undefined}
+          className={className} title={`Start ${device.name}\n${device.error ?? device.detail}`} onMouseMove={hover} onClick={() => choose(entry)}>
           <span className="cpm-check" aria-hidden="true">▶</span>
           <span className="cpm-label">{device.name}</span>
           <span className="cpm-hint">{startHint(device)}</span>
@@ -136,15 +147,19 @@ export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor,
   }
 
   return createPortal(
-    <div className="cp-menu" ref={menuRef} role="menu" aria-label="Device to show" tabIndex={-1} style={place} onKeyDown={onKeyDown}>
+    <div className="cp-menu" ref={menuRef} role="menu" aria-label="Devices" tabIndex={-1} style={place} onKeyDown={onKeyDown}>
       <div className="cpm-title">Devices</div>
       <div className="cpm-list">
         {entries.map((entry, i) => entry.type === 'device' && row(entry, i))}
         {devices.length === 0 && <div className="cpm-note">No devices connected.</div>}
-        {(startable.length > 0 || noAvds) && <div className="cpm-title">Start</div>}
-        {entries.map((entry, i) => entry.type === 'start' && row(entry, i))}
-        {noAvds && <div className="cpm-note">No emulators: make one in Android Studio's Device Manager</div>}
-        {entries.at(-1)?.type === 'stop' && <div className="cpm-sep" />}
+        {(startable.length > 0 || noAvds) && (
+          <div role="group" aria-label="Start">
+            <div className="cpm-title">Start</div>
+            {entries.map((entry, i) => entry.type === 'start' && row(entry, i))}
+            {noAvds && <div className="cpm-note">No emulators: make one in Android Studio's Device Manager</div>}
+          </div>
+        )}
+        {entries.at(-1)?.type === 'stop' && <div className="cpm-sep" role="separator" />}
         {entries.map((entry, i) => entry.type === 'stop' && row(entry, i))}
       </div>
     </div>,
