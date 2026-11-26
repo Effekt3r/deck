@@ -346,9 +346,11 @@ export interface DeviceInfo {
   /** Its system and connection: "Android 13 · USB", "Android 17 · USB + Wi-Fi",
    *  "Emulator · Android 15", "Simulator · iOS 27.0", "iPhone · cable · view only". */
   detail: string
-  /** ready: it can be shown; unauthorized: USB debugging isn't allowed on it yet; offline: adb
-   *  can't reach it; connecting: adb is still setting it up. */
-  state: 'ready' | 'unauthorized' | 'offline' | 'connecting'
+  /** ready: it can be shown; booting: it's still starting up (an Android device that answered
+   *  before Android had finished starting, or a simulator Deck is booting), shown once it has;
+   *  unauthorized: USB debugging isn't allowed on it yet; offline: adb can't reach it; connecting:
+   *  adb is still setting it up. */
+  state: 'ready' | 'booting' | 'unauthorized' | 'offline' | 'connecting'
 }
 
 /** An emulator or a simulator that isn't running, which the panel can start (an AVD the SDK's

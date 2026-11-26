@@ -199,6 +199,15 @@ describe('mergeDevices', () => {
     expect(serials.get('android:R5CW20XY7QZ')).toBe('R5CW20XY7QZ')
   })
 
+  it('says a device that answered before Android had started is booting, until it has', () => {
+    const starting = { ...emu, booted: false }
+    expect(mergeDevices([{ entry: entry(EMULATOR), identity: starting }]).devices[0].state).toBe('booting')
+    expect(mergeDevices([{ entry: entry(EMULATOR), identity: emu }]).devices[0].state).toBe('ready')
+    // adb's own state comes first, and a device that never answered isn't taken for booting.
+    expect(mergeDevices([{ entry: { ...entry(C66), state: 'unauthorized' }, identity: { ...c66, booted: false } }]).devices[0].state).toBe('unauthorized')
+    expect(mergeDevices([{ entry: entry(C66), identity: null }]).devices[0].state).toBe('ready')
+  })
+
   it('lists nothing for an emulator still starting (offline, unanswered)', () => {
     expect(mergeDevices([{ entry: entry('emulator-5554 offline transport_id:9\n'), identity: null }]).devices).toEqual([])
   })

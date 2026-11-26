@@ -79,6 +79,26 @@ describe('AndroidTracker', () => {
     tracker.stop()
   })
 
+  it('lists a device as booting while it says Android is still starting, then as ready', async () => {
+    const answers: Identity[] = [{ ...emu, booted: false }, emu]
+    const { tracker, children, published } = setup(async () => answers.shift() ?? emu)
+    tracker.start()
+    children[0].stdout.emit('data', frame(EMULATOR))
+    await vi.waitFor(() => expect(published.at(-1)?.devices.map((d) => d.state)).toEqual(['ready']))
+    expect(published.map((p) => p.devices[0]?.state)).toEqual(['booting', 'ready'])
+    tracker.stop()
+  })
+
+  it('takes a device that still says it is starting after 40 answers as started', async () => {
+    const identify = vi.fn(async (): Promise<Identity> => ({ ...emu, booted: false }))
+    const { tracker, children, published } = setup(identify, undefined, { identity: 1, booting: 1, restartMin: 20, restartMax: 80 })
+    tracker.start()
+    children[0].stdout.emit('data', frame(EMULATOR))
+    await vi.waitFor(() => expect(published.at(-1)?.devices.map((d) => d.state)).toEqual(['ready']), { timeout: 3000 })
+    expect(identify).toHaveBeenCalledTimes(40)
+    tracker.stop()
+  })
+
   it("starts again after adb's server goes away, waiting longer each time, and says why", () => {
     vi.useFakeTimers()
     const { tracker, children, published } = setup(async () => c66)

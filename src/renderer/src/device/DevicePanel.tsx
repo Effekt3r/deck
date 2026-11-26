@@ -95,6 +95,7 @@ function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, o
   }, [device?.id, claudeRuns])
   let message: string | null = null
   if (device && gone) message = `${device.name} disconnected`
+  else if (device?.state === 'booting') message = `Starting ${device.name}…`
   else if (device?.state === 'unauthorized') message = `Allow USB debugging on ${device.name}: check its screen.`
   else if (device?.state === 'offline') message = `${device.name} isn't answering. Unplug it and plug it back in.`
   else if (device?.state === 'connecting') message = `${device.name} is connecting…`
@@ -165,7 +166,8 @@ function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, o
       {open && (
         <div className="dp-body">
           {device && (
-            <DeviceScreen key={device.id} deviceId={device.id} name={device.name} kind={device.kind} live={visible && ready} message={message} handle={screen} />
+            <DeviceScreen key={device.id} deviceId={device.id} name={device.name} kind={device.kind} live={visible && ready} message={message}
+              busy={device.state === 'booting' && !gone} handle={screen} />
           )}
           {view.kind === 'choose' && (
             <div className="dp-choose" onMouseDown={keepFocus}>

@@ -17,8 +17,11 @@ interface DeviceScreenProps {
   kind: DeviceInfo['kind']
   /** Stream now: the tab is in front, the panel unfolded, the window visible, the device ready. */
   live: boolean
-  /** Why the device can't be shown (gone, not allowed, offline), over the dimmed last picture. */
+  /** Why the device can't be shown (gone, not allowed, offline, still starting), over the dimmed last
+   *  picture. */
   message: string | null
+  /** The message is a wait (a device still starting up): it gets the spinner. */
+  busy?: boolean
   handle?: Ref<ScreenHandle>
 }
 
@@ -52,7 +55,7 @@ function usePixelRatio(): number {
 
 /** One device's screen: its stream decoded with WebCodecs onto a canvas that fits the space, and
  *  the pointer and keyboard sent back as touches, scrolls, keys and text. */
-export function DeviceScreen({ deviceId, name, kind, live, message, handle }: DeviceScreenProps) {
+export function DeviceScreen({ deviceId, name, kind, live, message, busy, handle }: DeviceScreenProps) {
   const platform = window.deck.platform
   const ratio = usePixelRatio()
   const areaRef = useRef<HTMLDivElement>(null)
@@ -411,7 +414,10 @@ export function DeviceScreen({ deviceId, name, kind, live, message, handle }: De
           onKeyDown={onKeyDown} onContextMenu={(e) => e.preventDefault()} />
       )}
       {message ? (
-        <div className="dp-overlay" role="status"><strong>{message}</strong></div>
+        <div className="dp-overlay" role="status">
+          {busy && <span className="cp-spinner" aria-hidden="true" />}
+          <strong>{message}</strong>
+        </div>
       ) : live && failure ? (
         <div className="dp-overlay error" role="alert">
           <strong>{cameraBlocked ? 'Camera not allowed' : `Couldn't show ${name}`}</strong>

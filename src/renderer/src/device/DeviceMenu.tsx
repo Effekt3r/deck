@@ -17,7 +17,7 @@ interface DeviceMenuProps {
 
 export type MenuClose = 'back' | 'tab' | 'leave'
 
-const STATE_WORDS: Record<DeviceInfo['state'], string> = { ready: '', connecting: 'connecting', unauthorized: 'not allowed yet', offline: 'offline' }
+const STATE_WORDS: Record<DeviceInfo['state'], string> = { ready: '', booting: 'starting', connecting: 'connecting', unauthorized: 'not allowed yet', offline: 'offline' }
 
 /** Which device the tab shows, from every device Deck sees. Rendered into <body> like the session menu. */
 export function DeviceMenu({ devices, current, anchor, onPick, onClose }: DeviceMenuProps) {
