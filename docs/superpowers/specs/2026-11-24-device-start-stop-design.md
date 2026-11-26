@@ -241,7 +241,9 @@ Found while building and reviewing the panel's rules, past what planning had wor
   while it saves its snapshot), and sharing one would give the new start its reason. Likewise a clean
   exit forgets only its own start.
 - **An adb problem doesn't hide the simulators' Start buttons** when iOS is wanted too (an iOS app, or
-  the panel shown by hand on macOS): the adb problem is said under them and no emulator is offered —
+  the panel shown by hand on macOS) and there's a simulator to start: the adb problem, with what to do,
+  is said under them and no emulator is offered (with none to start, it's the whole message, as
+  before) —
   why: an iOS developer without Android's tools opens the panel by hand (Cmd+Shift+D) to start a
   simulator, and would otherwise get only "Deck can't find adb". A simulator-listing problem still
   takes the whole panel, so its install hint (with Copy) stays.

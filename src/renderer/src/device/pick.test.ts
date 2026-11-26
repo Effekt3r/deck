@@ -145,13 +145,17 @@ describe('emptyOffer', () => {
 
   it("with iOS wanted too, an adb problem leaves the simulators, without emulators, and says what's wrong", () => {
     expect(emptyOffer(both, 'no-adb', [avd, shutSim])).toEqual({
-      kinds: { android: false, ios: true }, offered: [shutSim], adbNote: "Deck can't find adb, so it can't see Android devices.",
+      kinds: { android: false, ios: true },
+      offered: [shutSim],
+      adbNote: "Deck can't find adb, so it can't see Android devices. Install Android Studio or Android's platform tools.",
     })
     expect(emptyOffer(both, { error: 'protocol fault' }, [avd, shutSim])?.adbNote).toBe("adb couldn't list the devices: protocol fault")
   })
 
-  it('without iOS, the adb problem is the whole message', () => {
+  it('without iOS, or with no simulator to start, the adb problem is the whole message', () => {
     expect(emptyOffer({ android: true, ios: false }, 'no-adb', [avd])).toBeNull()
+    expect(emptyOffer(both, 'no-adb', [avd])).toBeNull()
+    expect(emptyOffer(both, 'no-adb', [])).toBeNull()
   })
 })
 

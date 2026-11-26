@@ -129,12 +129,12 @@ function removeOldLogs(dir: string, name: string): void {
  *  running AVD; macOS, emulator 37.2, 2026-11-26). With `logDir`, the emulator's stdout and stderr go to
  *  a new file of this start's own, `<logDir>/<name>-<ms>.log`, rather than a pipe, since a file, unlike
  *  a pipe, can't ever break the emulator once Deck quits; `ended`'s reason then comes from that log's
- *  first ERROR/PANIC/FATAL line, read back once it exits. Its own file, not one per AVD: an older
- *  emulator of the same AVD can still be running (Stop, then Start while it saves its snapshot; Try
- *  again while a start past its deadline still boots), and in a shared file its lines would land among
- *  this start's, where the reason read back could be its. Each start removes the AVD's earlier logs
- *  (removeOldLogs). Without `logDir`, or when the folder or the file can't be made, the start still
- *  runs, with nothing read from it, as before. */
+ *  first PANIC or FATAL line, else its first ERROR line, read back once it exits. Its own file, not one
+ *  per AVD: an older emulator of the same AVD can still be running (Stop, then Start while it saves its
+ *  snapshot; Try again while a start past its deadline still boots), and in a shared file its lines
+ *  would land among this start's, where the reason read back could be its. Each start removes the AVD's
+ *  earlier logs (removeOldLogs). Without `logDir`, or when the folder or the file can't be made, the
+ *  start still runs, with nothing read from it, as before. */
 export function startAvd(
   emulator: string,
   name: string,

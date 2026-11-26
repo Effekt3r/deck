@@ -816,10 +816,12 @@ Things that aren't obvious from the code:
       section (those that fit first; `starting…`, `didn't start`) and, for an emulator or simulator on
       screen, Stop, with no confirmation; the keyboard moves over all of it. An empty panel offers up to
       3 Start buttons, then "More in the ▾ menu". With iOS wanted too (an iOS app, or the panel shown by
-      hand on macOS), an adb problem (none found, or its error) doesn't hide the simulators' Start
-      buttons: it's said under them, and no emulator is offered, since Deck couldn't see one it started
-      (`emptyOffer`). A simulator-listing problem still takes the whole panel (Known limits). A refused
-      start or a failed stop says so under the header.
+      hand on macOS) and a simulator to start, an adb problem (none found, or its error) doesn't hide
+      the simulators' Start buttons: it's said under them, with what to do, and no emulator is offered,
+      since Deck couldn't see one it started (`emptyOffer`); the title still names a stopped emulator in
+      force. With no simulator to start, the adb problem is the whole message, as before. A
+      simulator-listing problem still takes the whole panel (Known limits). A refused start or a failed
+      stop says so under the header.
     - **Unit tests:** `sdkRoots`; AVD names, finding and running the emulator and `emu kill` (shell
       stand-ins); the log file and its failure line, `startAvd` without one; `--boot`/`--shutdown`
       arguments, the failure's line, abort and timeout; the shut-down simulators; `booting` in

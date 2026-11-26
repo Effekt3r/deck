@@ -81,17 +81,20 @@ export function startButtons(startable: StartableDevice[], wants: { android: boo
 }
 
 /** What an empty panel speaks of and offers to start, once iOS's own problems (which it shows
- *  instead) are ruled out: the kinds it wants, all of `startable`, and no note. With iOS wanted too, an
- *  adb problem doesn't hide the simulators (an iOS developer without Android's tools opens the panel by
- *  hand to start one): the panel speaks of iOS only, offers no emulator (Deck couldn't see one it
- *  started), and says what's wrong with adb under the rest (`adbNote`). Without iOS, null: the adb
- *  problem is the panel's whole message. */
+ *  instead) are ruled out: the kinds it wants, all of `startable`, and no note. With iOS wanted too and
+ *  a simulator to start, an adb problem doesn't hide the simulators (an iOS developer without Android's
+ *  tools opens the panel by hand to start one): the panel speaks of iOS only, offers no emulator (Deck
+ *  couldn't see one it started), and says what's wrong with adb under the rest (`adbNote`). Otherwise
+ *  null: the adb problem, with what to do about it, is the panel's whole message. */
 export function emptyOffer(wants: { android: boolean; ios: boolean }, problem: DeviceList['problem'], startable: StartableDevice[]):
   { kinds: { android: boolean; ios: boolean }; offered: StartableDevice[]; adbNote: string | null } | null {
   if (!wants.android || !problem) return { kinds: wants, offered: startable, adbNote: null }
-  if (!wants.ios) return null
-  const adbNote = problem === 'no-adb' ? "Deck can't find adb, so it can't see Android devices." : `adb couldn't list the devices: ${problem.error}`
-  return { kinds: { android: false, ios: true }, offered: startable.filter((d) => d.kind !== 'emulator'), adbNote }
+  const offered = startable.filter((d) => d.kind !== 'emulator')
+  if (!wants.ios || offered.length === 0) return null
+  const adbNote = problem === 'no-adb'
+    ? "Deck can't find adb, so it can't see Android devices. Install Android Studio or Android's platform tools."
+    : `adb couldn't list the devices: ${problem.error}`
+  return { kinds: { android: false, ios: true }, offered, adbNote }
 }
 
 /** The empty panel's title: it names the device it's waiting to start (`startPickDevice`: the device

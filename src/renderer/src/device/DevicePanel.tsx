@@ -292,7 +292,8 @@ function Nothing({ devices, problem, iosProblem, wants, looking, startable, noAv
     }
     if (iosProblem) return <State error title="Deck couldn't list the simulators" detail={iosProblem.error} />
   }
-  // With iOS wanted too, an adb problem doesn't hide the simulators: it's said under them.
+  // With iOS wanted too and a simulator to start, an adb problem doesn't hide the simulators: it's
+  // said under them.
   const offer = emptyOffer(wants, problem, startable)
   if (!offer) {
     return problem === 'no-adb'
@@ -301,10 +302,10 @@ function Nothing({ devices, problem, iosProblem, wants, looking, startable, noAv
   }
   const { kinds, offered, adbNote } = offer
   const { buttons, more } = startButtons(offered, kinds, pick)
-  const pickStopped = offered.find((d) => d.id === pick) ?? null
-  const title = emptyTitle(devices, pickStopped)
-  // The tab's device isn't running while others are connected: emptyTitle names it.
-  const namesPick = devices.length > 0 && pickStopped !== null
+  // The title names the tab's stopped device even when it can't be offered here (an emulator while
+  // adb has a problem); "Start it below" only when it's among the buttons.
+  const title = emptyTitle(devices, startable.find((d) => d.id === pick) ?? null)
+  const namesPick = devices.length > 0 && offered.some((d) => d.id === pick)
   // iOS is wanted only on macOS, where iPhones show too: unlocked, since one isn't listed while it's
   // locked or doesn't trust the Mac.
   const plugIn = kinds.android && kinds.ios
