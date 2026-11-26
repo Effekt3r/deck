@@ -349,8 +349,8 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   // Device ids this tab has streamed (shown as `{ kind: 'device' }`) this session: panelRules only
   // keeps the panel open for a stopped device (startPick) once it's in here, so a fresh tab whose
   // project's latest pick is already stopped stays closed (View → Device Panel still offers to start
-  // it by hand). Never cleared: device ids are globally unique, so stale entries from an earlier
-  // project in this tab are harmless.
+  // it by hand). Picking or stopping a device here counts too. Cleared when the tab moves to another
+  // project, as its pick is.
   const shownHere = useRef<Set<string>>(new Set())
   const { byHand, apps, wants, looking: deviceLooking, choice, iosHint, startPick, pick: devicePick } =
     panelRules({ project, tabDevice, tabHidden, list: deviceList, platform }, shownHere.current)
@@ -364,9 +364,18 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const [deviceDrag, setDeviceDrag] = useState<number | null>(null)
   const deviceRef = useRef<HTMLDivElement>(null)
   const pickDevice = useCallback((id: string) => {
+    // Counts as shown here at once: a device started from this tab keeps the panel open until main
+    // says it's starting.
+    shownHere.current.add(id)
     onUpdate(tab.id, { device: id })
     pickForProject(id)
   }, [tab.id, onUpdate, pickForProject])
+  /** A device stopped from this tab: the tab keeps it (not the project, whose pick stays), so the panel
+   *  stays with its Start button even when it was shown without a pick. */
+  const keepDevice = useCallback((id: string) => {
+    shownHere.current.add(id)
+    onUpdate(tab.id, { device: id })
+  }, [tab.id, onUpdate])
   const insert = useCallback((text: string) => pasteRef.current?.(text), [])
 
   // Hidden for the repo it was hidden in: like the prototype's q, entering another repo shows it again.
@@ -396,7 +405,10 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   // A tab's device and its View → Device Panel choice hold in the project they were made in (above).
   useEffect(() => {
     if (!deviceRoot) return
-    if (deviceRootSeen.current !== null && deviceRootSeen.current !== deviceRoot) onUpdate(tab.id, { device: undefined, deviceHidden: undefined })
+    if (deviceRootSeen.current !== null && deviceRootSeen.current !== deviceRoot) {
+      onUpdate(tab.id, { device: undefined, deviceHidden: undefined })
+      shownHere.current.clear()
+    }
     deviceRootSeen.current = deviceRoot
   }, [deviceRoot, tab.id, onUpdate])
 
@@ -504,7 +516,7 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
                 noAvds={deviceList?.noAvds ?? false} pick={devicePick} problem={deviceList?.problem ?? null}
                 iosProblem={deviceList?.iosProblem ?? null} wants={wants} looking={deviceLooking}
                 open={deviceOpen} onToggle={onDeviceToggle} visible={active && pageVisible && projectFresh} claudeRuns={claudeRuns}
-                onPick={pickDevice} onInsert={insert} onFocusLost={focusTerminal} />
+                onPick={pickDevice} onKeep={keepDevice} onInsert={insert} onFocusLost={focusTerminal} />
             </div>
           )}
           {deviceSplit && (

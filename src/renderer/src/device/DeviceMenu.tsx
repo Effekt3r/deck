@@ -130,7 +130,7 @@ export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor,
     if (entry.type === 'start') {
       const { device } = entry
       return (
-        <div key={entry.key} role="menuitem" aria-label={`Start ${device.name}`} aria-disabled={device.starting || undefined}
+        <div key={entry.key} role="menuitem" aria-label={`Start ${device.name}${startHint(device) ? `, ${startHint(device)}` : ''}`} aria-disabled={device.starting || undefined}
           className={className} title={`Start ${device.name}\n${device.error ?? device.detail}`} onMouseMove={hover} onClick={() => choose(entry)}>
           <span className="cpm-check" aria-hidden="true">▶</span>
           <span className="cpm-label">{device.name}</span>
@@ -153,8 +153,8 @@ export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor,
         {entries.map((entry, i) => entry.type === 'device' && row(entry, i))}
         {devices.length === 0 && <div className="cpm-note">No devices connected.</div>}
         {(startable.length > 0 || noAvds) && (
-          <div role="group" aria-label="Start">
-            <div className="cpm-title">Start</div>
+          <div role="group" aria-labelledby="device-menu-start">
+            <div className="cpm-title" id="device-menu-start">Start</div>
             {entries.map((entry, i) => entry.type === 'start' && row(entry, i))}
             {noAvds && <div className="cpm-note">No emulators: make one in Android Studio's Device Manager</div>}
           </div>

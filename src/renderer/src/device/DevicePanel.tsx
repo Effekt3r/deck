@@ -35,6 +35,8 @@ interface DevicePanelProps {
   /** Claude runs in the tab: the screenshot button shows. */
   claudeRuns: boolean
   onPick(id: string): void
+  /** A device stopped from the panel: the tab keeps it, so the panel stays with its Start button. */
+  onKeep(id: string): void
   /** Types text into the tab's terminal: the screenshot's path. */
   onInsert(text: string): void
   /** A device was chosen from the keyboard and its button went with the chooser: the tab gives the
@@ -58,7 +60,7 @@ export function DevicePanel(props: DevicePanelProps) {
   )
 }
 
-function PanelBody({ view, devices, startable, noAvds, pick, problem, iosProblem, wants, looking, open, onToggle, visible, claudeRuns, onPick, onInsert, onFocusLost }: DevicePanelProps) {
+function PanelBody({ view, devices, startable, noAvds, pick, problem, iosProblem, wants, looking, open, onToggle, visible, claudeRuns, onPick, onKeep, onInsert, onFocusLost }: DevicePanelProps) {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
   /** A screenshot that failed, and the device it was of. */
   const [error, setError] = useState<{ device: string; text: string } | null>(null)
@@ -126,6 +128,7 @@ function PanelBody({ view, devices, startable, noAvds, pick, problem, iosProblem
   }
   const stop = (target: DeviceInfo) => {
     setActionError(null)
+    onKeep(target.id)
     window.deck.devices.stop(target.id).then(
       (result) => {
         if (result) say(`Couldn't stop ${target.name}: ${result.error}`)
@@ -302,7 +305,9 @@ function Nothing({ devices, problem, iosProblem, wants, looking, startable, noAv
   const plugIn = wants.android && wants.ios
     ? 'Plug in an unlocked iPhone or an Android phone with USB debugging on'
     : wants.ios ? 'Plug in an unlocked iPhone' : 'Plug in an Android phone with USB debugging on'
-  const detail = buttons.length > 0
+  const detail = title !== 'No devices connected' && buttons.length > 0
+    ? 'Start it below, or choose another device in the ▾ menu.'
+    : buttons.length > 0
     ? `${plugIn}, or start one below.`
     : wants.android && wants.ios
       ? `${plugIn}, start an emulator, or boot a simulator.`
