@@ -352,6 +352,9 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   // it by hand). Picking or stopping a device here counts too. Cleared when the tab moves to another
   // project, as its pick is.
   const shownHere = useRef<Set<string>>(new Set())
+  // Cleared in the very render that moves to another project, not an effect later: a device shown in the
+  // old project mustn't open the panel in the new one for a render.
+  if (movedOn) shownHere.current.clear()
   const { byHand, apps, wants, looking: deviceLooking, choice, iosHint, startPick, pick: devicePick } =
     panelRules({ project, tabDevice, tabHidden, list: deviceList, platform }, shownHere.current)
   const deviceView = useHeldView(choice, devices, deviceRoot, devicePick)

@@ -299,13 +299,16 @@ function Nothing({ devices, problem, iosProblem, wants, looking, startable, noAv
     if (problem) return <State error title="adb couldn't list the devices" detail={problem.error} />
   }
   const { buttons, more } = startButtons(startable, wants, pick)
-  const title = emptyTitle(devices, startable.find((d) => d.id === pick) ?? null)
+  const pickStopped = startable.find((d) => d.id === pick) ?? null
+  const title = emptyTitle(devices, pickStopped)
+  // The tab's device isn't running while others are connected: emptyTitle names it.
+  const namesPick = devices.length > 0 && pickStopped !== null
   // iOS is wanted only on macOS, where iPhones show too: unlocked, since one isn't listed while it's
   // locked or doesn't trust the Mac.
   const plugIn = wants.android && wants.ios
     ? 'Plug in an unlocked iPhone or an Android phone with USB debugging on'
     : wants.ios ? 'Plug in an unlocked iPhone' : 'Plug in an Android phone with USB debugging on'
-  const detail = title !== 'No devices connected' && buttons.length > 0
+  const detail = namesPick && buttons.length > 0
     ? 'Start it below, or choose another device in the ▾ menu.'
     : buttons.length > 0
     ? `${plugIn}, or start one below.`

@@ -1,4 +1,4 @@
-import { type KeyboardEvent, type ReactNode, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { DeviceInfo, StartableDevice } from '@shared/types'
 import { placeBelow } from '../claude/SessionPicker'
@@ -32,6 +32,7 @@ const STATE_WORDS: Record<DeviceInfo['state'], string> = { ready: '', booting: '
  *  emulator or a simulator on screen. Rendered into <body> like the session menu. */
 export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor, onPick, onStart, onStop, onClose }: DeviceMenuProps) {
   const entries = menuEntries(devices, startable, shown)
+  const startTitleId = useId()
   // The cursor is an item, not a place in the list, which can change under it (one unplugged, or a
   // start item becoming its device item once listed, or back): cursorAfter keeps it on the same
   // device rather than letting it jump to the top. The initial guess (`device:<current>`) also goes
@@ -153,8 +154,8 @@ export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor,
         {entries.map((entry, i) => entry.type === 'device' && row(entry, i))}
         {devices.length === 0 && <div className="cpm-note">No devices connected.</div>}
         {(startable.length > 0 || noAvds) && (
-          <div role="group" aria-labelledby="device-menu-start">
-            <div className="cpm-title" id="device-menu-start">Start</div>
+          <div role="group" aria-labelledby={startTitleId}>
+            <div className="cpm-title" id={startTitleId}>Start</div>
             {entries.map((entry, i) => entry.type === 'start' && row(entry, i))}
             {noAvds && <div className="cpm-note">No emulators: make one in Android Studio's Device Manager</div>}
           </div>
