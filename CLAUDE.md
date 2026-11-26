@@ -781,18 +781,21 @@ Things that aren't obvious from the code:
       error. A boot that works, or one ended by Deck quitting, clears the flag at once. The panel says
       "Starting <name>…" with the spinner and doesn't stream it; the menu says `starting`.
     - **Starts** (`starts.ts`): from the click until the device is listed and not booting, 3 minutes at
-      most. A failed command or the deadline keeps its reason (the tool's last line, or "It didn't
-      start within 3 minutes.") until it's started again; a second click changes nothing; a device
-      already running answers null; an id the list doesn't offer is refused ("Deck no longer sees
-      it."). A failure during a boot — an emulator that dies in its cold boot, a simulator boot that
-      fails after the notifier already said `Booted` — reaches `startable` as an error only once the
-      device is gone: while it's still merely listed as `booting`, the device counts as running and the
-      failure stays unseen rather than flash for a moment. Stop forgets the start outright, deadline
-      included, so a Stop during a boot is never a failed start, and nor is an emulator that exits
-      cleanly (code 0, no signal, nothing wrong in its log) while its start is under way: that's the
-      user closing its window mid-boot. A clean exit forgets only its own start (`begin()`'s handle),
-      so an older emulator of the same AVD closing late, after Stop then Start, leaves the newer start
-      alone. Forgotten too when nothing watches: a start under way carries on by itself.
+      most. A failed command or the deadline keeps its reason (the tool's last line, or "It didn't start
+      within 3 minutes.") until it's started again; a second click changes nothing; a device already
+      running answers null; an id the list doesn't offer is refused ("Deck no longer sees it."). A
+      failure during a boot — an emulator that dies in its cold boot, a simulator boot that fails after
+      the notifier already said `Booted` — reaches `startable` as an error only once the device is gone:
+      while it's still merely listed as `booting`, the device counts as running and the failure stays
+      unseen rather than flash for a moment. Stop forgets the start outright, deadline included, so a
+      Stop during a boot is never a failed start, and nor is an emulator that exits cleanly (code 0, no
+      signal) while its start is under way: that's the user closing its window mid-boot. Its log doesn't
+      decide that: a normal shutdown, mid-boot too, exits 0 but still writes ERROR lines ("Failed to
+      restore previous context: 12297", and "Could not take screenshot" mid-boot), while its failures
+      exit 1 (an unknown AVD, a second emulator of a running AVD). A clean exit forgets only its own
+      start (`begin()`'s handle), so an older emulator of the same AVD closing late, after Stop then
+      Start, leaves the newer start alone. Forgotten too when nothing watches: a start under way carries
+      on by itself.
     - **The panel:** the tab's pick (else the project's latest) that's starting or failed to is the
       tab's view: "Starting <name>…", or "Couldn't start <name>" with the reason and Try again — only
       for the tab's own device in force, never a failure elsewhere in the project's picks. The device in
@@ -823,19 +826,38 @@ Things that aren't obvious from the code:
       restart, and a boot that fails after the notifier said Booted showing its error only once the
       device is gone, whichever ends first, its command or the notifier's `Booted` (and one that stays
       up turning ready after the grace); each emulator start's own log, and the cleanup of that AVD's
-      older ones; an older start's clean exit leaving a newer one alone; dispose mid-boot and unwatch
+      older ones; a code-0 exit counting as clean whatever its log says; an older start's clean exit
+      leaving a newer one alone; dispose mid-boot and unwatch
       mid-start (`ipc.watch.test.ts`); `pick.ts`'s starting view, `startButtons` and `startPick`; the
       menu's entries.
-    - **Not yet checked:** an emulator started from Deck, and whether macOS prompts for its microphone
-      use, in whose name. Electron's default Info.plist already has `NSMicrophoneUsageDescription`
-      ("This app needs access to the microphone"), which the installed Deck carries unchanged
-      (`extendInfo` overrides only the camera's string); Deck's entitlements have no
-      `com.apple.security.device.audio-input`. The emulator binaries (`emulator`,
+    - **Checked in the app** (2026-11-26, macOS, a dev build through the DevTools protocol, with its own
+      data folder; a throwaway simulator in a private set, iOS 27.0, and a throwaway AVD, Android 16
+      `google_apis` arm64, in a scratch `ANDROID_AVD_HOME`; both deleted after; no phone plugged in): a
+      fresh tab whose project's pick was stopped stayed closed; View → Device Panel opened it on "No
+      devices connected" with the pick's Start button first. The simulator: "Starting Deck check…" at
+      once, one `idb_companion --boot <udid> --device-set-path <set> --log-level info`, live 30 s after
+      the click on its first boot and 4 s on a warm one (Start from the ▾ menu), one `sim-video`,
+      Simulator.app never opened. Stop from the menu: "disconnected" at once (the notifier drops it as
+      it shuts down), `Shutdown` 5 s later, the Start view after 11 s, the project's pick unchanged in
+      `devices.json`. The emulator: "Starting Deck Check…", live 34 s after the click on a cold boot and
+      6 s on a Quick Boot; on macOS `emulator` execs `qemu-system-aarch64` (one process, Deck's own
+      child), so `ended` hears the emulator itself. Its healthy cold boot's log had WARNING lines only.
+      Stop: still listed as ready for 4.5 s while it closed (no "Stopping …"), then "disconnected", then
+      the Start view after 15 s, no error. Each start's log replaced the AVD's earlier one. Quitting
+      Deck left the emulator running, with no scrcpy server, forward or `adb shell` left, and no
+      companion or `sim-video` of the private set. Ended from outside mid-boot (`emu kill` while adb
+      still said offline), the start was forgotten, no error shown. Microphone: no microphone request
+      reached macOS's privacy service (TCC) during either emulator's boot, its stream or Stop.
+    - **Not yet checked:** whether macOS prompts for the emulator's microphone once an app in it
+      records, and in whose name. Electron's default Info.plist already has
+      `NSMicrophoneUsageDescription` ("This app needs access to the microphone"), which the installed
+      Deck carries unchanged (`extendInfo` overrides only the camera's string); Deck's entitlements have
+      no `com.apple.security.device.audio-input`. The emulator binaries (`emulator`,
       `qemu-system-aarch64`) themselves carry the microphone entitlement, and an emulator Deck starts
-      counts as Deck's for macOS privacy, so the likely outcome, if the emulator ever asks, is a prompt
-      in Deck's name with Electron's generic text, or a silent denial under the hardened runtime (no
-      entitlement to grant). Franco chose to leave it as is; the live check with a throwaway AVD is
-      only to confirm. Windows, all of it (`docs/TESTING.md` 18ah–18ai).
+      counts as Deck's for macOS privacy, so the likely outcome, if it asks, is a prompt in Deck's name
+      with Electron's generic text, or a silent denial under the hardened runtime (no entitlement to
+      grant). Franco chose to leave it as is. Closing the emulator's window mid-boot (taken to behave as
+      `emu kill` does). Windows, all of it (`docs/TESTING.md` 18ah–18ai).
     - **Known limits:** an emulator started from Deck runs on after Deck quits; an AVD made meanwhile
       shows once Deck comes to the front; simulators created or deleted while shut down show only
       once the notifier restarts; Deck doesn't make AVDs or simulators; a failed start stays in the
@@ -848,6 +870,8 @@ Things that aren't obvious from the code:
       mid-boot leaves the simulator booted (idb's command ends, the boot completes, in CoreSimulator,
       not in the command Deck ran), as an emulator started from Deck keeps running after Deck quits;
       Stop then Start right away while Quick Boot saves its snapshot may fail (the AVD still locked); a
+      simulator that takes over 10 s to go down after a failed boot turns ready when the grace ends,
+      its error dropped, and a view then could start a stream that fails; a
       device that never sets `sys.boot_completed` shows "Starting …" for about 2 minutes on each
       connection (the tracker's 40 asks), and an emulator whose cold boot runs longer than that after
       adbd answers may end in "Couldn't show …" with Try again instead; Windows: emulators only, and

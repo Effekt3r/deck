@@ -240,6 +240,13 @@ Found while building and reviewing the panel's rules, past what planning had wor
   ones) — why: an older emulator of the same AVD may still be writing to its file (Stop then Start
   while it saves its snapshot), and sharing one would give the new start its reason. Likewise a clean
   exit forgets only its own start.
+- **An emulator's clean exit is its exit code and signal, not its log** — why: checked with the
+  throwaway AVD, a normal shutdown (`adb emu kill`, mid-boot too) exits 0 but still writes ERROR lines
+  ("Failed to restore previous context: 12297", "Could not take screenshot, error: -1"), while its
+  failures exit 1 (an unknown AVD; a second emulator of a running AVD, with a FATAL line). Counting
+  those lines would have shown the user closing its window mid-boot as a failed start, with a GL
+  error for its reason. The log still gives a failed exit its reason (its first ERROR, PANIC or FATAL
+  line).
 - **Microphone, corrected:** Electron's default Info.plist already carries `NSMicrophoneUsageDescription`
   ("This app needs access to the microphone"), and the installed Deck has it (`extendInfo` only
   overrides the camera's string); Deck's entitlements have no `com.apple.security.device.audio-input`.
@@ -249,3 +256,15 @@ Found while building and reviewing the panel's rules, past what planning had wor
   Electron's generic text, or a silent denial under the hardened runtime (no entitlement to grant).
   Franco chose to leave it as is; the live check with a throwaway AVD is only to confirm, not to
   decide.
+
+## Checked in the app (2026-11-26)
+
+A dev build through the DevTools protocol, with a throwaway simulator in a private set and a throwaway
+AVD in a scratch `ANDROID_AVD_HOME` (both deleted after), no phone plugged in. Both kinds started from
+the panel and from the ▾ menu and stopped from the menu: the simulator live 30 s after the click on
+its first boot and 4 s on a warm one, the emulator 34 s on a cold boot and 6 s on a Quick Boot;
+Simulator.app never opened; after each Stop the tab kept its Start view and the project's pick was
+unchanged; quitting Deck left the emulator running with nothing of the stream left behind; ended from
+outside mid-boot, the emulator's start was forgotten with no error (after the clean-exit fix above);
+no microphone request reached macOS's privacy service. Details in CLAUDE.md, Device panel →
+"Starting and stopping" → "Checked in the app".
