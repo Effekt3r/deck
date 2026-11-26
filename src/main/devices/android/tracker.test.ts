@@ -79,6 +79,42 @@ describe('AndroidTracker', () => {
     tracker.stop()
   })
 
+  it('lists a device as booting while it says Android is still starting, then as ready', async () => {
+    const answers: Identity[] = [{ ...emu, booted: false }, emu]
+    const { tracker, children, published } = setup(async () => answers.shift() ?? emu)
+    tracker.start()
+    children[0].stdout.emit('data', frame(EMULATOR))
+    await vi.waitFor(() => expect(published.at(-1)?.devices.map((d) => d.state)).toEqual(['ready']))
+    expect(published.map((p) => p.devices[0]?.state)).toEqual(['booting', 'ready'])
+    tracker.stop()
+  })
+
+  it('takes a device that still says it is starting after 40 answers as started', async () => {
+    const identify = vi.fn(async (): Promise<Identity> => ({ ...emu, booted: false }))
+    const { tracker, children, published } = setup(identify, undefined, { identity: 1, booting: 1, restartMin: 20, restartMax: 80 })
+    tracker.start()
+    children[0].stdout.emit('data', frame(EMULATOR))
+    await vi.waitFor(() => expect(published.at(-1)?.devices.map((d) => d.state)).toEqual(['ready']), { timeout: 3000 })
+    expect(identify).toHaveBeenCalledTimes(40)
+    tracker.stop()
+  })
+
+  it('takes a device that said it was still starting, then stopped answering, as started once its re-asks run out', async () => {
+    let call = 0
+    const identify = vi.fn(async (): Promise<Identity> => {
+      call += 1
+      if (call === 1) return { ...emu, booted: false }
+      throw new Error('closed')
+    })
+    const { tracker, children, published } = setup(identify)
+    tracker.start()
+    children[0].stdout.emit('data', frame(EMULATOR))
+    await vi.waitFor(() => expect(published.at(-1)?.devices.map((d) => d.state)).toEqual(['ready']))
+    // One answer (booting), then three failed re-asks: nothing asks a fourth time.
+    expect(identify).toHaveBeenCalledTimes(4)
+    tracker.stop()
+  })
+
   it("starts again after adb's server goes away, waiting longer each time, and says why", () => {
     vi.useFakeTimers()
     const { tracker, children, published } = setup(async () => c66)

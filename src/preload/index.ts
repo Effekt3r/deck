@@ -90,6 +90,8 @@ const api: DeckApi = {
     input: (id, input) => ipcRenderer.send(IPC.devicesInput, id, input),
     screenshot: (png) => ipcRenderer.invoke(IPC.devicesScreenshot, png),
     openCameraSettings: () => ipcRenderer.send(IPC.devicesCameraSettings),
+    start: (id) => ipcRenderer.invoke(IPC.devicesStart, id),
+    stop: (id) => ipcRenderer.invoke(IPC.devicesStop, id),
   },
   app: {
     info: () => ipcRenderer.invoke(IPC.appInfo),

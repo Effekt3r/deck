@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { DeviceInfo, DeviceList, DeviceProject } from '@shared/types'
-import { choosePanel, GONE_MS, menuOrder, panelRules, panelView, stillLooking } from './pick'
+import type { DeviceInfo, DeviceList, DeviceProject, StartableDevice } from '@shared/types'
+import { choosePanel, emptyOffer, emptyTitle, GONE_MS, MAX_START_BUTTONS, menuOrder, panelRules, panelView, startButtons, stillLooking } from './pick'
 
 const device = (id: string, name: string): DeviceInfo => ({ id, kind: id.startsWith('emulator:') ? 'emulator' : 'android', name, detail: '', state: 'ready' })
 const c66 = device('android:8d2e61a', 'C66')
@@ -8,9 +8,11 @@ const s25 = device('android:R5CW20XY7QZ', "Franco's S25 FE")
 const emu = device('emulator:Pixel_9', 'Pixel 9')
 const sim: DeviceInfo = { id: 'simulator:U1', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' }
 const iphone: DeviceInfo = { id: 'iphone:C1', kind: 'iphone', name: "Franco's iPhone", detail: 'iPhone · cable · view only', state: 'ready' }
+const avd: StartableDevice = { id: 'emulator:Pixel_9', kind: 'emulator', name: 'Pixel 9', detail: 'Emulator' }
+const shutSim: StartableDevice = { id: 'simulator:U2', kind: 'simulator', name: 'iPhone 17 Pro', detail: 'Simulator · iOS 27.0' }
 
 describe('choosePanel', () => {
-  const base = { tab: undefined, project: [] as string[], android: true, ios: false, byHand: false }
+  const base = { tab: undefined, project: [] as string[], android: true, ios: false, byHand: false, startable: [] as StartableDevice[] }
 
   it("shows the tab's pick, else the latest of the project's that's connected", () => {
     expect(choosePanel({ ...base, tab: s25.id, project: [c66.id], devices: [c66, s25] })).toEqual({ kind: 'device', device: s25 })
@@ -63,16 +65,117 @@ describe('choosePanel', () => {
   })
 })
 
+describe('choosePanel: devices started from the panel', () => {
+  const base = { tab: undefined, project: [] as string[], android: true, ios: false, byHand: false, devices: [c66] }
+  const starting = { ...avd, starting: true }
+
+  it("shows the tab's or the project's pick as starting until it's listed, rather than another device", () => {
+    expect(choosePanel({ ...base, tab: avd.id, project: [c66.id], startable: [starting] })).toEqual({ kind: 'starting', device: starting })
+    expect(choosePanel({ ...base, project: [avd.id, c66.id], startable: [starting] })).toEqual({ kind: 'starting', device: starting })
+    expect(choosePanel({ ...base, tab: avd.id, devices: [c66, emu], startable: [] })).toEqual({ kind: 'device', device: emu })
+  })
+
+  it('shows why a start failed, until it is started again or picked away', () => {
+    const failed = { ...avd, error: "It didn't start within 3 minutes." }
+    expect(choosePanel({ ...base, tab: avd.id, startable: [failed] })).toEqual({ kind: 'starting', device: failed })
+  })
+
+  it('a pick that is only startable (not started) counts as not connected', () => {
+    expect(choosePanel({ ...base, project: [avd.id, c66.id], startable: [avd] })).toEqual({ kind: 'device', device: c66 })
+    expect(choosePanel({ ...base, tab: avd.id, startable: [avd] })).toEqual({ kind: 'none' })
+  })
+
+  it('by hand, a stopped device in force keeps the panel on its Start view rather than falling back to a connected phone', () => {
+    // devices: [c66] (from base) is connected; avd (stopped, in startable) is the tab's own pick.
+    expect(choosePanel({ ...base, tab: avd.id, byHand: true, startable: [avd] })).toEqual({ kind: 'none' })
+    // Without a stopped device in force, by hand still falls back to the connected phone as before.
+    expect(choosePanel({ ...base, byHand: true, startable: [avd] })).toEqual({ kind: 'device', device: c66 })
+  })
+
+  it('an old failure only shows for the device in force, not a deeper project pick', () => {
+    const failed = { ...avd, error: "It didn't start within 3 minutes." }
+    // C66 (the project's latest pick) is unplugged; avd failed earlier but is only the second pick:
+    // no failure view, and no falling back to a phone that isn't there.
+    expect(choosePanel({ ...base, devices: [], project: [c66.id, avd.id], startable: [failed] })).toEqual({ kind: 'none' })
+    // avd is the tab's own pick now (the device in force): its old failure shows again.
+    expect(choosePanel({ ...base, devices: [], tab: avd.id, project: [c66.id], startable: [failed] })).toEqual({ kind: 'starting', device: failed })
+  })
+})
+
 describe('menuOrder', () => {
   it('lists the devices that fit first, each group as listed', () => {
     expect(menuOrder([c66, sim, emu], { android: false, ios: true })).toEqual([sim, c66, emu])
     expect(menuOrder([c66, sim, emu], { android: true, ios: false })).toEqual([c66, emu, sim])
     expect(menuOrder([c66, iphone, emu, sim], { android: false, ios: true })).toEqual([iphone, sim, c66, emu])
   })
+
+  it('orders what can be started the same way', () => {
+    expect(menuOrder([avd, shutSim], { android: false, ios: true })).toEqual([shutSim, avd])
+  })
+})
+
+describe('startButtons', () => {
+  const avds = ['A', 'B', 'C', 'D'].map((n): StartableDevice => ({ id: `emulator:${n}`, kind: 'emulator', name: n, detail: 'Emulator' }))
+
+  it('offers up to 3 that fit the tab, and says when the menu has more', () => {
+    expect(MAX_START_BUTTONS).toBe(3)
+    expect(startButtons([...avds, shutSim], { android: true, ios: false }, null)).toEqual({ buttons: avds.slice(0, 3), more: true })
+    expect(startButtons([avds[0], shutSim], { android: false, ios: true }, null)).toEqual({ buttons: [shutSim], more: false })
+    expect(startButtons([avds[0], shutSim], { android: true, ios: true }, null)).toEqual({ buttons: [avds[0], shutSim], more: false })
+  })
+
+  it("puts the tab's device first, even one that doesn't fit the project", () => {
+    expect(startButtons([...avds, shutSim], { android: true, ios: false }, avds[3].id).buttons).toEqual([avds[3], avds[0], avds[1]])
+    expect(startButtons([avds[0], shutSim], { android: false, ios: true }, avds[0].id).buttons).toEqual([avds[0], shutSim])
+  })
+
+  it('leaves out one already starting, and offers one that failed (to try again)', () => {
+    const failed = { ...avds[1], error: 'The emulator stopped (exit code 1).' }
+    expect(startButtons([{ ...avds[0], starting: true }, failed], { android: true, ios: false }, null)).toEqual({ buttons: [failed], more: false })
+  })
+})
+
+describe('emptyOffer', () => {
+  const both = { android: true, ios: true }
+
+  it('offers everything the tab wants while adb is fine, or not wanted', () => {
+    expect(emptyOffer(both, null, [avd, shutSim])).toEqual({ kinds: both, offered: [avd, shutSim], adbNote: null })
+    expect(emptyOffer({ android: false, ios: true }, 'no-adb', [shutSim])).toEqual({ kinds: { android: false, ios: true }, offered: [shutSim], adbNote: null })
+  })
+
+  it("with iOS wanted too, an adb problem leaves the simulators, without emulators, and says what's wrong", () => {
+    expect(emptyOffer(both, 'no-adb', [avd, shutSim])).toEqual({
+      kinds: { android: false, ios: true },
+      offered: [shutSim],
+      adbNote: "Deck can't find adb, so it can't see Android devices. Install Android Studio or Android's platform tools.",
+    })
+    expect(emptyOffer(both, { error: 'protocol fault' }, [avd, shutSim])?.adbNote).toBe("adb couldn't list the devices: protocol fault")
+  })
+
+  it('without iOS, or with no simulator to start, the adb problem is the whole message', () => {
+    expect(emptyOffer({ android: true, ios: false }, 'no-adb', [avd])).toBeNull()
+    expect(emptyOffer(both, 'no-adb', [avd])).toBeNull()
+    expect(emptyOffer(both, 'no-adb', [])).toBeNull()
+  })
+})
+
+describe('emptyTitle', () => {
+  it('says none are connected when none are, whatever would otherwise keep the panel open', () => {
+    expect(emptyTitle([], null)).toBe('No devices connected')
+    expect(emptyTitle([], avd)).toBe('No devices connected')
+  })
+
+  it("names the device it's waiting to start, once other devices are connected", () => {
+    expect(emptyTitle([c66], avd)).toBe("Pixel 9 isn't running")
+  })
+
+  it('says none are connected when devices are connected but nothing keeps the panel open for a stopped one', () => {
+    expect(emptyTitle([c66], null)).toBe('No devices connected')
+  })
 })
 
 describe('stillLooking', () => {
-  const list = (pending: ('android' | 'ios')[]): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending })
+  const list = (pending: ('android' | 'ios')[]): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending, startable: [], noAvds: false })
   const android = { android: true, ios: false, picks: [] }
   it('waits for the list, and for the kinds the tab shows', () => {
     expect(stillLooking(null, android, false, undefined)).toBe(true)
@@ -119,6 +222,14 @@ describe('panelView', () => {
     expect(picked.view).toEqual({ kind: 'device', device: s25, gone: false })
   })
 
+  it('a start shows at once, even of the device whose disconnected hold is running (stopped, then started again)', () => {
+    const emuShown = panelView({ kind: 'device', device: emu }, [emu], null, 0, emu.id)
+    const gone = panelView({ kind: 'none' }, [], emuShown.held, 100, emu.id)
+    expect(gone.view).toEqual({ kind: 'device', device: emu, gone: true })
+    const again = { id: emu.id, kind: 'emulator' as const, name: 'Pixel 9', detail: 'Emulator', starting: true }
+    expect(panelView({ kind: 'starting', device: again }, [], gone.held, 200, emu.id)).toEqual({ view: { kind: 'starting', device: again }, held: null })
+  })
+
   it('a device shown alone stays shown when a second one arrives to choose from', () => {
     const shown = panelView({ kind: 'device', device: c66 }, [c66], null, 0, null)
     const result = panelView({ kind: 'choose', devices: [c66, emu] }, [c66, emu], shown.held, 50, null)
@@ -163,7 +274,7 @@ describe('panelView', () => {
 })
 
 describe('panelRules', () => {
-  const list = (over: Partial<DeviceList> = {}): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending: [], ...over })
+  const list = (over: Partial<DeviceList> = {}): DeviceList => ({ devices: [], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false, ...over })
   const iosApp: DeviceProject = { root: '/ios-app', android: false, ios: true, picks: [] }
   const androidApp: DeviceProject = { root: '/android-app', android: true, ios: false, picks: [] }
   const base = { tabDevice: undefined, tabHidden: undefined, list: null }
@@ -210,6 +321,35 @@ describe('panelRules', () => {
   it('once needed, not looking, and the project is known: the choice is choosePanel\'s', () => {
     const rules = panelRules({ ...base, project: androidApp, list: list({ devices: [c66] }), platform: 'darwin' })
     expect(rules.choice).toEqual({ kind: 'device', device: c66 })
+  })
+
+  it("stays open while the tab's device (its pick, else the project's latest) can be started, once this tab has shown it this session", () => {
+    const listed = list({ devices: [], startable: [avd, shutSim] })
+    const shownAvd = new Set([avd.id])
+    expect(panelRules({ ...base, project: androidApp, tabDevice: avd.id, list: listed, platform: 'darwin' }, shownAvd))
+      .toMatchObject({ choice: { kind: 'none' }, startPick: true, pick: avd.id })
+    expect(panelRules({ ...base, project: { ...androidApp, picks: [avd.id] }, list: listed, platform: 'darwin' }, shownAvd).startPick).toBe(true)
+    // Not shown in this tab this session (the default, nothing passed): no panel by itself, even
+    // though it's the device in force and startable — View → Device Panel still offers it (fix 1).
+    expect(panelRules({ ...base, project: androidApp, tabDevice: avd.id, list: listed, platform: 'darwin' }).startPick).toBe(false)
+    expect(panelRules({ ...base, project: { ...androidApp, picks: [avd.id] }, list: listed, platform: 'darwin' }).startPick).toBe(false)
+    // An unplugged phone can't be started; nothing picked, nothing to keep open for.
+    expect(panelRules({ ...base, project: { ...androidApp, picks: [c66.id] }, list: listed, platform: 'darwin' }, new Set([c66.id])).startPick).toBe(false)
+    expect(panelRules({ ...base, project: androidApp, list: listed, platform: 'darwin' }, shownAvd).startPick).toBe(false)
+    // Not before the list is in.
+    expect(panelRules({ ...base, project: androidApp, tabDevice: avd.id, list: null, platform: 'darwin' }, shownAvd).startPick).toBe(false)
+  })
+
+  it("returns the device in force (the tab's pick, else the project's latest, else null)", () => {
+    expect(panelRules({ ...base, project: androidApp, tabDevice: c66.id, list: list(), platform: 'darwin' }).pick).toBe(c66.id)
+    expect(panelRules({ ...base, project: { ...androidApp, picks: [s25.id, c66.id] }, list: list(), platform: 'darwin' }).pick).toBe(s25.id)
+    expect(panelRules({ ...base, project: androidApp, list: list(), platform: 'darwin' }).pick).toBeNull()
+  })
+
+  it("passes what's starting to choosePanel: the tab's started pick shows as starting", () => {
+    const starting = { ...avd, starting: true }
+    const rules = panelRules({ ...base, project: androidApp, tabDevice: avd.id, list: list({ devices: [c66], startable: [starting] }), platform: 'darwin' })
+    expect(rules.choice).toEqual({ kind: 'starting', device: starting })
   })
 
   it('View → Device Panel hidden (tabHidden === true) wins: no watch, no byHand, nothing to choose, whatever else is true', () => {

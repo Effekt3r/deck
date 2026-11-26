@@ -199,6 +199,24 @@ describe('mergeDevices', () => {
     expect(serials.get('android:R5CW20XY7QZ')).toBe('R5CW20XY7QZ')
   })
 
+  it('says a device that answered before Android had started is booting, until it has', () => {
+    const starting = { ...emu, booted: false }
+    expect(mergeDevices([{ entry: entry(EMULATOR), identity: starting }]).devices[0].state).toBe('booting')
+    expect(mergeDevices([{ entry: entry(EMULATOR), identity: emu }]).devices[0].state).toBe('ready')
+    // adb's own state comes first, and a device that never answered isn't taken for booting.
+    expect(mergeDevices([{ entry: { ...entry(C66), state: 'unauthorized' }, identity: { ...c66, booted: false } }]).devices[0].state).toBe('unauthorized')
+    expect(mergeDevices([{ entry: entry(C66), identity: null }]).devices[0].state).toBe('ready')
+  })
+
+  it('takes booting from the connection that streams (best), not the first with an answer in adb order', () => {
+    // A stale Wi-Fi answer (already booted) listed before a fresh, still-booting USB answer: the
+    // stream reaches the device over USB (best, ranked above an offline connection), so booting
+    // must come from that USB identity, not whichever connection happened to answer first.
+    const stale: Seen = { entry: { ...entry(S25_WIFI), state: 'offline' }, identity: { ...s25, booted: true } }
+    const fresh: Seen = { entry: entry(S25_USB), identity: { ...s25, booted: false } }
+    expect(mergeDevices([stale, fresh]).devices[0].state).toBe('booting')
+  })
+
   it('lists nothing for an emulator still starting (offline, unanswered)', () => {
     expect(mergeDevices([{ entry: entry('emulator-5554 offline transport_id:9\n'), identity: null }]).devices).toEqual([])
   })
@@ -222,5 +240,14 @@ describe('mergeDevices', () => {
     const moto = identity({ serialNo: 'BBB222', maker: 'motorola', model: 'motorola edge', release: '14' })
     const namedMoto = mergeDevices([{ entry: entry('BBB222 device usb:1 transport_id:2\n'), identity: moto }])
     expect(namedMoto.devices[0].name).toBe('motorola edge')
+  })
+
+  it('sorts within a kind numerically, so "Pixel 9" comes before "Pixel 10", as the Start section does', () => {
+    const pixel10 = 'emulator-5556          device product:sdk_gphone64_arm64 model:sdk_gphone64_arm64 device:emu64a transport_id:30146\n'
+    const { devices } = mergeDevices([
+      { entry: entry(pixel10), identity: { ...emu, serialNo: 'EMULATOR37X2X12X1', avd: 'Pixel_10' } },
+      { entry: entry(EMULATOR), identity: emu }, // Pixel_9
+    ])
+    expect(devices.map((d) => d.name)).toEqual(['Pixel 9', 'Pixel 10'])
   })
 })

@@ -2,10 +2,24 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
-import { AdbError, adbCandidates, findAdb, runAdb } from './adb'
+import { AdbError, adbCandidates, findAdb, runAdb, sdkRoots } from './adb'
 
 const root = mkdtempSync(join(tmpdir(), 'deck-adb-'))
 afterAll(() => rmSync(root, { recursive: true, force: true }))
+
+describe('sdkRoots', () => {
+  it('ANDROID_HOME, ANDROID_SDK_ROOT, then the usual place for each system', () => {
+    expect(sdkRoots({ ANDROID_HOME: '/sdk1', ANDROID_SDK_ROOT: '/sdk2' }, 'darwin', '/Users/f')).toEqual(['/sdk1', '/sdk2', '/Users/f/Library/Android/sdk'])
+    expect(sdkRoots({}, 'linux', '/home/f')).toEqual(['/home/f/Android/Sdk'])
+    expect(sdkRoots({ LOCALAPPDATA: 'C:\\Users\\f\\AppData\\Local' }, 'win32', 'C:\\Users\\f')).toEqual(['C:\\Users\\f\\AppData\\Local\\Android\\Sdk'])
+    expect(sdkRoots({}, 'win32', 'C:\\Users\\f')).toEqual(['C:\\Users\\f\\AppData\\Local\\Android\\Sdk'])
+  })
+
+  it('skips a relative or empty one, and lists each folder once', () => {
+    expect(sdkRoots({ ANDROID_HOME: 'sdk', ANDROID_SDK_ROOT: '' }, 'darwin', '/Users/f')).toEqual(['/Users/f/Library/Android/sdk'])
+    expect(sdkRoots({ ANDROID_HOME: '/Users/f/Library/Android/sdk' }, 'darwin', '/Users/f')).toEqual(['/Users/f/Library/Android/sdk'])
+  })
+})
 
 describe('adbCandidates', () => {
   it('macOS: ANDROID_HOME, the SDK under ~/Library, then PATH and Homebrew', () => {

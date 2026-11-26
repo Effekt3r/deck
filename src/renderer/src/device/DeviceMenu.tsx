@@ -1,15 +1,24 @@
-import { type KeyboardEvent, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { type KeyboardEvent, type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import type { DeviceInfo } from '@shared/types'
+import type { DeviceInfo, StartableDevice } from '@shared/types'
 import { placeBelow } from '../claude/SessionPicker'
+import { cursorAfter, type MenuEntry, menuEntries, startHint } from './menu'
 
 interface DeviceMenuProps {
   devices: DeviceInfo[]
-  /** The device shown now. */
+  /** What can be started, those that fit the tab first. */
+  startable: StartableDevice[]
+  /** Say the SDK has no AVDs (only where emulators fit the tab). */
+  noAvds: boolean
+  /** The device shown now (or starting). */
   current: string | null
+  /** The device on screen, listed and not gone, for Stop; null otherwise. */
+  shown: DeviceInfo | null
   /** The button it hangs from. */
   anchor: HTMLElement
   onPick(id: string): void
+  onStart(device: StartableDevice): void
+  onStop(device: DeviceInfo): void
   /** How it closed: `back` (Esc, a choice: the keyboard goes back where it was), `tab` (to the button,
    *  and the browser's Tab moves on from there), `leave` (a click elsewhere, a blur, a resize). */
   onClose(how: MenuClose): void
@@ -17,12 +26,26 @@ interface DeviceMenuProps {
 
 export type MenuClose = 'back' | 'tab' | 'leave'
 
-const STATE_WORDS: Record<DeviceInfo['state'], string> = { ready: '', connecting: 'connecting', unauthorized: 'not allowed yet', offline: 'offline' }
+const STATE_WORDS: Record<DeviceInfo['state'], string> = { ready: '', booting: 'starting', connecting: 'connecting', unauthorized: 'not allowed yet', offline: 'offline' }
 
-/** Which device the tab shows, from every device Deck sees. Rendered into <body> like the session menu. */
-export function DeviceMenu({ devices, current, anchor, onPick, onClose }: DeviceMenuProps) {
-  // The cursor is a device, not a place in the list, which can change under it (one unplugged).
-  const [cursorId, setCursorId] = useState<string | null>(() => current ?? devices[0]?.id ?? null)
+/** Which device the tab shows, from every device Deck sees; what can be started; and Stop for an
+ *  emulator or a simulator on screen. Rendered into <body> like the session menu. */
+export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor, onPick, onStart, onStop, onClose }: DeviceMenuProps) {
+  const entries = menuEntries(devices, startable, shown)
+  const startTitleId = useId()
+  // The cursor is an item, not a place in the list, which can change under it (one unplugged, or a
+  // start item becoming its device item once listed, or back): cursorAfter keeps it on the same
+  // device rather than letting it jump to the top. The initial guess (`device:<current>`) also goes
+  // through it, which corrects it to `start:<current>` when the menu opens on a device that's only
+  // starting (current isn't a connected device yet).
+  const [cursor, setCursor] = useState<string | null>(() =>
+    cursorAfter(entries, current ? `device:${current}` : (entries[0]?.key ?? null)))
+  // A later render whose entries changed under the same cursor (the mapping above, mid-session):
+  // calling the setter conditionally during render is the documented way to adjust state from
+  // changed props without an extra effect-driven render (react.dev: "storing information from
+  // previous renders"). cursorAfter is idempotent, so this can't loop.
+  const mappedCursor = cursorAfter(entries, cursor)
+  if (mappedCursor !== cursor) setCursor(mappedCursor)
   // Placed once: the menu closes when the window resizes.
   const [place] = useState(() => placeBelow(anchor))
   const menuRef = useRef<HTMLDivElement>(null)
@@ -48,12 +71,18 @@ export function DeviceMenu({ devices, current, anchor, onPick, onClose }: Device
     }
   }, [anchor, onClose])
 
-  const at = Math.max(0, devices.findIndex((d) => d.id === cursorId))
-  const move = (i: number) => setCursorId(devices[Math.min(Math.max(i, 0), devices.length - 1)]?.id ?? null)
+  const at = Math.max(0, entries.findIndex((e) => e.key === cursor))
+  // A long menu scrolls (placeBelow caps its height): the keyboard's cursor stays in view.
+  useEffect(() => {
+    menuRef.current?.querySelector(`[data-index="${at}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [at])
+  const move = (i: number) => setCursor(entries[Math.min(Math.max(i, 0), entries.length - 1)]?.key ?? null)
   // Choosing the device shown picks it too: shown as the only one that fits, it becomes the tab's and
-  // the project's device.
-  const choose = (device: DeviceInfo | undefined) => {
-    if (device) onPick(device.id)
+  // the project's device. Choosing one to start picks it as well (DevicePanel's start).
+  const choose = (entry: MenuEntry | undefined) => {
+    if (entry?.type === 'device') onPick(entry.device.id)
+    else if (entry?.type === 'start') onStart(entry.device)
+    else if (entry?.type === 'stop') onStop(entry.device)
     onClose('back')
   }
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
@@ -72,10 +101,10 @@ export function DeviceMenu({ devices, current, anchor, onPick, onClose }: Device
         move(0)
         break
       case 'End':
-        move(devices.length - 1)
+        move(entries.length - 1)
         break
       case 'Enter':
-        choose(devices[at])
+        choose(entries[at])
         break
       case 'Tab':
         // The button takes the keyboard now, and the browser's own Tab moves on from there.
@@ -87,24 +116,56 @@ export function DeviceMenu({ devices, current, anchor, onPick, onClose }: Device
     e.preventDefault()
   }
 
+  const row = (entry: MenuEntry, i: number): ReactNode => {
+    const className = `cpm-item${i === at ? ' cursor' : ''}`
+    const hover = () => entry.key !== cursor && setCursor(entry.key)
+    if (entry.type === 'device') {
+      const { device } = entry
+      const checked = device.id === current
+      const word = STATE_WORDS[device.state]
+      return (
+        <div key={entry.key} data-index={i} role="menuitemradio" aria-checked={checked} className={className}
+          title={`${device.name}\n${device.detail}${word ? ` · ${word}` : ''}`} onMouseMove={hover} onClick={() => choose(entry)}>
+          <span className="cpm-check" aria-hidden="true">{checked ? '✓' : ''}</span>
+          <span className="cpm-label">{device.name}</span>
+          <span className="cpm-hint">{word || device.detail}</span>
+        </div>
+      )
+    }
+    if (entry.type === 'start') {
+      const { device } = entry
+      return (
+        <div key={entry.key} data-index={i} role="menuitem" aria-label={`Start ${device.name}${startHint(device) ? `, ${startHint(device)}` : ''}`} aria-disabled={device.starting || undefined}
+          className={className} title={`Start ${device.name}\n${device.error ?? device.detail}`} onMouseMove={hover} onClick={() => choose(entry)}>
+          <span className="cpm-check" aria-hidden="true">▶</span>
+          <span className="cpm-label">{device.name}</span>
+          <span className="cpm-hint">{startHint(device)}</span>
+        </div>
+      )
+    }
+    return (
+      <div key={entry.key} data-index={i} role="menuitem" className={className} onMouseMove={hover} onClick={() => choose(entry)}>
+        <span className="cpm-check" aria-hidden="true" />
+        <span className="cpm-label">Stop {entry.device.name}</span>
+      </div>
+    )
+  }
+
   return createPortal(
-    <div className="cp-menu" ref={menuRef} role="menu" aria-label="Device to show" tabIndex={-1} style={place} onKeyDown={onKeyDown}>
+    <div className="cp-menu" ref={menuRef} role="menu" aria-label="Devices" tabIndex={-1} style={place} onKeyDown={onKeyDown}>
       <div className="cpm-title">Devices</div>
       <div className="cpm-list">
-        {devices.map((device, i) => {
-          const checked = device.id === current
-          const word = STATE_WORDS[device.state]
-          return (
-            <div key={device.id} role="menuitemradio" aria-checked={checked} className={`cpm-item${i === at ? ' cursor' : ''}`}
-              title={`${device.name}\n${device.detail}${word ? ` · ${word}` : ''}`}
-              onMouseMove={() => device.id !== cursorId && setCursorId(device.id)} onClick={() => choose(device)}>
-              <span className="cpm-check" aria-hidden="true">{checked ? '✓' : ''}</span>
-              <span className="cpm-label">{device.name}</span>
-              <span className="cpm-hint">{word || device.detail}</span>
-            </div>
-          )
-        })}
+        {entries.map((entry, i) => entry.type === 'device' && row(entry, i))}
         {devices.length === 0 && <div className="cpm-note">No devices connected.</div>}
+        {(startable.length > 0 || noAvds) && (
+          <div role="group" aria-labelledby={startTitleId}>
+            <div className="cpm-title" id={startTitleId}>Start</div>
+            {entries.map((entry, i) => entry.type === 'start' && row(entry, i))}
+            {noAvds && <div className="cpm-note">No emulators: make one in Android Studio's Device Manager</div>}
+          </div>
+        )}
+        {entries.at(-1)?.type === 'stop' && <div className="cpm-sep" role="separator" />}
+        {entries.map((entry, i) => entry.type === 'stop' && row(entry, i))}
       </div>
     </div>,
     document.body,

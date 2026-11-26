@@ -168,6 +168,10 @@ export function mergeDevices(seen: readonly Seen[]): { devices: DeviceInfo[]; se
     const best = [...group].sort((a, b) => rank(a) - rank(b))[0]
     const state = stateOf(best.entry.state)
     const identity = group.find((s) => s.identity)?.identity ?? null
+    // Whether it's booting must follow the connection the stream actually uses (best), not whichever
+    // connection happens to answer first in adb's order: a stale, already-booted Wi-Fi answer
+    // mustn't hide a fresh USB connection that's still starting up, or the other way round.
+    const bootAnswer = best.identity ?? identity
     const emulator = id.startsWith('emulator:')
     serials.set(id, best.entry.serial)
     devices.push({
@@ -176,10 +180,12 @@ export function mergeDevices(seen: readonly Seen[]): { devices: DeviceInfo[]; se
       name: nameOf(best.entry, identity, emulator),
       // Only the connections in the best state: a cable that's offline isn't "USB + Wi-Fi".
       detail: detailOf(group.filter((s) => stateOf(s.entry.state) === state), identity, emulator),
-      state,
+      // adb lists a device once adbd runs, well before Android has started (an emulator's cold boot,
+      // a phone rebooting): a stream started then fails, so it shows once Android has.
+      state: state === 'ready' && bootAnswer && !bootAnswer.booted ? 'booting' : state,
     })
   }
-  devices.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name) : a.kind === 'android' ? -1 : 1))
+  devices.sort((a, b) => (a.kind === b.kind ? a.name.localeCompare(b.name, undefined, { numeric: true }) : a.kind === 'android' ? -1 : 1))
   return { devices, serials }
 }
 

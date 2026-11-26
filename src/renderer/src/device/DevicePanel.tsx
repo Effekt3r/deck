@@ -1,11 +1,11 @@
 import { Component, type ErrorInfo, type MouseEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import type { DeviceInfo, DeviceList } from '@shared/types'
+import type { DeviceInfo, DeviceList, StartableDevice } from '@shared/types'
 import { errorText } from '../git/format'
 import { BackIcon, CameraIcon, Caret, HomeIcon, PowerIcon, RecentsIcon } from '../icons'
 import { DeviceMenu, type MenuClose } from './DeviceMenu'
 import { DeviceScreen, type ScreenHandle } from './DeviceScreen'
 import { KEYCODE } from './keys'
-import type { PanelView } from './pick'
+import { emptyOffer, emptyTitle, type PanelView, startButtons } from './pick'
 import '../claude/panel.css'
 import './device.css'
 
@@ -14,6 +14,12 @@ interface DevicePanelProps {
   view: PanelView
   /** Every device Deck sees, for the menu, those that fit first. */
   devices: DeviceInfo[]
+  /** What can be started, those that fit first (DeviceList.startable). */
+  startable: StartableDevice[]
+  /** The SDK's emulator lists no AVDs. */
+  noAvds: boolean
+  /** The tab's device (its own pick, else the project's latest): its Start button comes first. */
+  pick: string | null
   problem: DeviceList['problem']
   /** Why simulators can't be listed (macOS). */
   iosProblem: DeviceList['iosProblem']
@@ -29,6 +35,8 @@ interface DevicePanelProps {
   /** Claude runs in the tab: the screenshot button shows. */
   claudeRuns: boolean
   onPick(id: string): void
+  /** A device stopped from the panel: the tab keeps it, so the panel stays with its Start button. */
+  onKeep(id: string): void
   /** Types text into the tab's terminal: the screenshot's path. */
   onInsert(text: string): void
   /** A device was chosen from the keyboard and its button went with the chooser: the tab gives the
@@ -44,7 +52,7 @@ const keepFocus = (e: MouseEvent) => e.preventDefault()
  *  buttons, the screenshot), then the screen, a choice of devices, or why there's none. A thrown
  *  render costs the panel only. */
 export function DevicePanel(props: DevicePanelProps) {
-  const shown = props.view.kind === 'device' ? props.view.device.id : props.view.kind
+  const shown = props.view.kind === 'device' || props.view.kind === 'starting' ? props.view.device.id : props.view.kind
   return (
     <Boundary resetKey={shown}>
       <PanelBody {...props} />
@@ -52,7 +60,7 @@ export function DevicePanel(props: DevicePanelProps) {
   )
 }
 
-function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, onToggle, visible, claudeRuns, onPick, onInsert, onFocusLost }: DevicePanelProps) {
+function PanelBody({ view, devices, startable, noAvds, pick, problem, iosProblem, wants, looking, open, onToggle, visible, claudeRuns, onPick, onKeep, onInsert, onFocusLost }: DevicePanelProps) {
   const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null)
   /** A screenshot that failed, and the device it was of. */
   const [error, setError] = useState<{ device: string; text: string } | null>(null)
@@ -87,14 +95,51 @@ function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, o
   }, [visible])
 
   const device = view.kind === 'device' ? view.device : null
+  const starting = view.kind === 'starting' ? view.device : null
   const gone = view.kind === 'device' && view.gone
   const ready = device !== null && device.state === 'ready' && !gone
   // A failed screenshot's error goes with its device, and with Claude.
   useEffect(() => {
     setError(null)
   }, [device?.id, claudeRuns])
+  // A start or stop that couldn't be done says so while the panel shows what it showed when the
+  // answer came (for a refused start, whatever the pick fell back to).
+  const viewKey = device?.id ?? starting?.id ?? view.kind
+  const viewNow = useRef(viewKey)
+  useLayoutEffect(() => {
+    viewNow.current = viewKey
+  })
+  const [actionError, setActionError] = useState<{ view: string; text: string } | null>(null)
+  // A new view (another device, or the same one's kind changing) clears a start/stop error, rather
+  // than letting a stale one reappear if the view later matches again.
+  useEffect(() => setActionError(null), [viewKey])
+  const say = (text: string) => setActionError({ view: viewNow.current, text })
+  // Choosing one to start picks it for the tab and the project, as choosing a connected device does;
+  // the list then says how the start goes.
+  const start = (item: StartableDevice) => {
+    setActionError(null)
+    onPick(item.id)
+    window.deck.devices.start(item.id).then(
+      (result) => {
+        if (result) say(`Couldn't start ${item.name}: ${result.error}`)
+      },
+      (err: unknown) => say(`Couldn't start ${item.name}: ${errorText(err)}`),
+    )
+  }
+  const stop = (target: DeviceInfo) => {
+    setActionError(null)
+    onKeep(target.id)
+    window.deck.devices.stop(target.id).then(
+      (result) => {
+        if (result) say(`Couldn't stop ${target.name}: ${result.error}`)
+      },
+      (err: unknown) => say(`Couldn't stop ${target.name}: ${errorText(err)}`),
+    )
+  }
+  const shownActionError = actionError && actionError.view === viewKey ? actionError.text : null
   let message: string | null = null
   if (device && gone) message = `${device.name} disconnected`
+  else if (device?.state === 'booting') message = `Starting ${device.name}…`
   else if (device?.state === 'unauthorized') message = `Allow USB debugging on ${device.name}: check its screen.`
   else if (device?.state === 'offline') message = `${device.name} isn't answering. Unplug it and plug it back in.`
   else if (device?.state === 'connecting') message = `${device.name} is connecting…`
@@ -122,7 +167,7 @@ function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, o
   // An error belongs to its device's screenshot button: it goes when the device or Claude does.
   const shownError = error && error.device === device?.id && claudeRuns ? error.text : null
 
-  const title = device ? device.name : view.kind === 'choose' ? 'Choose a device' : 'Devices'
+  const title = device?.name ?? starting?.name ?? (view.kind === 'choose' ? 'Choose a device' : 'Devices')
   return (
     <div className={open ? 'device-panel' : 'device-panel folded'}>
       <header className="dp-head" onMouseDown={keepFocus}>
@@ -140,6 +185,7 @@ function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, o
           <Chevron />
         </button>
         {device && <span className={gone ? 'dp-detail gone' : 'dp-detail'}>{gone ? 'disconnected' : device.detail}</span>}
+        {starting && <span className="dp-detail">{starting.detail}</span>}
         <span className="cp-spacer" />
         {open && ready && device && (
           <span className="dp-buttons">
@@ -162,11 +208,26 @@ function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, o
         )}
       </header>
       {open && shownError && <div className="dp-error" role="alert">{shownError}</div>}
+      {open && shownActionError && <div className="dp-error" role="alert">{shownActionError}</div>}
       {open && (
         <div className="dp-body">
           {device && (
-            <DeviceScreen key={device.id} deviceId={device.id} name={device.name} kind={device.kind} live={visible && ready} message={message} handle={screen} />
+            <DeviceScreen key={device.id} deviceId={device.id} name={device.name} kind={device.kind} live={visible && ready} message={message}
+              busy={device.state === 'booting' && !gone} handle={screen} />
           )}
+          {starting && (starting.error !== undefined ? (
+            <State error title={`Couldn't start ${starting.name}`} detail={starting.error}>
+              <button className="button" onMouseDown={keepFocus} onClick={(e) => {
+                // From the keyboard, the button had it, and it goes with the view once "Starting …"
+                // replaces this button.
+                const k = e.currentTarget === document.activeElement
+                start(starting)
+                if (k) onFocusLost()
+              }}>Try again</button>
+            </State>
+          ) : (
+            <State busy title={`Starting ${starting.name}…`} />
+          ))}
           {view.kind === 'choose' && (
             <div className="dp-choose" onMouseDown={keepFocus}>
               <span className="dp-choose-title">Which device should this project show?</span>
@@ -183,18 +244,41 @@ function PanelBody({ view, devices, problem, iosProblem, wants, looking, open, o
               ))}
             </div>
           )}
-          {view.kind === 'none' && <Nothing problem={problem} iosProblem={iosProblem} wants={wants} looking={looking} />}
+          {view.kind === 'none' && (
+            <Nothing devices={devices} problem={problem} iosProblem={iosProblem} wants={wants} looking={looking} startable={startable} noAvds={noAvds} pick={pick}
+              onStart={(item, fromKeyboard) => {
+                start(item)
+                // From the keyboard, the button had it, and it goes with the empty panel.
+                if (fromKeyboard) onFocusLost()
+              }} />
+          )}
         </div>
       )}
       {menuAnchor && (
-        <DeviceMenu devices={devices} current={device?.id ?? null} anchor={menuAnchor} onPick={onPick} onClose={closeMenu} />
+        <DeviceMenu devices={devices} startable={startable} noAvds={noAvds && wants.android} current={device?.id ?? starting?.id ?? null}
+          shown={device && !gone ? device : null} anchor={menuAnchor} onPick={onPick} onStart={start} onStop={stop} onClose={closeMenu} />
       )}
     </div>
   )
 }
 
-/** The panel was asked for (or a simulator can't be shown) and there's nothing to show. */
-function Nothing({ problem, iosProblem, wants, looking }: { problem: DeviceList['problem']; iosProblem: DeviceList['iosProblem']; wants: { android: boolean; ios: boolean }; looking: boolean }) {
+interface NothingProps {
+  /** Every device Deck sees, just to say whether any are connected (`emptyTitle`). */
+  devices: DeviceInfo[]
+  problem: DeviceList['problem']
+  iosProblem: DeviceList['iosProblem']
+  wants: { android: boolean; ios: boolean }
+  looking: boolean
+  startable: StartableDevice[]
+  noAvds: boolean
+  pick: string | null
+  /** A Start button was pressed; `fromKeyboard`: it had the keyboard. */
+  onStart(item: StartableDevice, fromKeyboard: boolean): void
+}
+
+/** The panel was asked for (or a simulator can't be shown) and there's nothing to show: why, and
+ *  Start buttons for up to 3 emulators or simulators that fit. */
+function Nothing({ devices, problem, iosProblem, wants, looking, startable, noAvds, pick, onStart }: NothingProps) {
   if (looking) return <State busy title="Looking for devices…" />
   // Nested so each problem narrows.
   if (wants.ios) {
@@ -208,18 +292,49 @@ function Nothing({ problem, iosProblem, wants, looking }: { problem: DeviceList[
     }
     if (iosProblem) return <State error title="Deck couldn't list the simulators" detail={iosProblem.error} />
   }
-  if (wants.android) {
-    if (problem === 'no-adb') {
-      return <State title="Deck can't find adb, so it can't see Android devices." detail="Install Android Studio or Android's platform tools." />
-    }
-    if (problem) return <State error title="adb couldn't list the devices" detail={problem.error} />
+  // With iOS wanted too and a simulator to start, an adb problem doesn't hide the simulators: it's
+  // said under them.
+  const offer = emptyOffer(wants, problem, startable)
+  if (!offer) {
+    return problem === 'no-adb'
+      ? <State title="Deck can't find adb, so it can't see Android devices." detail="Install Android Studio or Android's platform tools." />
+      : <State error title="adb couldn't list the devices" detail={problem?.error} />
   }
+  const { kinds, offered, adbNote } = offer
+  const { buttons, more } = startButtons(offered, kinds, pick)
+  // The title names the tab's stopped device even when it can't be offered here (an emulator while
+  // adb has a problem); "Start it below" only when it's among the buttons.
+  const title = emptyTitle(devices, startable.find((d) => d.id === pick) ?? null)
+  const namesPick = devices.length > 0 && offered.some((d) => d.id === pick)
   // iOS is wanted only on macOS, where iPhones show too: unlocked, since one isn't listed while it's
   // locked or doesn't trust the Mac.
-  const detail = wants.android && wants.ios
-    ? 'Plug in an unlocked iPhone or an Android phone with USB debugging on, start an emulator, or boot a simulator.'
-    : wants.ios ? 'Plug in an unlocked iPhone, or boot a simulator in Xcode or with simctl.' : 'Plug in an Android phone with USB debugging on, or start an emulator.'
-  return <State title="No devices connected" detail={detail} />
+  const plugIn = kinds.android && kinds.ios
+    ? 'Plug in an unlocked iPhone or an Android phone with USB debugging on'
+    : kinds.ios ? 'Plug in an unlocked iPhone' : 'Plug in an Android phone with USB debugging on'
+  const detail = namesPick && buttons.length > 0
+    ? 'Start it below, or choose another device in the ▾ menu.'
+    : buttons.length > 0
+    ? `${plugIn}, or start one below.`
+    : kinds.android && kinds.ios
+      ? `${plugIn}, start an emulator, or boot a simulator.`
+      : kinds.ios ? `${plugIn}, or boot a simulator in Xcode or with simctl.` : `${plugIn}, or start an emulator.`
+  return (
+    <State title={title} detail={detail}>
+      {buttons.length > 0 && (
+        <span className="dp-starts">
+          {buttons.map((item) => (
+            <button key={item.id} className="button" title={`${item.name}\n${item.error ?? item.detail}`} onMouseDown={keepFocus}
+              onClick={(e) => onStart(item, e.currentTarget === document.activeElement)}>
+              <span className="dp-start-label">Start {item.name}</span>
+            </button>
+          ))}
+        </span>
+      )}
+      {more && <span className="cp-state-detail">More in the ▾ menu</span>}
+      {kinds.android && noAvds && <span className="cp-state-detail">No emulators: make one in Android Studio's Device Manager</span>}
+      {adbNote && <span className="cp-state-detail">{adbNote}</span>}
+    </State>
+  )
 }
 
 /** What to run in a terminal, with Copy. */

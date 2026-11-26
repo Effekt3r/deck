@@ -1,7 +1,9 @@
-import type { DeviceInfo, DeviceList, DevicePlatform, DeviceProject, Platform } from '@shared/types'
+import type { DeviceInfo, DeviceList, DevicePlatform, DeviceProject, Platform, StartableDevice } from '@shared/types'
 
 export type PanelChoice =
   | { kind: 'device'; device: DeviceInfo }
+  /** Started from the panel and not listed yet: "Starting …", or why it didn't. */
+  | { kind: 'starting'; device: StartableDevice }
   | { kind: 'choose'; devices: DeviceInfo[] }
   | { kind: 'none' }
 
@@ -17,6 +19,8 @@ export interface ChoiceInput {
   /** The panel was asked for (View → Device Panel), so every device fits. */
   byHand: boolean
   devices: DeviceInfo[]
+  /** What can be started, with the starts under way or failed (`DeviceList.startable`). */
+  startable: StartableDevice[]
 }
 
 /** What a device runs: phones and emulators Android, simulators and iPhones iOS. */
@@ -26,17 +30,30 @@ const platformOf = (kind: DeviceInfo['kind']): DevicePlatform => (kind === 'simu
 const platformOfId = (id: string): DevicePlatform => (id.startsWith('simulator:') || id.startsWith('iphone:') ? 'ios' : 'android')
 
 /** The project is an app for the device's platform. */
-const fits = (device: DeviceInfo, project: { android: boolean; ios: boolean }) => project[platformOf(device.kind)]
+const fits = (device: { kind: DeviceInfo['kind'] }, project: { android: boolean; ios: boolean }) => project[platformOf(device.kind)]
 
 /** The device a tab's panel shows: its own pick, else the latest of its project's picks that's
- *  connected. Nothing picked yet, the only device that fits an app for its platform (phones and
- *  emulators an Android one, simulators and iPhones an iOS one); with several the panel asks. Once
- *  something has been picked, a device the project never picked doesn't open the panel (the C66's
- *  project doesn't open on the S25 meanwhile), unless it was asked for. With none there's no panel. */
-export function choosePanel({ tab, project, android, ios, byHand, devices }: ChoiceInput): PanelChoice {
-  const find = (id: string | undefined) => (id ? devices.find((d) => d.id === id) : undefined)
-  const picked = find(tab) ?? project.map(find).find((d) => d !== undefined)
-  if (picked) return { kind: 'device', device: picked }
+ *  connected, or that was started from the panel and isn't listed yet (it shows as starting, or why
+ *  it didn't start — only for the device in force itself, `tab ?? project[0]`: an old failure
+ *  elsewhere in the project's picks doesn't resurface in another tab or project). Nothing picked yet,
+ *  the only device that fits an app for its platform (phones and emulators an Android one, simulators
+ *  and iPhones an iOS one); with several the panel asks. Once something has been picked, a device the
+ *  project never picked doesn't open the panel (the C66's project doesn't open on the S25 meanwhile),
+ *  unless it was asked for — except the device in force itself: stopped (in `startable`), it keeps
+ *  the panel on its Start view even by hand, rather than falling back to whichever phone is plugged
+ *  in. With none there's no panel. */
+export function choosePanel({ tab, project, android, ios, byHand, devices, startable }: ChoiceInput): PanelChoice {
+  const inForce = tab ?? project[0]
+  const find = (id: string | undefined): PanelChoice | undefined => {
+    if (!id) return undefined
+    const device = devices.find((d) => d.id === id)
+    if (device) return { kind: 'device', device }
+    const start = startable.find((d) => d.id === id && (d.starting || (d.error !== undefined && id === inForce)))
+    return start ? { kind: 'starting', device: start } : undefined
+  }
+  const picked = find(tab) ?? project.map(find).find((c) => c !== undefined)
+  if (picked) return picked
+  if (inForce !== undefined && startable.some((d) => d.id === inForce)) return { kind: 'none' }
   let fitting: DeviceInfo[] = []
   if (byHand) fitting = devices
   else if ((android || ios) && !tab && project.length === 0) fitting = devices.filter((d) => fits(d, { android, ios }))
@@ -45,9 +62,48 @@ export function choosePanel({ tab, project, android, ios, byHand, devices }: Cho
   return { kind: 'none' }
 }
 
-/** The menu's order: the devices that fit the project first, then the others, each as listed. */
-export function menuOrder(devices: DeviceInfo[], project: { android: boolean; ios: boolean }): DeviceInfo[] {
+/** The menu's order: the devices (or what can be started) that fit the project first, then the
+ *  others, each as listed. */
+export function menuOrder<T extends { kind: DeviceInfo['kind'] }>(devices: T[], project: { android: boolean; ios: boolean }): T[] {
   return [...devices.filter((d) => fits(d, project)), ...devices.filter((d) => !fits(d, project))]
+}
+
+/** At most this many Start buttons in an empty panel; the rest are in the ▾ menu. */
+export const MAX_START_BUTTONS = 3
+
+/** What an empty panel offers to start: the tab's device (`pick`) first when it can be started, then
+ *  those that fit the tab (emulators where Android devices do, simulators where iOS ones do), none
+ *  starting already, up to 3; `more` when the menu has more. */
+export function startButtons(startable: StartableDevice[], wants: { android: boolean; ios: boolean }, pick: string | null): { buttons: StartableDevice[]; more: boolean } {
+  const offered = startable.filter((d) => !d.starting && (d.id === pick || fits(d, wants)))
+  const ordered = [...offered.filter((d) => d.id === pick), ...offered.filter((d) => d.id !== pick)]
+  return { buttons: ordered.slice(0, MAX_START_BUTTONS), more: ordered.length > MAX_START_BUTTONS }
+}
+
+/** What an empty panel speaks of and offers to start, once iOS's own problems (which it shows
+ *  instead) are ruled out: the kinds it wants, all of `startable`, and no note. With iOS wanted too and
+ *  a simulator to start, an adb problem doesn't hide the simulators (an iOS developer without Android's
+ *  tools opens the panel by hand to start one): the panel speaks of iOS only, offers no emulator (Deck
+ *  couldn't see one it started), and says what's wrong with adb under the rest (`adbNote`). Otherwise
+ *  null: the adb problem, with what to do about it, is the panel's whole message. */
+export function emptyOffer(wants: { android: boolean; ios: boolean }, problem: DeviceList['problem'], startable: StartableDevice[]):
+  { kinds: { android: boolean; ios: boolean }; offered: StartableDevice[]; adbNote: string | null } | null {
+  if (!wants.android || !problem) return { kinds: wants, offered: startable, adbNote: null }
+  const offered = startable.filter((d) => d.kind !== 'emulator')
+  if (!wants.ios || offered.length === 0) return null
+  const adbNote = problem === 'no-adb'
+    ? "Deck can't find adb, so it can't see Android devices. Install Android Studio or Android's platform tools."
+    : `adb couldn't list the devices: ${problem.error}`
+  return { kinds: { android: false, ios: true }, offered, adbNote }
+}
+
+/** The empty panel's title: it names the device it's waiting to start (`startPickDevice`: the device
+ *  in force, resolved against `startable` — see `panelRules`'s `startPick`) once other devices are
+ *  connected meanwhile, so the panel never claims none are connected while some are. Otherwise, "No
+ *  devices connected" — including when nothing is connected at all, whatever else is true. */
+export function emptyTitle(devices: DeviceInfo[], startPickDevice: StartableDevice | null): string {
+  if (devices.length === 0 || !startPickDevice) return 'No devices connected'
+  return `${startPickDevice.name} isn't running`
 }
 
 /** Whether a tab still waits for devices: the list isn't in, or a kind it may show is still being
@@ -86,8 +142,10 @@ export function devicesNeeded({ project, tabDevice, tabHidden }: Omit<PanelInput
 /** What App.tsx needs back from `panelRules`: whether main should be asked to watch for devices
  *  (`devicesNeeded` again, now that the list it gates is known), the panel was asked for by hand, the
  *  project's own apps, what the panel speaks of when it has nothing, whether a kind the tab may show
- *  is still being looked for, the device to show (a choice, or none), and whether a booted simulator
- *  Deck can't show should open the panel anyway. */
+ *  is still being looked for, the device to show (a choice, or none), whether a booted simulator
+ *  Deck can't show should open the panel anyway, whether the tab's device can be started (the panel
+ *  stays, to start it), and the device in force itself (`useHeldView`'s `pick`, and the Start
+ *  buttons' first entry), so App.tsx doesn't repeat the logic. */
 export interface PanelRules {
   needed: boolean
   byHand: boolean
@@ -96,6 +154,8 @@ export interface PanelRules {
   looking: boolean
   choice: PanelChoice | null
   iosHint: boolean
+  startPick: boolean
+  pick: string | null
 }
 
 /** The device panel's rules once the list is known, outside React: App.tsx calls `devicesNeeded`
@@ -104,21 +164,31 @@ export interface PanelRules {
  *  the panel isn't needed, the list hasn't answered, it's still looking (a kind the tab may show
  *  hasn't had its first list: "not needed any more" would otherwise show the old list's choice), or
  *  neither the project nor byHand is known yet. A booted simulator Deck can't show (no idb-companion,
- *  or one without sim-video) opens an iOS project's panel to say what to install. */
-export function panelRules({ project, tabDevice, tabHidden, list, platform }: PanelInputs): PanelRules {
+ *  or one without sim-video) opens an iOS project's panel to say what to install. `shownHere`: device
+ *  ids this tab has shown as a device view (booting or disconnected too, in front or not), picked or
+ *  stopped this session, so `startPick` (below) only reopens the panel for a stopped device this tab
+ *  has had, not every tab of the same project. */
+export function panelRules({ project, tabDevice, tabHidden, list, platform }: PanelInputs, shownHere: ReadonlySet<string> = new Set()): PanelRules {
   const byHand = tabHidden === false
   const apps = { android: project?.android ?? false, ios: project?.ios ?? false }
   const needed = devicesNeeded({ project, tabDevice, tabHidden, platform })
   const looking = stillLooking(list, project, byHand, tabDevice)
   const choice = needed && list && !looking && (project || byHand)
-    ? choosePanel({ tab: tabDevice, project: project?.picks ?? [], ...apps, byHand, devices: list.devices })
+    ? choosePanel({ tab: tabDevice, project: project?.picks ?? [], ...apps, byHand, devices: list.devices, startable: list.startable })
     : null
   // A booted simulator Deck can't show (no idb-companion, or one without sim-video) opens an iOS
   // project's panel to say what to install.
   const iosHint = apps.ios && (list?.iosProblem === 'no-idb' || list?.iosProblem === 'old-idb')
   // What the panel speaks of when it has nothing: the kinds the tab shows (iOS only on macOS).
   const wants = { android: byHand || apps.android, ios: (byHand && platform === 'darwin') || apps.ios }
-  return { needed, byHand, apps, wants, looking, choice, iosHint }
+  // The device in force: the tab's own pick, else the project's latest, else null.
+  const pick = tabDevice ?? project?.picks[0] ?? null
+  // It's an emulator or a simulator that isn't running, and this tab has had it this session (shown,
+  // picked or stopped it: `shownHere`): the panel stays open with its Start button, as it doesn't for an unplugged phone, or for
+  // a fresh tab whose project's latest pick is already stopped (View → Device Panel still offers it
+  // by hand). So a Stop leaves a way to start the device again in the tab that had it.
+  const startPick = choice !== null && pick !== null && shownHere.has(pick) && (list?.startable.some((d) => d.id === pick) ?? false)
+  return { needed, byHand, apps, wants, looking, choice, iosHint, startPick, pick }
 }
 
 /** How long a device that went away keeps its place. */
@@ -126,6 +196,7 @@ export const GONE_MS = 10_000
 
 export type PanelView =
   | { kind: 'device'; device: DeviceInfo; gone: boolean }
+  | { kind: 'starting'; device: StartableDevice }
   | { kind: 'choose'; devices: DeviceInfo[] }
   | { kind: 'none' }
 
@@ -147,6 +218,9 @@ export interface Held {
  *  tab's own pick, else the project's latest, else null: the stored ids themselves (see
  *  `Held.pick`), not `choosePanel`'s resolved device. Also what to hold for next time. */
 export function panelView(choice: PanelChoice, devices: DeviceInfo[], held: Held | null, now: number, pick: string | null): { view: PanelView; held: Held | null } {
+  // Started again right after a stop, with the same pick: "Starting …" at once, not the stopped
+  // device's "disconnected" hold.
+  if (choice.kind === 'starting') return { view: choice, held: null }
   if (held && held.pick === pick) {
     const current = devices.find((d) => d.id === held.device.id)
     if (!current) {

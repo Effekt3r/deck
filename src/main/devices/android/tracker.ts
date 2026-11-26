@@ -203,9 +203,11 @@ export class AndroidTracker {
         asked.asking = false
         asked.tries = 0
         asked.identity = identity
-        this.publish(null)
         // Still starting up: Android's settings, and with them the phone's own name, aren't there yet.
-        if (!identity.booted && ++asked.boots < BOOT_TRIES) this.askLater(key, asked, this.retry.booting)
+        // Counted before publishing, so the answer that uses up the tries is published as started.
+        const askAgain = !identity.booted && ++asked.boots < BOOT_TRIES
+        this.publish(null)
+        if (askAgain) this.askLater(key, asked, this.retry.booting)
       },
       () => {
         if (this.asked.get(key) !== asked) return
@@ -242,7 +244,7 @@ export class AndroidTracker {
         if (this.lastIds.has(deviceId(connecting))) seen.push(connecting)
         continue
       }
-      seen.push({ entry, identity: asked?.identity ?? null })
+      seen.push({ entry, identity: settled(asked) })
     }
     const { devices, serials } = mergeDevices(seen)
     this.lastIds = new Set(devices.map((d) => d.id))
@@ -266,3 +268,13 @@ export class AndroidTracker {
 }
 
 const keyOf = (e: AdbEntry) => `${e.serial}#${e.transport}`
+
+/** What a device said it is. One that still said it was starting up after BOOT_TRIES answers, or
+ *  whose re-asks since have failed IDENTITY_TRIES times, isn't asked again, so it's taken as
+ *  started: shown, rather than "starting" for good. */
+function settled(asked: Asked | undefined): Identity | null {
+  if (!asked?.identity) return null
+  // Not asked again: its boots ran out, or its asks since failed.
+  const done = asked.boots >= BOOT_TRIES || (!asked.asking && asked.tries >= IDENTITY_TRIES)
+  return !asked.identity.booted && done ? { ...asked.identity, booted: true } : asked.identity
+}

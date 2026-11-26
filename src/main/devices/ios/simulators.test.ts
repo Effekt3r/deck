@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readNotifyLine, simulatorDevices, SimulatorTracker, type SimTarget, udidOf } from './simulators'
+import { readNotifyLine, simulatorDevices, SimulatorTracker, type SimTarget, startableSimulators, udidOf } from './simulators'
 import { fakeProcess, type FakeProcess } from './test-process'
 
 const sim = (udid: string, name: string, state: string, os = 'iOS 27.0') =>
@@ -64,6 +64,30 @@ describe('simulatorDevices', () => {
     expect(udidOf('simulator:A')).toBe('A')
     expect(udidOf('android:A')).toBeNull()
   })
+
+  it('sorts names numerically, so "iPhone 9" comes before "iPhone 10"', () => {
+    const targets = new Map<string, SimTarget>([
+      ['A', { udid: 'A', name: 'iPhone 10', state: 'Booted', osVersion: 'iOS 27.0' }],
+      ['B', { udid: 'B', name: 'iPhone 9', state: 'Booted', osVersion: 'iOS 27.0' }],
+    ])
+    expect(simulatorDevices(targets).map((d) => d.name)).toEqual(['iPhone 9', 'iPhone 10'])
+  })
+})
+
+describe('startableSimulators', () => {
+  it('offers the shut-down ones by name; not one booted, booting or shutting down', () => {
+    const targets = new Map<string, SimTarget>([
+      ['B', { udid: 'B', name: 'iPhone 17 Pro', state: 'Shutdown', osVersion: 'iOS 27.0' }],
+      ['A', { udid: 'A', name: 'iPhone 16', state: 'Shutdown', osVersion: 'iOS 18.5' }],
+      ['C', { udid: 'C', name: 'iPad', state: 'Booted', osVersion: 'iOS 27.0' }],
+      ['D', { udid: 'D', name: 'iPhone Air', state: 'Booting', osVersion: 'iOS 27.0' }],
+      ['E', { udid: 'E', name: 'iPhone 17e', state: 'Shutting Down', osVersion: 'iOS 27.0' }],
+    ])
+    expect(startableSimulators(targets)).toEqual([
+      { id: 'simulator:A', kind: 'simulator', name: 'iPhone 16', detail: 'Simulator · iOS 18.5' },
+      { id: 'simulator:B', kind: 'simulator', name: 'iPhone 17 Pro', detail: 'Simulator · iOS 27.0' },
+    ])
+  })
 })
 
 describe('SimulatorTracker', () => {
@@ -102,6 +126,18 @@ describe('SimulatorTracker', () => {
     spawned[0].stdout.write(text.slice(20))
     await vi.waitFor(() => expect(published).toEqual([['simulator:A'], ['simulator:A', 'simulator:B']]))
     expect(tracker.booted('B')).toBe(true)
+    tracker.stop()
+  })
+
+  it('shutDown() gives the shut-down iOS simulators as of the last line', async () => {
+    const { tracker, spawned, published } = setup()
+    tracker.start()
+    spawned[0].stdout.write(line(sim('A', 'iPhone 17', 'Shutdown'), sim('B', 'iPad', 'Booted'), sim('W', 'Apple Watch', 'Shutdown', 'watchOS 11.2')))
+    await vi.waitFor(() => expect(published).toHaveLength(1))
+    expect(tracker.shutDown()).toEqual([{ id: 'simulator:A', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0' }])
+    spawned[0].stdout.write(line(sim('A', 'iPhone 17', 'Booting')))
+    await vi.waitFor(() => expect(published).toHaveLength(2))
+    expect(tracker.shutDown()).toEqual([])
     tracker.stop()
   })
 

@@ -346,10 +346,32 @@ export interface DeviceInfo {
   /** Its system and connection: "Android 13 · USB", "Android 17 · USB + Wi-Fi",
    *  "Emulator · Android 15", "Simulator · iOS 27.0", "iPhone · cable · view only". */
   detail: string
-  /** ready: it can be shown; unauthorized: USB debugging isn't allowed on it yet; offline: adb
-   *  can't reach it; connecting: adb is still setting it up. */
-  state: 'ready' | 'unauthorized' | 'offline' | 'connecting'
+  /** ready: it can be shown; booting: it's still starting up (an Android device that answered
+   *  before Android had finished starting, or a simulator Deck is booting), shown once it has;
+   *  unauthorized: USB debugging isn't allowed on it yet; offline: adb can't reach it; connecting:
+   *  adb is still setting it up. */
+  state: 'ready' | 'booting' | 'unauthorized' | 'offline' | 'connecting'
 }
+
+/** An emulator or a simulator that isn't running, which the panel can start (an AVD the SDK's
+ *  emulator lists, a shut-down simulator), or one started from the panel and not listed yet. */
+export interface StartableDevice {
+  /** The id it has once running: `emulator:<AVD name>` or `simulator:<UDID>`. */
+  id: string
+  kind: 'emulator' | 'simulator'
+  /** As the running device's: an AVD's name with spaces for its `_`, a simulator's name. */
+  name: string
+  /** "Emulator", or "Simulator · iOS 27.0". */
+  detail: string
+  /** Started from the panel and not among the devices yet (3 minutes at most). */
+  starting?: boolean
+  /** Why its last start failed: the tool's last line, or that it didn't start in time. Cleared by
+   *  the next start. */
+  error?: string
+}
+
+/** devices:start's and devices:stop's answer: null, or why not. */
+export type DeviceActionResult = { error: string } | null
 
 /** What a device runs: Android phones and emulators, or iOS simulators and iPhones. */
 export type DevicePlatform = 'android' | 'ios'
@@ -369,6 +391,13 @@ export interface DeviceList {
   /** The platforms still finding their first devices (iOS: the simulators or the iPhones): a tab
    *  waits only for the ones it shows. */
   pending: DevicePlatform[]
+  /** What the panel can start: emulators (the AVDs the SDK's emulator lists), then simulators (the
+   *  shut-down ones; macOS, with idb-companion), each by name, without those running; and those
+   *  starting, or whose start failed. */
+  startable: StartableDevice[]
+  /** The SDK's emulator lists no AVDs: none made yet in Android Studio's Device Manager. False with
+   *  no SDK emulator, and until it has answered. */
+  noAvds: boolean
 }
 
 /** A tab's project, for the device panel. */
@@ -533,6 +562,12 @@ export interface DeckApi {
     /** Opens System Settings at Privacy & Security → Camera (macOS), where Deck can be allowed the
      *  camera (an iPhone's screen is one to macOS). */
     openCameraSettings(): void
+    /** Starts emulator or simulator `id`, one of the list's `startable`: null once it's starting (the
+     *  list then says how it goes; one already running answers null too), or why it can't be. */
+    start(id: string): Promise<DeviceActionResult>
+    /** Stops running emulator or simulator `id`: null once it's stopping (an emulator once it was
+     *  told to, a simulator once it has shut down), or why not. */
+    stop(id: string): Promise<DeviceActionResult>
   }
   app: {
     info(): Promise<AppInfo>

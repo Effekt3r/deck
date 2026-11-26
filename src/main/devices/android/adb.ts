@@ -10,26 +10,33 @@ export class AdbError extends Error {
   }
 }
 
-/** Where adb may be, in the order Deck tries them: ANDROID_HOME and ANDROID_SDK_ROOT (Deck's own
- *  environment — on Windows this must be the live process.env, since its names are case-insensitive
- *  there and a copy holds `Path`, not `PATH`; one set only in shell profiles isn't seen when Deck
- *  starts from Finder), the SDK's usual place, then PATH and Homebrew's folders. The SDK's adb comes
- *  before the others because Android Studio runs it, and two adb versions restart each other's
- *  server. Only absolute paths are tried: a relative PATH entry means "run what's in the current
- *  folder", not Deck's. */
+/** The Android SDK's folders, in the order Deck tries them: ANDROID_HOME and ANDROID_SDK_ROOT (Deck's
+ *  own environment — on Windows this must be the live process.env, since its names are
+ *  case-insensitive there and a copy holds `Path`, not `PATH`; one set only in shell profiles isn't
+ *  seen when Deck starts from Finder), then the SDK's usual place. Only absolute ones, each once.
+ *  adb's and the emulator's candidates both start here. */
+export function sdkRoots(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string): string[] {
+  const path = platform === 'win32' ? win32 : posix
+  const roots = [env.ANDROID_HOME, env.ANDROID_SDK_ROOT]
+  if (platform === 'darwin') roots.push(path.join(home, 'Library', 'Android', 'sdk'))
+  else if (platform === 'win32') roots.push(path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Android', 'Sdk'))
+  else roots.push(path.join(home, 'Android', 'Sdk'))
+  return [...new Set(roots.filter((dir): dir is string => typeof dir === 'string' && path.isAbsolute(dir)))]
+}
+
+/** Where adb may be, in the order Deck tries them: the SDKs' (sdkRoots), then PATH and Homebrew's
+ *  folders. The SDK's adb comes before the others because Android Studio runs it, and two adb
+ *  versions restart each other's server. Only absolute paths are tried: a relative PATH entry means
+ *  "run what's in the current folder", not Deck's. */
 export function adbCandidates(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string): string[] {
   const path = platform === 'win32' ? win32 : posix
   const exe = platform === 'win32' ? 'adb.exe' : 'adb'
   // Windows PATH entries are sometimes individually quoted ("C:\Program Files\...").
   const unquote = (dir: string): string => (platform === 'win32' && dir.startsWith('"') && dir.endsWith('"') ? dir.slice(1, -1) : dir)
-  const sdks = [env.ANDROID_HOME, env.ANDROID_SDK_ROOT]
-  if (platform === 'darwin') sdks.push(path.join(home, 'Library', 'Android', 'sdk'))
-  else if (platform === 'win32') sdks.push(path.join(env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Android', 'Sdk'))
-  else sdks.push(path.join(home, 'Android', 'Sdk'))
   const dirs = (env.PATH ?? '').split(path.delimiter).map(unquote)
   if (platform === 'darwin') dirs.push('/opt/homebrew/bin', '/usr/local/bin')
   const files = [
-    ...sdks.filter((dir): dir is string => typeof dir === 'string' && path.isAbsolute(dir)).map((dir) => path.join(dir, 'platform-tools', exe)),
+    ...sdkRoots(env, platform, home).map((dir) => path.join(dir, 'platform-tools', exe)),
     ...dirs.filter((dir) => dir !== '' && path.isAbsolute(dir)).map((dir) => path.join(dir, exe)),
   ]
   return [...new Set(files)]

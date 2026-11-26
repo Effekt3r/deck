@@ -87,6 +87,8 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc on macOS', () =
         problem: null,
         iosProblem: null,
         pending: [],
+        startable: [],
+        noAvds: false,
       })
     }, { timeout: 15_000 })
     ipc.listeners.get(IPC.devicesUnwatch)!({})
