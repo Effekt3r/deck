@@ -435,10 +435,10 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
       if (!emulator) start.fail("Deck can't find Android's emulator.")
       else {
         const ended = (how: string, info: { clean: boolean }) => {
-          // A clean exit (code 0, nothing wrong in its log) once the device was up is the user
-          // closing its own window, not a failed start: forget it rather than show an error. This
-          // start only: an older emulator of the same AVD closing late (Stop, then Start while it
-          // saves its snapshot) mustn't forget the newer start.
+          // A clean exit (code 0, no signal), whenever it comes, is the user closing its own window,
+          // not a failed start: forget it rather than show an error. This start only: an older
+          // emulator of the same AVD closing late (Stop, then Start while it saves its snapshot)
+          // mustn't forget the newer start.
           if (info.clean) start.forget()
           else start.fail(how)
         }

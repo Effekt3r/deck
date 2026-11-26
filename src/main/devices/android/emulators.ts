@@ -46,13 +46,14 @@ export function listAvds(emulator: string, timeoutMs = 10_000): Promise<string[]
   })
 }
 
-/** The AVDs as what the panel can start, by name. `emulator:<AVD name>` is the id a running emulator
+/** The AVDs as what the panel can start, by name (numbers by value: Pixel 9 before Pixel 10, as
+ *  simulators and `Starts.merge` sort them). `emulator:<AVD name>` is the id a running emulator
  *  gets once it answers (ro.boot.qemu.avd_name), so a pick made at the start matches it; the name has
  *  spaces for `_`, as a running one's has. */
 export function startableEmulators(avds: readonly string[]): StartableDevice[] {
   return avds
     .map((name): StartableDevice => ({ id: `emulator:${name}`, kind: 'emulator', name: name.replace(/_/g, ' '), detail: 'Emulator' }))
-    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
+    .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }) || a.id.localeCompare(b.id))
 }
 
 /** How a started emulator ended, in the panel's words. */
@@ -62,10 +63,12 @@ const endedAs = (code: number | null, signal: NodeJS.Signals | null): string =>
 /** Only this much of the emulator's log is checked for its own failure line: enough for its startup
  *  chatter, not so much a huge log costs anything to read. */
 const LOG_TAIL_BYTES = 16 * 1024
-/** The emulator's own lines that say it failed (qemu's PANIC and FATAL, the launcher's ERROR). Its
- *  last line is usually a "(Note: Directories are searched...)" hint, not the failure, so the first
- *  one found is taken, not the last. */
-const FAILURE_LINE = /^(?:ERROR|PANIC|FATAL)\b/
+/** The emulator's own lines that say it failed: PANIC and FATAL, else ERROR. Its last line is usually
+ *  a "(Note: Directories are searched...)" hint, not the failure, so the first one found is taken, not
+ *  the last; and an ERROR can be harmless (a normal shutdown writes "Failed to restore previous
+ *  context"), so a PANIC or FATAL wins over an earlier ERROR. */
+const FATAL_LINE = /^(?:PANIC|FATAL)\b/
+const ERROR_LINE = /^ERROR\b/
 /** Its own "LEVEL        | " prefix on a log line: a word, spaces, `|`, spaces. */
 const LOG_PREFIX = /^\S+\s+\|\s*/
 
@@ -84,10 +87,9 @@ function logFailure(file: string): string | null {
     const length = Math.min(size, LOG_TAIL_BYTES)
     const buffer = Buffer.alloc(length)
     readSync(fd, buffer, 0, length, size - length)
-    for (const line of buffer.toString('utf8').split(/\r?\n/)) {
-      if (FAILURE_LINE.test(line)) return line.replace(LOG_PREFIX, '').slice(0, 500)
-    }
-    return null
+    const lines = buffer.toString('utf8').split(/\r?\n/)
+    const line = lines.find((l) => FATAL_LINE.test(l)) ?? lines.find((l) => ERROR_LINE.test(l))
+    return line === undefined ? null : line.replace(LOG_PREFIX, '').slice(0, 500)
   } catch {
     return null
   } finally {

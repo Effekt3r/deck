@@ -240,13 +240,18 @@ Found while building and reviewing the panel's rules, past what planning had wor
   ones) — why: an older emulator of the same AVD may still be writing to its file (Stop then Start
   while it saves its snapshot), and sharing one would give the new start its reason. Likewise a clean
   exit forgets only its own start.
+- **An adb problem doesn't hide the simulators' Start buttons** when iOS is wanted too (an iOS app, or
+  the panel shown by hand on macOS): the adb problem is said under them and no emulator is offered —
+  why: an iOS developer without Android's tools opens the panel by hand (Cmd+Shift+D) to start a
+  simulator, and would otherwise get only "Deck can't find adb". A simulator-listing problem still
+  takes the whole panel, so its install hint (with Copy) stays.
 - **An emulator's clean exit is its exit code and signal, not its log** — why: checked with the
   throwaway AVD, a normal shutdown (`adb emu kill`, mid-boot too) exits 0 but still writes ERROR lines
   ("Failed to restore previous context: 12297", "Could not take screenshot, error: -1"), while its
   failures exit 1 (an unknown AVD; a second emulator of a running AVD, with a FATAL line). Counting
   those lines would have shown the user closing its window mid-boot as a failed start, with a GL
-  error for its reason. The log still gives a failed exit its reason (its first ERROR, PANIC or FATAL
-  line).
+  error for its reason. The log still gives a failed exit its reason: its first PANIC or FATAL line,
+  else its first ERROR line.
 - **Microphone, corrected:** Electron's default Info.plist already carries `NSMicrophoneUsageDescription`
   ("This app needs access to the microphone"), and the installed Deck has it (`extendInfo` only
   overrides the camera's string); Deck's entitlements have no `com.apple.security.device.audio-input`.

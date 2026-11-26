@@ -73,9 +73,9 @@ terminal tabs can be dragged into another order. Windows to test.
 Starting and stopping emulators and simulators (spec `…/2026-11-24-device-start-stop-design.md`, plan
 `docs/superpowers/plans/2026-11-25-device-start-stop.md`), built 2026-11-25/26: the ▾ menu's Start
 section and Stop, Start buttons in an empty panel, and the panel kept open, in whichever tab showed,
-picked or stopped it, for an emulator or simulator that isn't running. Checked with a throwaway
-simulator in a private set; emulators only by unit tests (no AVD on Franco's Mac, 2026-11-25), Windows
-not at all (Device panel › Starting and stopping).
+picked or stopped it, for an emulator or simulator that isn't running. Checked in a dev build with a
+throwaway simulator in a private set and a throwaway AVD (2026-11-26, both deleted after); Windows not
+at all (Device panel › Starting and stopping).
 
 | Path | Role |
 |---|---|
@@ -742,23 +742,23 @@ Things that aren't obvious from the code:
       watching, at each focus and after an emulator's start or stop; a failed read keeps the last
       list, a stale one says nothing. `noAvds`: the SDK's emulator lists none ("No emulators: make one
       in Android Studio's Device Manager", where emulators fit).
-    - **An emulator** starts as `emulator -avd <name>`, detached, `unref()`: it keeps running when
-      Deck quits, in its own window. Its stdout and stderr go to a new file for each start,
-      `<temp>/Deck emulators/<instance>/<AVD name>-<ms since 1970>.log` (`<instance>` is the same
-      per-userData hash the clipboard's folder uses), and each start first removes that AVD's earlier
-      logs (`<AVD name>-<digits>.log` only, never another AVD's; on Windows one an emulator still has
-      open stays until a later start). A file per start: an older emulator of the same AVD can still be
-      writing to its own (Stop then Start while it saves its snapshot, Try again after the deadline
-      while it still boots), and a shared file would give the new start its reason. A failed start's
-      reason is the log's own first ERROR/PANIC/FATAL line (its own "LEVEL | " prefix stripped, cut to
-      500 characters), else the exit code or signal's wording ("The emulator stopped (exit code 1).");
-      without a log (the folder or file couldn't be made) the start still works, with nothing read
-      back. No `windowsHide`: `detached: true` already starts it with no
-      console window (Microsoft documents `CREATE_NO_WINDOW` as ignored for a detached process), and
-      `windowsHide`'s `SW_HIDE` could instead hide the emulator's own window — unverified on Windows;
-      note it if a console opens beside the emulator, or its window doesn't show. Once it answers, its
-      id is `emulator:<AVD name>` (`ro.boot.qemu.avd_name`), the pick made at the start. Stop is
-      `adb -s emulator-<port> emu kill` (only such an adb name reaches the console).
+    - **An emulator** starts as `emulator -avd <name>`, detached, `unref()`: it keeps running when Deck
+      quits, in its own window. Its stdout and stderr go to a new file for each start, `<temp>/Deck
+      emulators/<instance>/<AVD name>-<ms since 1970>.log` (`<instance>` is the same per-userData hash
+      the clipboard's folder uses), and each start first removes that AVD's earlier logs (`<AVD
+      name>-<digits>.log` only, never another AVD's; on Windows one an emulator still has open stays
+      until a later start). A file per start: an older emulator of the same AVD can still be writing to
+      its own (Stop then Start while it saves its snapshot, Try again after the deadline while it still
+      boots), and a shared file would give the new start its reason. A failed start's reason is the
+      log's own first PANIC or FATAL line, else its first ERROR line (its own "LEVEL | " prefix
+      stripped, cut to 500 characters), else the exit code or signal's wording ("The emulator stopped
+      (exit code 1)."); without a log (the folder or file couldn't be made) the start still works, with
+      nothing read back. No `windowsHide`: `detached: true` already starts it with no console window
+      (Microsoft documents `CREATE_NO_WINDOW` as ignored for a detached process), and `windowsHide`'s
+      `SW_HIDE` could instead hide the emulator's own window — unverified on Windows; note it if a
+      console opens beside the emulator, or its window doesn't show. Once it answers, its id is
+      `emulator:<AVD name>` (`ro.boot.qemu.avd_name`), the pick made at the start. Stop is `adb -s
+      emulator-<port> emu kill` (only such an adb name reaches the console).
     - **A simulator** boots with `idb_companion --boot <udid> [--device-set-path <set>] --log-level
       info` and shuts down with `--shutdown`, 120 s at most, ended when Deck quits. Measured
       2026-11-25 (idb-companion 1.6.1, iOS 27.0, a private set): Simulator.app isn't opened; a first
@@ -815,8 +815,11 @@ Things that aren't obvious from the code:
       "No devices connected" — including when nothing at all is connected. The ▾ menu has a Start
       section (those that fit first; `starting…`, `didn't start`) and, for an emulator or simulator on
       screen, Stop, with no confirmation; the keyboard moves over all of it. An empty panel offers up to
-      3 Start buttons, then "More in the ▾ menu". A refused start or a failed stop says so under the
-      header.
+      3 Start buttons, then "More in the ▾ menu". With iOS wanted too (an iOS app, or the panel shown by
+      hand on macOS), an adb problem (none found, or its error) doesn't hide the simulators' Start
+      buttons: it's said under them, and no emulator is offered, since Deck couldn't see one it started
+      (`emptyOffer`). A simulator-listing problem still takes the whole panel (Known limits). A refused
+      start or a failed stop says so under the header.
     - **Unit tests:** `sdkRoots`; AVD names, finding and running the emulator and `emu kill` (shell
       stand-ins); the log file and its failure line, `startAvd` without one; `--boot`/`--shutdown`
       arguments, the failure's line, abort and timeout; the shut-down simulators; `booting` in
@@ -826,10 +829,10 @@ Things that aren't obvious from the code:
       restart, and a boot that fails after the notifier said Booted showing its error only once the
       device is gone, whichever ends first, its command or the notifier's `Booted` (and one that stays
       up turning ready after the grace); each emulator start's own log, and the cleanup of that AVD's
-      older ones; a code-0 exit counting as clean whatever its log says; an older start's clean exit
-      leaving a newer one alone; dispose mid-boot and unwatch
-      mid-start (`ipc.watch.test.ts`); `pick.ts`'s starting view, `startButtons` and `startPick`; the
-      menu's entries.
+      older ones; a code-0 exit counting as clean whatever its log says; a PANIC or FATAL line as the
+      reason over an earlier ERROR; an older start's clean exit leaving a newer one alone; dispose
+      mid-boot and unwatch mid-start (`ipc.watch.test.ts`); `pick.ts`'s starting view, `startButtons`,
+      `emptyOffer` and `startPick`; the menu's entries.
     - **Checked in the app** (2026-11-26, macOS, a dev build through the DevTools protocol, with its own
       data folder; a throwaway simulator in a private set, iOS 27.0, and a throwaway AVD, Android 16
       `google_apis` arm64, in a scratch `ANDROID_AVD_HOME`; both deleted after; no phone plugged in): a
@@ -859,25 +862,29 @@ Things that aren't obvious from the code:
       grant). Franco chose to leave it as is. Closing the emulator's window mid-boot (taken to behave as
       `emu kill` does). Windows, all of it (`docs/TESTING.md` 18ah–18ai).
     - **Known limits:** an emulator started from Deck runs on after Deck quits; an AVD made meanwhile
-      shows once Deck comes to the front; simulators created or deleted while shut down show only
-      once the notifier restarts; Deck doesn't make AVDs or simulators; a failed start stays in the
-      menu until started again or nothing watches; an old system image that sets neither AVD property
-      is listed as `emulator:emulator-<port>`, so its start runs out of time; no "Stopping …" feedback
-      (an emulator may stay listed as ready while it saves its snapshot, or show as offline, which the
-      panel answers with "Unplug it and plug it back in"); a start can't be cancelled before its device
-      is listed; in a project that's both an Android and an iOS app, a simulator-listing error hides
-      the emulators' Start buttons too (the empty panel gives up before it gets to them); quitting Deck
+      shows once Deck comes to the front; simulators created or deleted while shut down show only once
+      the notifier restarts; Deck doesn't make AVDs or simulators; a failed start stays in the menu
+      until started again or nothing watches; an old system image that sets neither AVD property is
+      listed as `emulator:emulator-<port>`, so its start runs out of time; no "Stopping …" feedback (an
+      emulator may stay listed as ready while it saves its snapshot, or show as offline, which the panel
+      answers with "Unplug it and plug it back in"); a start can't be cancelled before its device is
+      listed; in a project that's both an Android and an iOS app, a simulator-listing error hides the
+      emulators' Start buttons too (the empty panel gives up before it gets to them); quitting Deck
       mid-boot leaves the simulator booted (idb's command ends, the boot completes, in CoreSimulator,
       not in the command Deck ran), as an emulator started from Deck keeps running after Deck quits;
       Stop then Start right away while Quick Boot saves its snapshot may fail (the AVD still locked); a
-      simulator that takes over 10 s to go down after a failed boot turns ready when the grace ends,
-      its error dropped, and a view then could start a stream that fails; a
-      device that never sets `sys.boot_completed` shows "Starting …" for about 2 minutes on each
-      connection (the tracker's 40 asks), and an emulator whose cold boot runs longer than that after
-      adbd answers may end in "Couldn't show …" with Try again instead; Windows: emulators only, and
-      unverified whether `emulator.exe` stays up for the emulator's whole life (if it re-execs or hands
-      off to a child, `ended` would wrongly report a stop during a healthy boot) or whether a console
-      window appears beside it.
+      simulator that takes over 10 s to go down after a failed boot turns ready when the grace ends, its
+      error dropped, and a view then could start a stream that fails; a device that never sets
+      `sys.boot_completed` shows "Starting …" for about 2 minutes on each connection (the tracker's 40
+      asks), and an emulator whose cold boot runs longer than that after adbd answers may end in
+      "Couldn't show …" with Try again instead; Windows: emulators only, and unverified whether
+      `emulator.exe` stays up for the emulator's whole life (if it re-execs or hands off to a child,
+      `ended` would wrongly report a stop during a healthy boot; the emulator's source suggests its
+      launcher waits for qemu) or whether a console window appears beside it: detached, the launcher has
+      no console, but the qemu (and netsimd, crashpad) it starts may each get one if they're console
+      programs, and closing that window would end qemu. If 18ah shows one: on win32, drop `detached` and
+      pass `windowsHide: true` (libuv's kill-on-close job lets children break away, so qemu should still
+      outlive Deck), and check that again.
   - **Which projects** (`project.ts`): a tab's project is its repository's main work tree (worktrees
     share it), else its folder. Inside git the whole repository is scanned; outside git only a Gradle
     build (`settings.gradle[.kts]` at the root or in `android/`); the home folder never: scanning `~`
@@ -1251,9 +1258,9 @@ excludes every `build` folder.
    built 2026-11-11/12. Next: the check with Franco's iPhone (the step 3 plan's Task 12, then
    `docs/TESTING.md` 20–32 on the signed app), Franco's hands-on checks (Device panel → "Not yet
    checked" above) and Windows (`docs/TESTING.md` 18p–18y). Starting and stopping emulators and
-   simulators: built from `docs/superpowers/plans/2026-11-25-device-start-stop.md`; next, an
-   emulator check with a throwaway AVD Franco agrees to, `docs/TESTING.md` 33–36 on the signed app,
-   and 18ah–18ai on Windows. Each step gets its own plan and pull request.
+   simulators: built from `docs/superpowers/plans/2026-11-25-device-start-stop.md` and checked in a
+   dev build with a throwaway simulator and AVD (2026-11-26); next, `docs/TESTING.md` 33–36 on the
+   signed app, and 18ah–18ai on Windows. Each step gets its own plan and pull request.
 
 Deferred from the M1 review (`3f9feb6` fixed the important ones):
 - **Windows, untested:**
@@ -1323,8 +1330,9 @@ Deferred from the M1 review (`3f9feb6` fixed the important ones):
   network share: the same exposure as the git panel's.
 - **Security (M4):**
   - Check the IPC sender frame (`clipboard:paste` hands password-manager text to the renderer;
-    `devices:input` taps and types on a phone or simulator; `claude:image` and `claude:open-image`
-    read images from Claude's session logs).
+    `devices:input` taps and types on a phone or simulator; `devices:start` and `devices:stop` run
+    `emulator -avd`, `idb_companion --boot`/`--shutdown` and `adb emu kill`; `claude:image` and
+    `claude:open-image` read images from Claude's session logs).
   - Load the renderer from a custom protocol, not `file://`.
   - Deny permission requests (the camera, the microphone and the screen are, since step 3:
     `src/main/permissions.ts`).

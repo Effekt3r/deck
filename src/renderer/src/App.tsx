@@ -346,11 +346,11 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const deviceNeeded = devicesNeeded({ project, tabDevice, tabHidden, platform })
   const deviceList = useDeviceList(deviceNeeded)
   const devices = deviceList?.devices ?? NO_DEVICES
-  // Device ids this tab has streamed (shown as `{ kind: 'device' }`) this session: panelRules only
-  // keeps the panel open for a stopped device (startPick) once it's in here, so a fresh tab whose
-  // project's latest pick is already stopped stays closed (View → Device Panel still offers to start
-  // it by hand). Picking or stopping a device here counts too. Cleared when the tab moves to another
-  // project, as its pick is.
+  // Device ids this tab has shown as `{ kind: 'device' }` this session (booting or disconnected too,
+  // and in a tab behind, whose workspace stays mounted): panelRules only keeps the panel open for a
+  // stopped device (startPick) once it's in here, so a fresh tab whose project's latest pick is
+  // already stopped stays closed (View → Device Panel still offers to start it by hand). Picking or
+  // stopping a device here counts too. Cleared when the tab moves to another project, as its pick is.
   const shownHere = useRef<Set<string>>(new Set())
   // Cleared in the very render that moves to another project, not an effect later: a device shown in the
   // old project mustn't open the panel in the new one for a render.

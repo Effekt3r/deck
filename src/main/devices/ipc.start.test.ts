@@ -491,7 +491,8 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: an emulator cl
       'touch "$M/started"',
       // A test asks this one to close on its own (code 0), rather than being killed through adb.
       'if [ -f "$M/exit-clean-after" ]; then',
-      '  while [ ! -f "$M/exit-clean-go" ] && [ ! -f "$M/exit-clean-go-$$" ]; do sleep 0.05; done',
+      // Bounded (30 s): a test that fails before its go mark mustn't leave this polling for ever.
+      '  i=0; while [ ! -f "$M/exit-clean-go" ] && [ ! -f "$M/exit-clean-go-$$" ] && [ $i -lt 600 ]; do sleep 0.05; i=$((i + 1)); done',
       '  touch "$M/emulator-gone"',
       '  exit 0',
       'fi',

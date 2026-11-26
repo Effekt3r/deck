@@ -126,6 +126,17 @@ describe.skipIf(process.platform === 'win32')('running the emulator', () => {
     await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).', { clean: false }), { timeout: 3000 })
   })
 
+  it('a PANIC or FATAL line is the reason over an earlier ERROR line', async () => {
+    const emulator = script('start-log-fatal', 'emulator', [
+      "echo 'ERROR        | Could not take screenshot, error: -1'",
+      "echo 'FATAL        | Running multiple emulators with the same AVD is an experimental feature.'",
+      'exit 1',
+    ].join('\n'))
+    const ended = vi.fn()
+    await startAvd(emulator, 'Pixel_9', ended, join(root, 'logs-fatal'))
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('Running multiple emulators with the same AVD is an experimental feature.', { clean: false }), { timeout: 3000 })
+  })
+
   it('a code-0 exit is clean even with an ERROR line in its log: a normal shutdown writes one', async () => {
     const emulator = script('start-log-shutdown', 'emulator', [
       "echo 'INFO         | removeAll'",

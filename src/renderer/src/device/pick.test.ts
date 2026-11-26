@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DeviceInfo, DeviceList, DeviceProject, StartableDevice } from '@shared/types'
-import { choosePanel, emptyTitle, GONE_MS, MAX_START_BUTTONS, menuOrder, panelRules, panelView, startButtons, stillLooking } from './pick'
+import { choosePanel, emptyOffer, emptyTitle, GONE_MS, MAX_START_BUTTONS, menuOrder, panelRules, panelView, startButtons, stillLooking } from './pick'
 
 const device = (id: string, name: string): DeviceInfo => ({ id, kind: id.startsWith('emulator:') ? 'emulator' : 'android', name, detail: '', state: 'ready' })
 const c66 = device('android:8d2e61a', 'C66')
@@ -132,6 +132,26 @@ describe('startButtons', () => {
   it('leaves out one already starting, and offers one that failed (to try again)', () => {
     const failed = { ...avds[1], error: 'The emulator stopped (exit code 1).' }
     expect(startButtons([{ ...avds[0], starting: true }, failed], { android: true, ios: false }, null)).toEqual({ buttons: [failed], more: false })
+  })
+})
+
+describe('emptyOffer', () => {
+  const both = { android: true, ios: true }
+
+  it('offers everything the tab wants while adb is fine, or not wanted', () => {
+    expect(emptyOffer(both, null, [avd, shutSim])).toEqual({ kinds: both, offered: [avd, shutSim], adbNote: null })
+    expect(emptyOffer({ android: false, ios: true }, 'no-adb', [shutSim])).toEqual({ kinds: { android: false, ios: true }, offered: [shutSim], adbNote: null })
+  })
+
+  it("with iOS wanted too, an adb problem leaves the simulators, without emulators, and says what's wrong", () => {
+    expect(emptyOffer(both, 'no-adb', [avd, shutSim])).toEqual({
+      kinds: { android: false, ios: true }, offered: [shutSim], adbNote: "Deck can't find adb, so it can't see Android devices.",
+    })
+    expect(emptyOffer(both, { error: 'protocol fault' }, [avd, shutSim])?.adbNote).toBe("adb couldn't list the devices: protocol fault")
+  })
+
+  it('without iOS, the adb problem is the whole message', () => {
+    expect(emptyOffer({ android: true, ios: false }, 'no-adb', [avd])).toBeNull()
   })
 })
 

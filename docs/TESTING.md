@@ -255,9 +255,9 @@ first.
     has booted (about 20 s the first time), then its screen. Simulator.app doesn't open; opened, it
     shows the simulator.
 34. ▾ → **Stop <name>**: it shuts down; "disconnected", then the panel stays with its Start button
-    first. View → Device Panel on a new tab in the same project offers that button too, without
-    Cmd+Shift+D opening it by itself (a fresh tab no longer does that for a stopped device). Start it
-    from the ▾ menu's Start section this time: the same as 33, quicker.
+    first. A new tab in the same project doesn't open the panel by itself; Cmd+Shift+D there opens it
+    with that Start button first. Start it from the ▾ menu's Start section this time: the same as 33,
+    quicker.
 35. Start a simulator and quit Deck while it says "Starting …": the simulator finishes booting anyway
     (`xcrun simctl list devices booted`).
 36. With an AVD (only one you're happy to start): 18ah and 18ai on the Mac, and note any macOS prompt

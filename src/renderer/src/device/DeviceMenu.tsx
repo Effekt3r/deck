@@ -72,6 +72,10 @@ export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor,
   }, [anchor, onClose])
 
   const at = Math.max(0, entries.findIndex((e) => e.key === cursor))
+  // A long menu scrolls (placeBelow caps its height): the keyboard's cursor stays in view.
+  useEffect(() => {
+    menuRef.current?.querySelector(`[data-index="${at}"]`)?.scrollIntoView({ block: 'nearest' })
+  }, [at])
   const move = (i: number) => setCursor(entries[Math.min(Math.max(i, 0), entries.length - 1)]?.key ?? null)
   // Choosing the device shown picks it too: shown as the only one that fits, it becomes the tab's and
   // the project's device. Choosing one to start picks it as well (DevicePanel's start).
@@ -120,7 +124,7 @@ export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor,
       const checked = device.id === current
       const word = STATE_WORDS[device.state]
       return (
-        <div key={entry.key} role="menuitemradio" aria-checked={checked} className={className}
+        <div key={entry.key} data-index={i} role="menuitemradio" aria-checked={checked} className={className}
           title={`${device.name}\n${device.detail}${word ? ` · ${word}` : ''}`} onMouseMove={hover} onClick={() => choose(entry)}>
           <span className="cpm-check" aria-hidden="true">{checked ? '✓' : ''}</span>
           <span className="cpm-label">{device.name}</span>
@@ -131,7 +135,7 @@ export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor,
     if (entry.type === 'start') {
       const { device } = entry
       return (
-        <div key={entry.key} role="menuitem" aria-label={`Start ${device.name}${startHint(device) ? `, ${startHint(device)}` : ''}`} aria-disabled={device.starting || undefined}
+        <div key={entry.key} data-index={i} role="menuitem" aria-label={`Start ${device.name}${startHint(device) ? `, ${startHint(device)}` : ''}`} aria-disabled={device.starting || undefined}
           className={className} title={`Start ${device.name}\n${device.error ?? device.detail}`} onMouseMove={hover} onClick={() => choose(entry)}>
           <span className="cpm-check" aria-hidden="true">▶</span>
           <span className="cpm-label">{device.name}</span>
@@ -140,7 +144,7 @@ export function DeviceMenu({ devices, startable, noAvds, current, shown, anchor,
       )
     }
     return (
-      <div key={entry.key} role="menuitem" className={className} onMouseMove={hover} onClick={() => choose(entry)}>
+      <div key={entry.key} data-index={i} role="menuitem" className={className} onMouseMove={hover} onClick={() => choose(entry)}>
         <span className="cpm-check" aria-hidden="true" />
         <span className="cpm-label">Stop {entry.device.name}</span>
       </div>

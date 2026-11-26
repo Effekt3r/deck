@@ -5,7 +5,7 @@ import { BackIcon, CameraIcon, Caret, HomeIcon, PowerIcon, RecentsIcon } from '.
 import { DeviceMenu, type MenuClose } from './DeviceMenu'
 import { DeviceScreen, type ScreenHandle } from './DeviceScreen'
 import { KEYCODE } from './keys'
-import { emptyTitle, type PanelView, startButtons } from './pick'
+import { emptyOffer, emptyTitle, type PanelView, startButtons } from './pick'
 import '../claude/panel.css'
 import './device.css'
 
@@ -292,29 +292,31 @@ function Nothing({ devices, problem, iosProblem, wants, looking, startable, noAv
     }
     if (iosProblem) return <State error title="Deck couldn't list the simulators" detail={iosProblem.error} />
   }
-  if (wants.android) {
-    if (problem === 'no-adb') {
-      return <State title="Deck can't find adb, so it can't see Android devices." detail="Install Android Studio or Android's platform tools." />
-    }
-    if (problem) return <State error title="adb couldn't list the devices" detail={problem.error} />
+  // With iOS wanted too, an adb problem doesn't hide the simulators: it's said under them.
+  const offer = emptyOffer(wants, problem, startable)
+  if (!offer) {
+    return problem === 'no-adb'
+      ? <State title="Deck can't find adb, so it can't see Android devices." detail="Install Android Studio or Android's platform tools." />
+      : <State error title="adb couldn't list the devices" detail={problem?.error} />
   }
-  const { buttons, more } = startButtons(startable, wants, pick)
-  const pickStopped = startable.find((d) => d.id === pick) ?? null
+  const { kinds, offered, adbNote } = offer
+  const { buttons, more } = startButtons(offered, kinds, pick)
+  const pickStopped = offered.find((d) => d.id === pick) ?? null
   const title = emptyTitle(devices, pickStopped)
   // The tab's device isn't running while others are connected: emptyTitle names it.
   const namesPick = devices.length > 0 && pickStopped !== null
   // iOS is wanted only on macOS, where iPhones show too: unlocked, since one isn't listed while it's
   // locked or doesn't trust the Mac.
-  const plugIn = wants.android && wants.ios
+  const plugIn = kinds.android && kinds.ios
     ? 'Plug in an unlocked iPhone or an Android phone with USB debugging on'
-    : wants.ios ? 'Plug in an unlocked iPhone' : 'Plug in an Android phone with USB debugging on'
+    : kinds.ios ? 'Plug in an unlocked iPhone' : 'Plug in an Android phone with USB debugging on'
   const detail = namesPick && buttons.length > 0
     ? 'Start it below, or choose another device in the ▾ menu.'
     : buttons.length > 0
     ? `${plugIn}, or start one below.`
-    : wants.android && wants.ios
+    : kinds.android && kinds.ios
       ? `${plugIn}, start an emulator, or boot a simulator.`
-      : wants.ios ? `${plugIn}, or boot a simulator in Xcode or with simctl.` : `${plugIn}, or start an emulator.`
+      : kinds.ios ? `${plugIn}, or boot a simulator in Xcode or with simctl.` : `${plugIn}, or start an emulator.`
   return (
     <State title={title} detail={detail}>
       {buttons.length > 0 && (
@@ -328,7 +330,8 @@ function Nothing({ devices, problem, iosProblem, wants, looking, startable, noAv
         </span>
       )}
       {more && <span className="cp-state-detail">More in the ▾ menu</span>}
-      {wants.android && noAvds && <span className="cp-state-detail">No emulators: make one in Android Studio's Device Manager</span>}
+      {kinds.android && noAvds && <span className="cp-state-detail">No emulators: make one in Android Studio's Device Manager</span>}
+      {adbNote && <span className="cp-state-detail">{adbNote}</span>}
     </State>
   )
 }

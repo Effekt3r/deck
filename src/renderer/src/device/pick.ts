@@ -80,6 +80,20 @@ export function startButtons(startable: StartableDevice[], wants: { android: boo
   return { buttons: ordered.slice(0, MAX_START_BUTTONS), more: ordered.length > MAX_START_BUTTONS }
 }
 
+/** What an empty panel speaks of and offers to start, once iOS's own problems (which it shows
+ *  instead) are ruled out: the kinds it wants, all of `startable`, and no note. With iOS wanted too, an
+ *  adb problem doesn't hide the simulators (an iOS developer without Android's tools opens the panel by
+ *  hand to start one): the panel speaks of iOS only, offers no emulator (Deck couldn't see one it
+ *  started), and says what's wrong with adb under the rest (`adbNote`). Without iOS, null: the adb
+ *  problem is the panel's whole message. */
+export function emptyOffer(wants: { android: boolean; ios: boolean }, problem: DeviceList['problem'], startable: StartableDevice[]):
+  { kinds: { android: boolean; ios: boolean }; offered: StartableDevice[]; adbNote: string | null } | null {
+  if (!wants.android || !problem) return { kinds: wants, offered: startable, adbNote: null }
+  if (!wants.ios) return null
+  const adbNote = problem === 'no-adb' ? "Deck can't find adb, so it can't see Android devices." : `adb couldn't list the devices: ${problem.error}`
+  return { kinds: { android: false, ios: true }, offered: startable.filter((d) => d.kind !== 'emulator'), adbNote }
+}
+
 /** The empty panel's title: it names the device it's waiting to start (`startPickDevice`: the device
  *  in force, resolved against `startable` — see `panelRules`'s `startPick`) once other devices are
  *  connected meanwhile, so the panel never claims none are connected while some are. Otherwise, "No
@@ -148,8 +162,9 @@ export interface PanelRules {
  *  hasn't had its first list: "not needed any more" would otherwise show the old list's choice), or
  *  neither the project nor byHand is known yet. A booted simulator Deck can't show (no idb-companion,
  *  or one without sim-video) opens an iOS project's panel to say what to install. `shownHere`: device
- *  ids this tab has shown (streamed) this session, so `startPick` (below) only reopens the panel for
- *  a stopped device this tab has actually shown before, not every tab of the same project. */
+ *  ids this tab has shown as a device view (booting or disconnected too, in front or not), picked or
+ *  stopped this session, so `startPick` (below) only reopens the panel for a stopped device this tab
+ *  has had, not every tab of the same project. */
 export function panelRules({ project, tabDevice, tabHidden, list, platform }: PanelInputs, shownHere: ReadonlySet<string> = new Set()): PanelRules {
   const byHand = tabHidden === false
   const apps = { android: project?.android ?? false, ios: project?.ios ?? false }
@@ -165,8 +180,8 @@ export function panelRules({ project, tabDevice, tabHidden, list, platform }: Pa
   const wants = { android: byHand || apps.android, ios: (byHand && platform === 'darwin') || apps.ios }
   // The device in force: the tab's own pick, else the project's latest, else null.
   const pick = tabDevice ?? project?.picks[0] ?? null
-  // It's an emulator or a simulator that isn't running, and this tab has shown it (streamed it) this
-  // session: the panel stays open with its Start button, as it doesn't for an unplugged phone, or for
+  // It's an emulator or a simulator that isn't running, and this tab has had it this session (shown,
+  // picked or stopped it: `shownHere`): the panel stays open with its Start button, as it doesn't for an unplugged phone, or for
   // a fresh tab whose project's latest pick is already stopped (View → Device Panel still offers it
   // by hand). So a Stop leaves a way to start the device again in the tab that had it.
   const startPick = choice !== null && pick !== null && shownHere.has(pick) && (list?.startable.some((d) => d.id === pick) ?? false)
