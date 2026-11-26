@@ -101,7 +101,10 @@ Windows installer; publish it once it looks right.
   setting it changes while shown is put back. A paste goes through the device's clipboard and stays
   there. Simulators need `brew install facebook/fb/idb-companion`, which the panel offers to copy
   when a simulator is booted without it; a paste there is typed, as a US keyboard would, up to 1,000
-  characters.
+  characters. The ▾ menu also starts an emulator (an AVD made in Android Studio's Device Manager) or
+  boots a shut-down simulator, and stops the one shown; while a project's own emulator or simulator
+  isn't running, its panel offers a Start button. An emulator started from Deck keeps running after
+  Deck quits.
 - **Open in Deck:** `Deck --open <folder>` (the Windows folder menu uses it) opens a
   tab in the running window.
 

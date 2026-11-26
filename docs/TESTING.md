@@ -180,6 +180,18 @@ Install the latest draft or release from GitHub (`Deck-<version>-win-x64.exe`).
 18af. Ctrl+Shift+PageUp and Ctrl+Shift+PageDown move the front tab left and right.
 18ag. Scroll the front tab's Claude panel up, then drag that tab to the right: the panel stays
      where you scrolled it.
+18ah. Starting an emulator, only with an AVD you're happy to start (Android Studio › Device Manager):
+     with no phone plugged in and the emulator closed, open an Android app's tab and press
+     Ctrl+Shift+D. The panel says "No devices connected" with **Start <AVD>** (its `_` as spaces), and
+     the ▾ menu lists it under Start. Click it: "Starting <AVD>…" with a spinner, the emulator's own
+     window opens, and the panel shows its screen once Android has started, without "Couldn't show".
+     Note it if a console window opens beside the emulator, or the emulator's window doesn't show. If
+     it fails instead, its reason should be in
+     `%TEMP%\Deck emulators\<8 characters>\<AVD>.log` (the AVD's own name, `_` not spaces).
+18ai. ▾ → **Stop <AVD>**: the emulator closes; "disconnected", then the panel stays with its Start
+     button first. View → Device Panel on a new tab in the same folder offers that Start button too
+     (a fresh tab no longer opens the panel by itself for a stopped device). Start it again from
+     there, then quit Deck: the emulator keeps running.
 
 **Restart**
 
@@ -230,3 +242,24 @@ cable, and a folder with an Xcode project in a git repository.
     "iphone-screen") lists two `iphone-screen` processes, the list and the stream: note their CPU and
     Deck's. Fold the panel: 10 s later only the list is left, using next to no CPU. Quit Deck: none
     is left.
+
+## macOS: starting and stopping simulators and emulators
+
+On the installed app (your own simulators are fine here: this is your check). Quit Simulator.app
+first.
+
+33. In an iOS project's tab with no simulator booted, press Cmd+Shift+D: "No devices connected" with up
+    to 3 **Start <simulator>** buttons, then "More in the ▾ menu"; the ▾ menu lists every shut-down
+    simulator under Start, an iOS app's first. Click one: "Starting <name>…" with a spinner until it
+    has booted (about 20 s the first time), then its screen. Simulator.app doesn't open; opened, it
+    shows the simulator.
+34. ▾ → **Stop <name>**: it shuts down; "disconnected", then the panel stays with its Start button
+    first. View → Device Panel on a new tab in the same project offers that button too, without
+    Cmd+Shift+D opening it by itself (a fresh tab no longer does that for a stopped device). Start it
+    from the ▾ menu's Start section this time: the same as 33, quicker.
+35. Start a simulator and quit Deck while it says "Starting …": the simulator finishes booting anyway
+    (`xcrun simctl list devices booted`).
+36. With an AVD (only one you're happy to start): 18ah and 18ai on the Mac, and note any macOS prompt
+    that names Deck (the microphone or the camera, asked for by the emulator). Without any AVD, an
+    Android app's empty panel (Cmd+Shift+D) says "No emulators: make one in Android Studio's Device
+    Manager".

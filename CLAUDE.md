@@ -70,6 +70,13 @@ built 2026-11-25): each terminal tab shows its Claude's status (working, needs y
 yet seen) from Claude Code's presence files, the Dock's badge counts the tabs that need you, and
 terminal tabs can be dragged into another order. Windows to test.
 
+Starting and stopping emulators and simulators (spec `…/2026-11-24-device-start-stop-design.md`, plan
+`docs/superpowers/plans/2026-11-25-device-start-stop.md`), built 2026-11-25/26: the ▾ menu's Start
+section and Stop, Start buttons in an empty panel, and the panel kept open, in whichever tab showed,
+picked or stopped it, for an emulator or simulator that isn't running. Checked with a throwaway
+simulator in a private set; emulators only by unit tests (no AVD on Franco's Mac, 2026-11-25), Windows
+not at all (Device panel › Starting and stopping).
+
 | Path | Role |
 |---|---|
 | `src/shared/` | `DeckApi` IPC contract (`types.ts`), channel names, `quote.ts` (shell quoting, and `quoteImagePath` for Claude Code's image paths; used by main and the renderer), `claude-images.ts` (why the Claude panel can't show an image: the reasons main answers) and `hid.ts` (a simulator's named keys as USB HID usages); the only thing main and renderer share |
@@ -82,9 +89,9 @@ terminal tabs can be dragged into another order. Windows to test.
 | `src/main/claude/` | session-log locator, incremental tail (with each line's place), the parser (TS port of `claude_activity_pane.py`), status rules, sub-agent steps, `claude:*` subscriptions, images (`images.ts`: formats, sizes, ids, lookups; `pixels.ts`: thumbnails and full images read again from the log), the tabs' Claude status (`presence.ts`: presence files matched to tabs through `ps`; `presence-ipc.ts`) |
 | `src/main/clipboard/` | reads the clipboard (files, text, images; concealed copies skipped), decides what the card offers, saves pasted images for Claude |
 | `src/main/usage/` | Claude's plan usage: the status line command and script, Claude Code's settings (connect/disconnect), reading and merging reports, `usage.json` |
-| `src/main/devices/` | the device panel's main side: `android/` (finding and running adb, `track-devices` and identities, scrcpy's protocol, input checks and sessions), `ios/` (finding idb-companion and following the simulators; a simulator's session: its companion, gRPC on `node:http2`, `sim-video`'s fMP4, HID input; and Deck's iPhone helper: its lists and a session (`iphone.ts`); `tracker.ts`, the restarting `LineTracker` both run on), `session.ts` (one session shape for every kind), `streams.ts` (viewers, grace, retries, a blocked camera), `registry.ts` (one list from the three sources), `project.ts` (a folder's project, Android or iOS app or neither), `picks.ts` (`devices.json`), `ipc.ts` (wiring, the three sources, lock and sleep) |
+| `src/main/devices/` | the device panel's main side: `android/` (finding and running adb, `track-devices` and identities, scrcpy's protocol, input checks and sessions; `emulators.ts`: the SDK's emulator, its AVDs, starting one and `emu kill`), `ios/` (finding idb-companion and following the simulators, booting and shutting one down (`boot.ts`); a simulator's session: its companion, gRPC on `node:http2`, `sim-video`'s fMP4, HID input; and Deck's iPhone helper: its lists and a session (`iphone.ts`); `tracker.ts`, the restarting `LineTracker` both run on), `session.ts` (one session shape for every kind), `streams.ts` (viewers, grace, retries, a blocked camera), `registry.ts` (one list from the three sources), `project.ts` (a folder's project, Android or iOS app or neither), `picks.ts` (`devices.json`), `starts.ts` (the starts under way, 3 minutes at most), `ipc.ts` (wiring, the three sources, starting and stopping, lock and sleep) |
 | `src/renderer/src/` | React: `tabs/` (model, titles, tab bar, drag geometry, each tab's Claude status), `terminal/` (xterm view, OSC parsing, keys, search, `paste.ts`'s pasteSafe), `projects/`, `git/` (lane layout, canvas graph view, panel, details, splitter), `claude/` (panel, feed, markdown, session picker, images: thumbnails, viewer), `clipboard/` (card, hook), `usage/` (card, donut, view), `device/` (below) |
-| `src/renderer/src/device/` | the device panel: which device a tab shows and the panel's rules (`pick.ts`), the screen (WebCodecs, canvas, input: `codec.ts`, `fit.ts`, `keys.ts`: Android key codes and simulators' HID usages), the menu, `useDevices.ts` |
+| `src/renderer/src/device/` | the device panel: which device a tab shows and the panel's rules (`pick.ts`), the screen (WebCodecs, canvas, input: `codec.ts`, `fit.ts`, `keys.ts`: Android key codes and simulators' HID usages), the menu (`menu.ts`: its devices, Start and Stop), `useDevices.ts` |
 | `resources/` | `scrcpy-server.json` (the server's version, URL, size, SHA-256) and `THIRD-PARTY-NOTICES.txt`; the server itself is downloaded at install (`scripts/fetch-scrcpy-server.mjs`), never committed |
 | `native/iphone-screen/` | Deck's iPhone helper (Swift): lists the iPhone screens macOS offers and streams one as scrcpy's video stream; built at install by `scripts/build-iphone-helper.mjs` into its ignored `out/` |
 
@@ -724,6 +731,114 @@ Things that aren't obvious from the code:
       the helper (both have it), and that the prompt names Deck. Once Deck is allowed the camera,
       programs run in its tabs most likely are too, without a prompt: macOS answers for the app
       responsible for them, as it does for Terminal's (unverified).
+  - **Starting and stopping** (`android/emulators.ts`, `ios/boot.ts`, `starts.ts`, `ipc.ts`; renderer
+    `menu.ts`, `pick.ts`; spec `…/2026-11-24-device-start-stop-design.md` with its "Decided while
+    planning" and "Decided while building", plan `docs/superpowers/plans/2026-11-25-device-start-stop.md`):
+    - **What can be started** (`DeviceList.startable`, emulators then simulators, each by name): the
+      AVDs the SDK's `emulator -list-avds` prints (`sdkRoots`, the SDK adb's folders; an adb on PATH or
+      from Homebrew has no emulator), kept to avdmanager's name characters and never starting with a
+      dash (the emulator's INFO lines go), and the simulators the notifier says are `Shutdown` (macOS,
+      with a current idb-companion); running ones are left out. AVDs are read at each start of
+      watching, at each focus and after an emulator's start or stop; a failed read keeps the last
+      list, a stale one says nothing. `noAvds`: the SDK's emulator lists none ("No emulators: make one
+      in Android Studio's Device Manager", where emulators fit).
+    - **An emulator** starts as `emulator -avd <name>`, detached, `unref()`: it keeps running when
+      Deck quits, in its own window. Its stdout and stderr go to `<temp>/Deck emulators/<instance>/<AVD
+      name>.log` (overwritten at each start; `<instance>` is the same per-userData hash the clipboard's
+      folder uses). A failed start's reason is the log's own first ERROR/PANIC/FATAL line (its own
+      "LEVEL | " prefix stripped, cut to 500 characters), else the exit code or signal's wording ("The
+      emulator stopped (exit code 1)."); without a log (the folder or file couldn't be made) the start
+      still works, with nothing read back. No `windowsHide`: `detached: true` already starts it with no
+      console window (Microsoft documents `CREATE_NO_WINDOW` as ignored for a detached process), and
+      `windowsHide`'s `SW_HIDE` could instead hide the emulator's own window — unverified on Windows;
+      note it if a console opens beside the emulator, or its window doesn't show. Once it answers, its
+      id is `emulator:<AVD name>` (`ro.boot.qemu.avd_name`), the pick made at the start. Stop is
+      `adb -s emulator-<port> emu kill` (only such an adb name reaches the console).
+    - **A simulator** boots with `idb_companion --boot <udid> [--device-set-path <set>] --log-level
+      info` and shuts down with `--shutdown`, 120 s at most, ended when Deck quits. Measured
+      2026-11-25 (idb-companion 1.6.1, iOS 27.0, a private set): Simulator.app isn't opened; a first
+      boot took 21 s, later ones 3 s, a shutdown 3.5–6 s; booting a booted one and shutting down a
+      shut-down one exit 0; an unknown UDID exits 1 with "<timestamp> <udid> could not be resolved to
+      any target in [FBSimulatorControl.SimulatorSet]" (the reason shown drops the timestamp); a
+      SIGTERM mid-boot exits 0 within 0.1 s and the simulator boots anyway, so an abort is known by its
+      signal. The notifier said `Booted` 0.07 s after `Booting`, 19 s before idb's first boot had
+      finished: a simulator Deck boots is listed as `booting` until the command ends.
+    - **`booting`** (`DeviceInfo.state`): also an Android device that answered before Android had
+      started (`sys.boot_completed` not 1: an emulator's cold boot, a phone rebooting), until it has;
+      one still saying so after the tracker's 40 asks (about 2 minutes) is taken as started. A
+      simulator Deck boots keeps this flag, even once the notifier already says `Booted`, until idb's
+      own boot command ends — each boot carries its own token, so Start → Stop → Start can't let an
+      older boot's end clear a newer one's flag or let its video stream early. The panel says
+      "Starting <name>…" with the spinner and doesn't stream it; the menu says `starting`.
+    - **Starts** (`starts.ts`): from the click until the device is listed and not booting, 3 minutes at
+      most. A failed command or the deadline keeps its reason (the tool's last line, or "It didn't
+      start within 3 minutes.") until it's started again; a second click changes nothing; a device
+      already running answers null; an id the list doesn't offer is refused ("Deck no longer sees
+      it."). A failure during a boot — an emulator that dies in its cold boot, a simulator boot that
+      fails after the notifier already said `Booted` — reaches `startable` as an error only once the
+      device is gone: while it's still merely listed as `booting`, the device counts as running and the
+      failure stays unseen rather than flash for a moment. Stop forgets the start outright, deadline
+      included, so a Stop during a boot is never a failed start, and nor is an emulator that exits
+      cleanly (code 0, no signal, nothing wrong in its log) once it had already been listed — that's
+      the user closing its own window. Forgotten too when nothing watches: a start under way carries on
+      by itself.
+    - **The panel:** the tab's pick (else the project's latest) that's starting or failed to is the
+      tab's view: "Starting <name>…", or "Couldn't start <name>" with the reason and Try again — only
+      for the tab's own device in force, never a failure elsewhere in the project's picks. The device
+      in force, stopped, keeps the panel on its Start view against whichever phone is plugged in —
+      shown by hand too, and the same for every tab of the project, since `tab ?? project[0]` is the
+      same device until some tab picks another: only a device the project's picks already reach past
+      it, and that's connected, shows instead. A start picks for the tab and the project, as choosing a
+      connected device does; **Stop picks only for the tab**, leaving the project's own remembered
+      device as it was, so the panel stays on its Start button even for a device that was only ever
+      shown without a pick. Picking a device in a tab, or stopping one there, counts as having shown it
+      in that tab too (`shownHere`), same as actually streaming it live: **the panel opens by itself
+      for a stopped device only in a tab that has shown, picked or stopped it this session** — a fresh
+      tab whose project's latest pick is already stopped stays closed on its own; View → Device Panel
+      there still only offers its Start button rather than opening it outright. `shownHere` decides
+      only whether the panel shows itself, never which device it shows. The empty panel's title is
+      "<name> isn't running" ("Start it below, or choose another device in the ▾ menu.") once other
+      devices are connected, else "No devices connected" — including when nothing at all is connected.
+      The ▾ menu has a Start section (those that fit first; `starting…`, `didn't start`) and, for an
+      emulator or simulator on screen, Stop, with no confirmation; the keyboard moves over all of it.
+      An empty panel offers up to 3 Start buttons, then "More in the ▾ menu". A refused start or a
+      failed stop says so under the header.
+    - **Unit tests:** `sdkRoots`; AVD names, finding and running the emulator and `emu kill` (shell
+      stand-ins); the log file and its failure line, `startAvd` without one; `--boot`/`--shutdown`
+      arguments, the failure's line, abort and timeout; the shut-down simulators; `booting` in
+      `mergeDevices` and the tracker; `Starts` (fake timers); `devices:start` and `devices:stop` through
+      `registerDeviceIpc` with stand-ins for the SDK's adb and emulator and for idb_companion
+      (`ipc.start.test.ts`, skipped on Windows), including a boot's own token surviving a Stop and a
+      restart, and a boot that fails after the notifier said Booted showing its error only once the
+      device is gone; `pick.ts`'s starting view, `startButtons` and `startPick`; the menu's entries.
+    - **Not yet checked:** an emulator started from Deck, and whether macOS prompts for its microphone
+      use, in whose name. Electron's default Info.plist already has `NSMicrophoneUsageDescription`
+      ("This app needs access to the microphone"), which the installed Deck carries unchanged
+      (`extendInfo` overrides only the camera's string); Deck's entitlements have no
+      `com.apple.security.device.audio-input`. The emulator binaries (`emulator`,
+      `qemu-system-aarch64`) themselves carry the microphone entitlement, and an emulator Deck starts
+      counts as Deck's for macOS privacy, so the likely outcome, if the emulator ever asks, is a prompt
+      in Deck's name with Electron's generic text, or a silent denial under the hardened runtime (no
+      entitlement to grant). Franco chose to leave it as is; the live check with a throwaway AVD is
+      only to confirm. Windows, all of it (`docs/TESTING.md` 18ah–18ai).
+    - **Known limits:** an emulator started from Deck runs on after Deck quits; an AVD made meanwhile
+      shows once Deck comes to the front; simulators created or deleted while shut down show only
+      once the notifier restarts; Deck doesn't make AVDs or simulators; a failed start stays in the
+      menu until started again or nothing watches; an old system image that sets neither AVD property
+      is listed as `emulator:emulator-<port>`, so its start runs out of time; no "Stopping …" feedback
+      (an emulator may stay listed as ready while it saves its snapshot, or show as offline, which the
+      panel answers with "Unplug it and plug it back in"); a start can't be cancelled before its device
+      is listed; in a project that's both an Android and an iOS app, a simulator-listing error hides
+      the emulators' Start buttons too (the empty panel gives up before it gets to them); quitting Deck
+      mid-boot leaves the simulator booted (idb's command ends, the boot completes, in CoreSimulator,
+      not in the command Deck ran), as an emulator started from Deck keeps running after Deck quits;
+      Stop then Start right away while Quick Boot saves its snapshot may fail (the AVD still locked); a
+      device that never sets `sys.boot_completed` shows "Starting …" for about 2 minutes on each
+      connection (the tracker's 40 asks), and an emulator whose cold boot runs longer than that after
+      adbd answers may end in "Couldn't show …" with Try again instead; Windows: emulators only, and
+      unverified whether `emulator.exe` stays up for the emulator's whole life (if it re-execs or hands
+      off to a child, `ended` would wrongly report a stop during a healthy boot) or whether a console
+      window appears beside it.
   - **Which projects** (`project.ts`): a tab's project is its repository's main work tree (worktrees
     share it), else its folder. Inside git the whole repository is scanned; outside git only a Gradle
     build (`settings.gradle[.kts]` at the root or in `android/`); the home folder never: scanning `~`
@@ -755,7 +870,8 @@ Things that aren't obvious from the code:
     simulators and iPhones an iOS one; Flutter and React Native take both); with several the panel
     asks. Shown by hand, every device fits. The menu lists those that fit first (`menuOrder`).
     Outside an Android or iOS app the project's picks don't open the panel by themselves; they're
-    used once the panel is shown by hand.
+    used once the panel is shown by hand. A pick started from the panel and not listed yet shows as
+    starting, and one that can be started keeps the panel open (Starting and stopping, above).
     - **Waiting:** a tab says "Looking for devices…" until the list is in and no kind it may show is
       still `pending`: its project's apps' kinds, those of the devices picked in the project or by
       the tab, and every kind when shown by hand (`stillLooking`). So a project with a phone and a
@@ -841,10 +957,15 @@ Things that aren't obvious from the code:
     only a PNG of at most 32 MiB, saves it with the clipboard's `saveImage` (same folder, cleared at
     start and quit) and returns `quoteImagePath`'s text (see the clipboard's image paths above).
   - **IPC:** a pick needs an absolute root and a project an absolute folder; a view of a device that
-    isn't listed is ignored (it could only cycle through retries); input goes to the device's
-    session, which checks it (`android/input.ts`, `ios/input.ts`) and drops what it can't use (an
-    iPhone's drops everything). `devices:camera-settings` ignores what comes with it and does
-    nothing off macOS. For M4, see Security below.
+    isn't listed, or one that's still booting, is ignored (it could only cycle through retries, or
+    there's nothing to stream yet); input goes to the device's session, which checks it
+    (`android/input.ts`, `ios/input.ts`) and drops what it can't use (an iPhone's drops everything).
+    `devices:start` only starts an id in main's own `startable`: null for a listed emulator or
+    simulator (already running), `{ error }` for anything else it doesn't offer (a phone, an iPhone,
+    an unknown id). `devices:stop` only stops a listed emulator or simulator, `{ error }` otherwise.
+    AVD names and UDIDs are checked again where they reach a command's argv (`isAvdName`, the UUID
+    shape in `boot.ts`). `devices:camera-settings` ignores what comes with it and does nothing off
+    macOS. For M4, see Security below.
   - **Cost:** only the active tab's unfolded panel streams, with the window visible (page
     visibility); a stream lingers 10 s after its last viewer; lock and sleep stop it. Measured
     2026-11-04 (dev build, the C66 and S25 FE on their lock screens, so almost no frames): main, GPU
@@ -1090,8 +1211,10 @@ excludes every `build` folder.
    (simulators, idb-companion) built 2026-11-10; step 3 (iPhones, a Swift helper on CoreMediaIO)
    built 2026-11-11/12. Next: the check with Franco's iPhone (the step 3 plan's Task 12, then
    `docs/TESTING.md` 20–32 on the signed app), Franco's hands-on checks (Device panel → "Not yet
-   checked" above) and Windows (`docs/TESTING.md` 18p–18y). Each step gets its own plan and pull
-   request.
+   checked" above) and Windows (`docs/TESTING.md` 18p–18y). Starting and stopping emulators and
+   simulators: built from `docs/superpowers/plans/2026-11-25-device-start-stop.md`; next, an
+   emulator check with a throwaway AVD Franco agrees to, `docs/TESTING.md` 33–36 on the signed app,
+   and 18ah–18ai on Windows. Each step gets its own plan and pull request.
 
 Deferred from the M1 review (`3f9feb6` fixed the important ones):
 - **Windows, untested:**

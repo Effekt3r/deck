@@ -2774,10 +2774,11 @@ After the "Current state" paragraph that ends "…the hands-on check with Franco
 
 ```markdown
 Starting and stopping emulators and simulators (spec `…/2026-11-24-device-start-stop-design.md`, plan
-`docs/superpowers/plans/2026-11-25-device-start-stop.md`): the ▾ menu's Start section and Stop, Start
-buttons in an empty panel, and the panel kept for a project whose emulator or simulator isn't
-running. Checked with a throwaway simulator in a private set; emulators only by unit tests (no AVD on
-Franco's Mac), Windows not at all (Device panel › Starting and stopping).
+`docs/superpowers/plans/2026-11-25-device-start-stop.md`), built 2026-11-25/26: the ▾ menu's Start
+section and Stop, Start buttons in an empty panel, and the panel kept open, in whichever tab showed,
+picked or stopped it, for an emulator or simulator that isn't running. Checked with a throwaway
+simulator in a private set; emulators only by unit tests (no AVD on Franco's Mac, 2026-11-25), Windows
+not at all (Device panel › Starting and stopping).
 ```
 
 In the table's `src/main/devices/` row, make three phrase changes: after "input checks and sessions"
@@ -2793,7 +2794,7 @@ In "Device panel", insert this bullet just before `  - **Which projects** (`proj
 ```markdown
   - **Starting and stopping** (`android/emulators.ts`, `ios/boot.ts`, `starts.ts`, `ipc.ts`; renderer
     `menu.ts`, `pick.ts`; spec `…/2026-11-24-device-start-stop-design.md` with its "Decided while
-    planning", plan `docs/superpowers/plans/2026-11-25-device-start-stop.md`):
+    planning" and "Decided while building", plan `docs/superpowers/plans/2026-11-25-device-start-stop.md`):
     - **What can be started** (`DeviceList.startable`, emulators then simulators, each by name): the
       AVDs the SDK's `emulator -list-avds` prints (`sdkRoots`, the SDK adb's folders; an adb on PATH or
       from Homebrew has no emulator), kept to avdmanager's name characters and never starting with a
@@ -2802,12 +2803,18 @@ In "Device panel", insert this bullet just before `  - **Which projects** (`proj
       watching, at each focus and after an emulator's start or stop; a failed read keeps the last
       list, a stale one says nothing. `noAvds`: the SDK's emulator lists none ("No emulators: make one
       in Android Studio's Device Manager", where emulators fit).
-    - **An emulator** starts as `emulator -avd <name>`, detached, `stdio: 'ignore'`, `unref()`: it keeps
-      running when Deck quits, in its own window. `windowsHide` is unchecked on Windows: if the
-      emulator's window doesn't show, or a console opens beside it, look there first. Nothing of its
-      output is read: an exit while it starts is the failure ("The emulator stopped (exit code 1).").
-      Once it answers, its id is `emulator:<AVD name>` (`ro.boot.qemu.avd_name`), the pick made at the
-      start. Stop is `adb -s emulator-<port> emu kill` (only such an adb name reaches the console).
+    - **An emulator** starts as `emulator -avd <name>`, detached, `unref()`: it keeps running when
+      Deck quits, in its own window. Its stdout and stderr go to `<temp>/Deck emulators/<instance>/<AVD
+      name>.log` (overwritten at each start; `<instance>` is the same per-userData hash the clipboard's
+      folder uses). A failed start's reason is the log's own first ERROR/PANIC/FATAL line (its own
+      "LEVEL | " prefix stripped, cut to 500 characters), else the exit code or signal's wording ("The
+      emulator stopped (exit code 1)."); without a log (the folder or file couldn't be made) the start
+      still works, with nothing read back. No `windowsHide`: `detached: true` already starts it with no
+      console window (Microsoft documents `CREATE_NO_WINDOW` as ignored for a detached process), and
+      `windowsHide`'s `SW_HIDE` could instead hide the emulator's own window — unverified on Windows;
+      note it if a console opens beside the emulator, or its window doesn't show. Once it answers, its
+      id is `emulator:<AVD name>` (`ro.boot.qemu.avd_name`), the pick made at the start. Stop is
+      `adb -s emulator-<port> emu kill` (only such an adb name reaches the console).
     - **A simulator** boots with `idb_companion --boot <udid> [--device-set-path <set>] --log-level
       info` and shuts down with `--shutdown`, 120 s at most, ended when Deck quits. Measured
       2026-11-25 (idb-companion 1.6.1, iOS 27.0, a private set): Simulator.app isn't opened; a first
@@ -2819,36 +2826,80 @@ In "Device panel", insert this bullet just before `  - **Which projects** (`proj
       finished: a simulator Deck boots is listed as `booting` until the command ends.
     - **`booting`** (`DeviceInfo.state`): also an Android device that answered before Android had
       started (`sys.boot_completed` not 1: an emulator's cold boot, a phone rebooting), until it has;
-      one still saying so after the tracker's 40 asks is taken as started. The panel says
+      one still saying so after the tracker's 40 asks (about 2 minutes) is taken as started. A
+      simulator Deck boots keeps this flag, even once the notifier already says `Booted`, until idb's
+      own boot command ends — each boot carries its own token, so Start → Stop → Start can't let an
+      older boot's end clear a newer one's flag or let its video stream early. The panel says
       "Starting <name>…" with the spinner and doesn't stream it; the menu says `starting`.
-    - **Starts** (`starts.ts`): from the click until the device is listed, 3 minutes at most. A failed
-      command or the deadline keeps its reason (the tool's last line, or "It didn't start within 3
-      minutes.") until it's started again; a second click changes nothing; a device already running
-      answers null; an id the list doesn't offer is refused ("Deck no longer sees it."). Forgotten
-      when nothing watches: a start under way carries on by itself.
+    - **Starts** (`starts.ts`): from the click until the device is listed and not booting, 3 minutes at
+      most. A failed command or the deadline keeps its reason (the tool's last line, or "It didn't
+      start within 3 minutes.") until it's started again; a second click changes nothing; a device
+      already running answers null; an id the list doesn't offer is refused ("Deck no longer sees
+      it."). A failure during a boot — an emulator that dies in its cold boot, a simulator boot that
+      fails after the notifier already said `Booted` — reaches `startable` as an error only once the
+      device is gone: while it's still merely listed as `booting`, the device counts as running and the
+      failure stays unseen rather than flash for a moment. Stop forgets the start outright, deadline
+      included, so a Stop during a boot is never a failed start, and nor is an emulator that exits
+      cleanly (code 0, no signal, nothing wrong in its log) once it had already been listed — that's
+      the user closing its own window. Forgotten too when nothing watches: a start under way carries on
+      by itself.
     - **The panel:** the tab's pick (else the project's latest) that's starting or failed to is the
-      tab's view: "Starting <name>…", or "Couldn't start <name>" with the reason and Try again. A start
-      picks for the tab and the project, as a choice does. A pick that can be started keeps the panel
-      open (`startPick`), "No devices connected" with its Start button first: after a Stop, and in a
-      project whose emulator or simulator isn't running. The ▾ menu has a Start section (those that
-      fit first; `starting…`, `didn't start`) and, for an emulator or simulator on screen, Stop, with no
-      confirmation; the keyboard moves over all of it. An empty panel offers up to 3 Start buttons,
-      then "More in the ▾ menu". A refused start or a failed stop says so under the header.
+      tab's view: "Starting <name>…", or "Couldn't start <name>" with the reason and Try again — only
+      for the tab's own device in force, never a failure elsewhere in the project's picks. The device
+      in force, stopped, keeps the panel on its Start view against whichever phone is plugged in —
+      shown by hand too, and the same for every tab of the project, since `tab ?? project[0]` is the
+      same device until some tab picks another: only a device the project's picks already reach past
+      it, and that's connected, shows instead. A start picks for the tab and the project, as choosing a
+      connected device does; Stop picks only for the tab, leaving the project's own remembered device
+      as it was, so the panel stays on its Start button even for a device that was only ever shown
+      without a pick. Picking a device in a tab, or stopping one there, counts as having shown it in
+      that tab too (`shownHere`), same as actually streaming it live: the panel opens by itself for a
+      stopped device only in a tab that has shown, picked or stopped it this session — a fresh tab
+      whose project's latest pick is already stopped stays closed on its own; View → Device Panel there
+      still only offers its Start button rather than opening it outright. `shownHere` decides only
+      whether the panel shows itself, never which device it shows. The empty panel's title is "<name>
+      isn't running" ("Start it below, or choose another device in the ▾ menu.") once other devices are
+      connected, else "No devices connected" — including when nothing at all is connected. The ▾ menu
+      has a Start section (those that fit first; `starting…`, `didn't start`) and, for an emulator or
+      simulator on screen, Stop, with no confirmation; the keyboard moves over all of it. An empty
+      panel offers up to 3 Start buttons, then "More in the ▾ menu". A refused start or a failed stop
+      says so under the header.
     - **Unit tests:** `sdkRoots`; AVD names, finding and running the emulator and `emu kill` (shell
-      stand-ins); `--boot`/`--shutdown` arguments, the failure's line, abort and timeout; the shut-down
-      simulators; `booting` in `mergeDevices` and the tracker; `Starts` (fake timers);
-      `devices:start` and `devices:stop` through `registerDeviceIpc` with stand-ins for the SDK's adb
-      and emulator and for idb_companion (`ipc.start.test.ts`, skipped on Windows); `pick.ts`'s
-      starting view, `startButtons` and `startPick`; the menu's entries.
-    - **Not yet checked:** an emulator started from Deck (no AVD on Franco's Mac, 2026-11-25), and
-      whether macOS asks Deck for an emulator's microphone or camera use: Deck's Info.plist has only
-      `NSCameraUsageDescription`, and macOS ends a process that asks for the microphone on behalf of
-      an app without `NSMicrophoneUsageDescription`. Windows, all of it (`docs/TESTING.md` 18ac–18ad).
+      stand-ins); the log file and its failure line, `startAvd` without one; `--boot`/`--shutdown`
+      arguments, the failure's line, abort and timeout; the shut-down simulators; `booting` in
+      `mergeDevices` and the tracker; `Starts` (fake timers); `devices:start` and `devices:stop` through
+      `registerDeviceIpc` with stand-ins for the SDK's adb and emulator and for idb_companion
+      (`ipc.start.test.ts`, skipped on Windows), including a boot's own token surviving a Stop and a
+      restart, and a boot that fails after the notifier said Booted showing its error only once the
+      device is gone; `pick.ts`'s starting view, `startButtons` and `startPick`; the menu's entries.
+    - **Not yet checked:** an emulator started from Deck, and whether macOS prompts for its microphone
+      use, in whose name. Electron's default Info.plist already has `NSMicrophoneUsageDescription`
+      ("This app needs access to the microphone"), which the installed Deck carries unchanged
+      (`extendInfo` overrides only the camera's string); Deck's entitlements have no
+      `com.apple.security.device.audio-input`. The emulator binaries (`emulator`,
+      `qemu-system-aarch64`) themselves carry the microphone entitlement, and an emulator Deck starts
+      counts as Deck's for macOS privacy, so the likely outcome, if the emulator ever asks, is a prompt
+      in Deck's name with Electron's generic text, or a silent denial under the hardened runtime (no
+      entitlement to grant). Franco chose to leave it as is; the live check with a throwaway AVD is
+      only to confirm. Windows, all of it (`docs/TESTING.md` 18ah–18ai).
     - **Known limits:** an emulator started from Deck runs on after Deck quits; an AVD made meanwhile
       shows once Deck comes to the front; simulators created or deleted while shut down show only
       once the notifier restarts; Deck doesn't make AVDs or simulators; a failed start stays in the
       menu until started again or nothing watches; an old system image that sets neither AVD property
-      is listed as `emulator:emulator-<port>`, so its start runs out of time; Windows: emulators only.
+      is listed as `emulator:emulator-<port>`, so its start runs out of time; no "Stopping …" feedback
+      (an emulator may stay listed as ready while it saves its snapshot, or show as offline, which the
+      panel answers with "Unplug it and plug it back in"); a start can't be cancelled before its device
+      is listed; in a project that's both an Android and an iOS app, a simulator-listing error hides
+      the emulators' Start buttons too (the empty panel gives up before it gets to them); quitting Deck
+      mid-boot leaves the simulator booted (idb's command ends, the boot completes, in CoreSimulator,
+      not in the command Deck ran), as an emulator started from Deck keeps running after Deck quits;
+      Stop then Start right away while Quick Boot saves its snapshot may fail (the AVD still locked); a
+      device that never sets `sys.boot_completed` shows "Starting …" for about 2 minutes on each
+      connection (the tracker's 40 asks), and an emulator whose cold boot runs longer than that after
+      adbd answers may end in "Couldn't show …" with Try again instead; Windows: emulators only, and
+      unverified whether `emulator.exe` stays up for the emulator's whole life (if it re-execs or hands
+      off to a child, `ended` would wrongly report a stop during a healthy boot) or whether a console
+      window appears beside it.
 ```
 
 At the end of the first paragraph of "**Which device a tab shows** (`pick.ts`)", after "…they're used
@@ -2858,7 +2909,7 @@ starting, and one that can be started keeps the panel open (Starting and stoppin
 In "Next steps", item 5, after "…Windows (`docs/TESTING.md` 18p–18y).", add: "Starting and stopping
 emulators and simulators: built from `docs/superpowers/plans/2026-11-25-device-start-stop.md`; next,
 an emulator check with a throwaway AVD Franco agrees to, `docs/TESTING.md` 33–36 on the signed app,
-and 18ac–18ad on Windows."
+and 18ah–18ai on Windows."
 
 - [ ] **Step 2: README.md**
 
@@ -2873,18 +2924,22 @@ running, its panel offers a Start button. An emulator started from Deck keeps ru
 
 - [ ] **Step 3: docs/TESTING.md**
 
-After item 18ab, before "**Restart**", add:
+By the time this was built, items 18ac–18ag were already taken (the tab-status checks): the new ones
+go in as 18ah–18ai instead, in the same place (after item 18ag, before "**Restart**"):
 
 ```markdown
-18ac. Starting an emulator, only with an AVD you're happy to start (Android Studio › Device Manager):
+18ah. Starting an emulator, only with an AVD you're happy to start (Android Studio › Device Manager):
      with no phone plugged in and the emulator closed, open an Android app's tab and press
      Ctrl+Shift+D. The panel says "No devices connected" with **Start <AVD>** (its `_` as spaces), and
      the ▾ menu lists it under Start. Click it: "Starting <AVD>…" with a spinner, the emulator's own
      window opens, and the panel shows its screen once Android has started, without "Couldn't show".
-     Note it if a console window opens beside the emulator, or the emulator's window doesn't show.
-18ad. ▾ → **Stop <AVD>**: the emulator closes; "disconnected", then the panel stays with its Start
-     button first. Open a new tab in the same folder: its panel offers that Start button too. Start it
-     again, then quit Deck: the emulator keeps running.
+     Note it if a console window opens beside the emulator, or the emulator's window doesn't show. If
+     it fails instead, its reason should be in
+     `%TEMP%\Deck emulators\<8 characters>\<AVD>.log` (the AVD's own name, `_` not spaces).
+18ai. ▾ → **Stop <AVD>**: the emulator closes; "disconnected", then the panel stays with its Start
+     button first. View → Device Panel on a new tab in the same folder offers that Start button too
+     (a fresh tab no longer opens the panel by itself for a stopped device). Start it again from
+     there, then quit Deck: the emulator keeps running.
 ```
 
 At the end of the file, add:
@@ -2902,11 +2957,12 @@ first.
     has booted (about 20 s the first time), then its screen. Simulator.app doesn't open; opened, it
     shows the simulator.
 34. ▾ → **Stop <name>**: it shuts down; "disconnected", then the panel stays with its Start button
-    first. Open a new tab in the same project: its panel offers that button without Cmd+Shift+D.
-    Start it from the ▾ menu's Start section this time: the same as 33, quicker.
+    first. View → Device Panel on a new tab in the same project offers that button too, without
+    Cmd+Shift+D opening it by itself (a fresh tab no longer does that for a stopped device). Start it
+    from the ▾ menu's Start section this time: the same as 33, quicker.
 35. Start a simulator and quit Deck while it says "Starting …": the simulator finishes booting anyway
     (`xcrun simctl list devices booted`).
-36. With an AVD (only one you're happy to start): 18ac and 18ad on the Mac, and note any macOS prompt
+36. With an AVD (only one you're happy to start): 18ah and 18ai on the Mac, and note any macOS prompt
     that names Deck (the microphone or the camera, asked for by the emulator). Without any AVD, an
     Android app's empty panel (Cmd+Shift+D) says "No emulators: make one in Android Studio's Device
     Manager".

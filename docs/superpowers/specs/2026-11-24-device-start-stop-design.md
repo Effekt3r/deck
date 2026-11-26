@@ -172,11 +172,14 @@ Decided (the planner makes the design calls; Franco reviews them here):
   spinner, so the text runs on from the click to the screen. A device still saying it's starting
   after the tracker's 40 asks (about 2 minutes) is taken as started.
 - **The panel stays for a device that can be started:** with the tab's pick (else the project's
-  latest) an emulator or simulator that isn't running, the panel stays open, "No devices connected"
-  with that device's Start button first. The existing rules would hide it (nothing connected, not
-  shown by hand), so a Stop would take the panel away 10 s later; this is what "After a stop" above
-  describes. A project whose emulator or simulator is shut down offers it the same way in every new
-  tab; an unplugged phone still closes the panel.
+  latest) an emulator or simulator that isn't running, and this tab has shown, picked or stopped it
+  this session, the panel stays open: its title is "<name> isn't running" once other devices are
+  connected, else "No devices connected", with that device's Start button first. The existing rules
+  would otherwise hide it (nothing connected, not shown by hand), so a Stop would take the panel away
+  10 s later; this is what "After a stop" above describes. A fresh tab whose project's latest pick is
+  already stopped stays closed instead (View → Device Panel still offers its Start button); an
+  unplugged phone still closes the panel. See "Decided while building" below: this needed more than
+  the planning-stage rule.
 - **Failures** read "Couldn't start <name>" with the reason under it: the tool's last line, or "It
   didn't start within 3 minutes."; Try again. A failed start's menu row says `didn't start`, and the
   failure stays until it's started again or no tab watches devices. A start main refuses (no longer
@@ -190,9 +193,49 @@ Decided (the planner makes the design calls; Franco reviews them here):
   the next watch lists the device once it's up.
 - **`sdkRoots`** lives in `android/adb.ts`, beside the `adbCandidates` it came out of: `emulators.ts`
   uses `runAdb`, so the other way round would be an import cycle.
-- **Windows:** `startAvd` passes `windowsHide`, as planned. It asks Windows to hide a new process's
-  first window, which could be the emulator's own; the Windows check looks for that, and for a
-  console window beside the emulator.
+- **Windows:** `startAvd` passes no `windowsHide` after all: `detached: true` already starts a process
+  with no console window of its own (Microsoft documents `CREATE_NO_WINDOW` as ignored for a detached
+  process), and `windowsHide`'s `SW_HIDE` could instead hide the emulator's own window. The Windows
+  check looks for a console window beside the emulator, or its window not showing.
 - **Not checked:** an emulator started from Deck (no AVD here), and whether macOS asks Deck for an
   emulator's microphone use. Deck's Info.plist has no `NSMicrophoneUsageDescription`, and macOS ends
   a process that asks for the microphone when the app responsible for it has none.
+
+## Decided while building (2026-11-26)
+
+Found while building and reviewing the panel's rules, past what planning had worked out:
+
+- **Shown by hand still holds the Start view.** A stopped emulator or simulator that's the tab's pick
+  (else the project's latest) keeps the panel on its Start view even when the panel is asked for by
+  hand, rather than falling back to whichever phone is plugged in — why: View → Device Panel shouldn't
+  abandon the device you just stopped for whatever else happens to be connected.
+- **The empty title names the device, or doesn't, by whether anything's connected.** "<name> isn't
+  running" once other devices are connected, else "No devices connected" (including with nothing
+  connected at all) — why: so the panel never claims none are connected while some are, but also never
+  names a device as "not running" into a title that otherwise means nothing is there.
+- **A start's failure shows only for the tab's own device in force**, never a failure left over
+  elsewhere in the project's picks — why: an old failure in another tab or project shouldn't resurface
+  somewhere it wasn't asked for.
+- **The panel stays open for a stopped device only in a tab that has shown, picked or stopped it this
+  session**, not in every fresh tab of the project — why: a tab that never touched the device has no
+  reason to claim the panel for it; View → Device Panel still offers its Start button there. Picking a
+  device in a tab, or stopping one there, counts as having shown it too (not only actually streaming
+  it live), so a device started and immediately stopped still keeps its tab's panel open.
+- **Stop sets only the tab's own pick, not the project's**, which stays whatever it was — why: so the
+  panel keeps its Start button even for a device that was only ever shown without a pick, without
+  moving the project's own remembered device out from under other tabs.
+  - Consequence: because `tab ?? project[0]` is the same stopped device for every tab of the project
+    until some tab picks another, a phone connecting afterwards doesn't take the Start view away from
+    *any* tab, the one that stopped it included — `shownHere` only ever decides whether a tab shows
+    the panel by itself, never which device it would show. A fresh tab stays closed rather than
+    popping its Start view open uninvited; View → Device Panel there opens to the same Start view, not
+    to the phone.
+- **Microphone, corrected:** Electron's default Info.plist already carries `NSMicrophoneUsageDescription`
+  ("This app needs access to the microphone"), and the installed Deck has it (`extendInfo` only
+  overrides the camera's string); Deck's entitlements have no `com.apple.security.device.audio-input`.
+  The emulator binaries (`emulator`, `qemu-system-aarch64`) themselves carry microphone entitlements
+  (checked against the SDK's own binaries), and an emulator started from Deck counts as Deck's for
+  macOS privacy, so if it asks for the microphone the likely outcome is a prompt in Deck's name with
+  Electron's generic text, or a silent denial under the hardened runtime (no entitlement to grant).
+  Franco chose to leave it as is; the live check with a throwaway AVD is only to confirm, not to
+  decide.

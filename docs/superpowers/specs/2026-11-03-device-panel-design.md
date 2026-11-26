@@ -520,7 +520,8 @@ while the simulators or the iPhones are).
   its own, most often because the simulator is shutting down, the session waits a second for the
   companion's words. Reasons are cut at 500 characters. A process that ignores SIGTERM gets SIGKILL
   2 s later.
-- Deck never boots or shuts down simulators.
+- Deck boots or shuts down a simulator only when asked to, from the panel
+  (`2026-11-24-device-start-stop-design.md`).
 
 ### iPhones
 
@@ -849,7 +850,7 @@ Each step gets its own plan and pull request and works without the next.
 
 - Recording, audio, multi-touch, volume keys, rotating the device from Deck, or dropping an APK to
   install it.
-- Starting or stopping emulators and simulators.
+- Starting or stopping emulators and simulators: added by `2026-11-24-device-start-stop-design.md`.
 - Controlling a real iPhone.
 - Claude looking at the screen by itself: Claude Code can already use adb and simctl.
 - Following the device Claude installs to (`adb -s …` in its commands). Maybe later.
