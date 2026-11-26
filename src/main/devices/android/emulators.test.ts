@@ -66,8 +66,8 @@ describe.skipIf(process.platform === 'win32')('running the emulator', () => {
   })
 
   it('listAvds rejects when the emulator fails, or takes too long', async () => {
-    await expect(listAvds(script('list-fail', 'emulator', 'exit 3'))).rejects.toThrow()
-    await expect(listAvds(script('list-slow', 'emulator', 'exec sleep 5'), 200)).rejects.toThrow()
+    await expect(listAvds(script('list-fail', 'emulator', 'exit 3'))).rejects.toMatchObject({ code: 3, killed: false })
+    await expect(listAvds(script('list-slow', 'emulator', 'exec sleep 5'), 200)).rejects.toMatchObject({ killed: true, signal: 'SIGTERM' })
   })
 
   it('startAvd starts the AVD, and hears when the emulator ends', async () => {
@@ -88,6 +88,42 @@ describe.skipIf(process.platform === 'win32')('running the emulator', () => {
   it("startAvd rejects an emulator that can't be started, and a name that isn't an AVD's", async () => {
     await expect(startAvd(join(root, 'missing', 'emulator'), 'Pixel_9')).rejects.toThrow(/ENOENT/)
     await expect(startAvd('/bin/sh', '-help')).rejects.toThrow(`"-help" isn't an AVD's name.`)
+  })
+
+  it("startAvd rejects synchronously when the file can't be run (ENOEXEC)", async () => {
+    // No "#!": execve refuses it outright, synchronously, rather than failing once spawned.
+    const dir = join(root, 'noexec')
+    mkdirSync(dir, { recursive: true })
+    const file = join(dir, 'emulator')
+    writeFileSync(file, 'not a script\n')
+    chmodSync(file, 0o755)
+    await expect(startAvd(file, 'Pixel_9')).rejects.toThrow('spawn ENOEXEC')
+  })
+
+  it("startAvd's ended reason is the emulator's own first ERROR/PANIC/FATAL line from its log", async () => {
+    const emulator = script('start-log-fail', 'emulator', [
+      'echo "$@" > "$DIR/args"',
+      "echo 'ERROR        | Unknown AVD name [X], use -list-avds to see valid list.'",
+      "echo '(Note: Directories are searched in the order given above)'",
+      'exit 1',
+    ].join('\n'))
+    const ended = vi.fn()
+    await startAvd(emulator, 'Pixel_9', ended, join(root, 'logs-fail'))
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('Unknown AVD name [X], use -list-avds to see valid list.'), { timeout: 3000 })
+    expect(argsOf('start-log-fail')).toBe('-avd Pixel_9\n')
+  })
+
+  it('startAvd falls back to the exit-code wording when the log has no failure line', async () => {
+    const ended = vi.fn()
+    await startAvd(script('start-log-silent', 'emulator', 'exit 1'), 'Pixel_9', ended, join(root, 'logs-silent'))
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).'), { timeout: 3000 })
+  })
+
+  it("startAvd still starts when logDir can't be made (a file sits where a folder in it should be)", async () => {
+    const notADir = script('not-a-dir', 'file', '') // root/not-a-dir/file: a file, not a folder
+    const ended = vi.fn()
+    await startAvd(script('start-bad-logdir', 'emulator', 'exit 1'), 'Pixel_9', ended, join(notADir, 'nested'))
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).'), { timeout: 3000 })
   })
 
   it('killEmulator tells the emulator to close through adb', async () => {

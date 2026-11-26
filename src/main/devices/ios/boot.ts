@@ -16,16 +16,23 @@ const STAMP = /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d(?:\.\d+)?[+-]\d{4} /
 /** A log line that reads as a failure, without its timestamp; null for any other. */
 const failureLine = (line: string): string | null => asFailure(line.replace(STAMP, '')) || null
 
+/** A simulator's UDID, as Xcode and idb_companion print it: hex, in four dashed groups. Checked
+ *  before it reaches idb_companion's argv, as startAvd checks an AVD's name and killEmulator an
+ *  emulator's serial. */
+const UDID = /^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$/
+
 /** Boots simulator `udid` with `idb_companion --boot`: through CoreSimulator, as idb does
  *  everything, not `xcrun simctl`, whose wrapper can run Xcode's first-launch step. It doesn't open
  *  Simulator.app (measured 2026-11-25), and without --headless the simulator stays booted after
- *  the command ends. Resolves when idb says the boot has finished (18 s for a first boot, 3 s after
+ *  the command ends. Resolves when idb says the boot has finished (21 s for a first boot, 3 s after
  *  that), which is after the notifier already said "Booted". */
-export const bootSimulator = (idb: string, udid: string, opts: BootOptions): Promise<void> => runIdb(idb, ['--boot', udid], opts)
+export const bootSimulator = (idb: string, udid: string, opts: BootOptions): Promise<void> =>
+  UDID.test(udid) ? runIdb(idb, ['--boot', udid], opts) : Promise.reject(new Error(`"${udid}" isn't a UDID.`))
 
 /** Shuts simulator `udid` down with `idb_companion --shutdown` (3 to 6 s). One already shut down is
  *  fine. */
-export const shutdownSimulator = (idb: string, udid: string, opts: BootOptions): Promise<void> => runIdb(idb, ['--shutdown', udid], opts)
+export const shutdownSimulator = (idb: string, udid: string, opts: BootOptions): Promise<void> =>
+  UDID.test(udid) ? runIdb(idb, ['--shutdown', udid], opts) : Promise.reject(new Error(`"${udid}" isn't a UDID.`))
 
 /** Runs one idb_companion command at --log-level info (its default, debug, would bury a failure's
  *  line in chatter) for up to `timeoutMs` (120 s). Rejects with its last line that reads as a

@@ -159,6 +159,9 @@ async function start(): Promise<void> {
     // Keyed by this instance like the clipboard's folder, so a dev build has its own.
     socketDir: socketDirFor(app.getPath('temp'), instance, process.getuid?.() ?? 0),
     iphoneHelper: iphoneHelper(),
+    // Keyed by this instance like the clipboard's folder; startAvd makes it (and falls back without
+    // one) at each start, so nothing needs to create it here.
+    emulatorLogDir: join(app.getPath('temp'), 'Deck emulators', instance),
     saveImage: (png) => clip.saveImage(png),
   })
 

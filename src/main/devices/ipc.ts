@@ -37,6 +37,10 @@ export interface DeviceIpcOptions {
   /** Deck's iPhone helper (macOS), or null without one: a build on a Mac without Xcode's command line
    *  tools has none, and no iPhones. */
   iphoneHelper: string | null
+  /** Where a started emulator's stdout and stderr go, `<name>.log` each, overwritten every start, so a
+   *  failed start can say why: see startAvd. Optional; without one (or when it can't be made or the
+   *  file can't be opened) a start runs exactly as it did before, with nothing read from it. */
+  emulatorLogDir?: string | null
   /** Saves a PNG where Claude can read it (the clipboard card's folder); resolves with its path. */
   saveImage(png: Uint8Array): Promise<string>
 }
@@ -396,7 +400,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     const failWith = (err: unknown) => fail(err instanceof Error ? err.message : String(err))
     if (device.kind === 'emulator') {
       if (!emulator) fail("Deck can't find Android's emulator.")
-      else startAvd(emulator, device.id.slice('emulator:'.length), fail).then(() => void readAvds(generation), failWith)
+      else startAvd(emulator, device.id.slice('emulator:'.length), fail, opts.emulatorLogDir ?? null).then(() => void readAvds(generation), failWith)
       return null
     }
     const udid = udidOf(device.id)

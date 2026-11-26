@@ -1,7 +1,7 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
-import { constants } from 'node:fs'
+import { closeSync, constants, mkdirSync, openSync, readSync, statSync } from 'node:fs'
 import { access } from 'node:fs/promises'
-import { posix, win32 } from 'node:path'
+import { join, posix, win32 } from 'node:path'
 import type { StartableDevice } from '@shared/types'
 import { runAdb } from './adb'
 
@@ -59,20 +59,80 @@ export function startableEmulators(avds: readonly string[]): StartableDevice[] {
 const endedAs = (code: number | null, signal: NodeJS.Signals | null): string =>
   signal ? `The emulator was stopped (${signal}).` : code ? `The emulator stopped (exit code ${code}).` : 'The emulator stopped.'
 
+/** Only this much of the emulator's log is checked for its own failure line: enough for its startup
+ *  chatter, not so much a huge log costs anything to read. */
+const LOG_TAIL_BYTES = 16 * 1024
+/** The emulator's own lines that say it failed (qemu's PANIC and FATAL, the launcher's ERROR). Its
+ *  last line is usually a "(Note: Directories are searched...)" hint, not the failure, so the first
+ *  one found is taken, not the last. */
+const FAILURE_LINE = /^(?:ERROR|PANIC|FATAL)\b/
+/** Its own "LEVEL        | " prefix on a log line: a word, spaces, `|`, spaces. */
+const LOG_PREFIX = /^\S+\s+\|\s*/
+
+/** The first line in `file`'s last LOG_TAIL_BYTES that reads as a failure, its own prefix stripped and
+ *  cut to 500 characters; null without one, or without a file there to read (no logDir, or it couldn't
+ *  be made or opened for writing). */
+function logFailure(file: string): string | null {
+  let fd: number
+  try {
+    fd = openSync(file, 'r')
+  } catch {
+    return null
+  }
+  try {
+    const size = statSync(file).size
+    const length = Math.min(size, LOG_TAIL_BYTES)
+    const buffer = Buffer.alloc(length)
+    readSync(fd, buffer, 0, length, size - length)
+    for (const line of buffer.toString('utf8').split(/\r?\n/)) {
+      if (FAILURE_LINE.test(line)) return line.replace(LOG_PREFIX, '').slice(0, 500)
+    }
+    return null
+  } catch {
+    return null
+  } finally {
+    closeSync(fd)
+  }
+}
+
 /** Starts AVD `name` in the emulator's own window, as Android Studio does: detached, so it keeps
- *  running when Deck quits, with nothing read from it. Resolves once it runs; rejects when it can't
- *  be started (ENOENT, EACCES). `ended` hears if it ends while Deck runs, and how, so a start that
- *  dies early (a broken AVD, a missing system image) needn't wait out its 3 minutes. */
-export function startAvd(emulator: string, name: string, ended: (how: string) => void = () => {}): Promise<void> {
+ *  running when Deck quits. Resolves once it runs; rejects when it can't be started (ENOENT, EACCES).
+ *  `ended` hears if it ends while Deck runs, and how, so a start that dies early (a broken AVD, a
+ *  missing system image) needn't wait out its 3 minutes: with `logDir`, the emulator's stdout and
+ *  stderr go to `<logDir>/<name>.log` (overwritten each start) rather than a pipe, since a file, unlike
+ *  a pipe, can't ever break the emulator once Deck quits; `ended`'s reason then comes from the log's
+ *  own first ERROR/PANIC/FATAL line, read back once it exits. Without `logDir`, or when it can't be
+ *  made or the file can't be opened, the start still runs, with nothing read from it, as before. */
+export function startAvd(
+  emulator: string,
+  name: string,
+  ended: (how: string) => void = () => {},
+  logDir: string | null = null,
+): Promise<void> {
   if (!isAvdName(name)) return Promise.reject(new Error(`"${name}" isn't an AVD's name.`))
+  let logFile: string | null = null
+  let fd: number | null = null
+  if (logDir) {
+    logFile = join(logDir, `${name}.log`)
+    try {
+      mkdirSync(logDir, { recursive: true })
+      fd = openSync(logFile, 'w')
+    } catch {
+      fd = null // the start must still work: stdio falls back to 'ignore' below
+    }
+  }
   return new Promise((resolve, reject) => {
     let child: ChildProcess
     try {
-      // windowsHide keeps a console from opening on Windows. Unchecked there: if the emulator's own
-      // window doesn't show (SW_HIDE reaching it), or a console window opens beside it, start here.
-      child = spawn(emulator, ['-avd', name], { detached: true, stdio: 'ignore', windowsHide: true })
+      // No windowsHide: with detached: true libuv already starts it without a console window
+      // (Microsoft documents CREATE_NO_WINDOW as ignored for a detached process), and windowsHide's
+      // SW_HIDE could instead hide the emulator's own window. Unverified on Windows.
+      child = spawn(emulator, ['-avd', name], { detached: true, stdio: fd !== null ? ['ignore', fd, fd] : 'ignore' })
     } catch (err) {
       return reject(err instanceof Error ? err : new Error(String(err)))
+    } finally {
+      // Node dups an fd passed as stdio for the child; Deck's own copy is done with it either way.
+      if (fd !== null) closeSync(fd)
     }
     child.once('error', reject)
     child.once('spawn', () => {
@@ -80,7 +140,7 @@ export function startAvd(emulator: string, name: string, ended: (how: string) =>
       child.unref()
       resolve()
     })
-    child.once('exit', (code, signal) => ended(endedAs(code, signal)))
+    child.once('exit', (code, signal) => ended((logFile && logFailure(logFile)) || endedAs(code, signal)))
   })
 }
 

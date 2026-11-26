@@ -28,13 +28,13 @@ const start = (id: unknown) => call<DeviceActionResult>(IPC.devicesStart, id)
 const stop = (id: unknown) => call<DeviceActionResult>(IPC.devicesStop, id)
 
 const PIXEL: DeviceInfo = { id: 'emulator:Pixel_9', kind: 'emulator', name: 'Pixel 9', detail: 'Emulator · Android 15', state: 'ready' }
-const SIM: DeviceInfo = { id: 'simulator:FAKE-UDID', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' }
+const SIM: DeviceInfo = { id: 'simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' }
 
 // Shell scripts stand in for the SDK's adb and emulator and for idb_companion, never the real ones
 // (a real adb would take over the adb server; real simulators are Franco's). They share a folder of
 // marks: the emulator lists the AVDs in `avds` and, started, marks `started` and stays up; adb's
 // track-devices lists emulator-5554 from then until `emu kill` (which ends the emulator); idb's
-// notifier lists FAKE-UDID booted while `booted` is there, which `--boot` and `--shutdown` set and
+// notifier lists DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF booted while `booted` is there, which `--boot` and `--shutdown` set and
 // clear. Every call goes to `calls`, one line each.
 describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and stopping', () => {
   let root: string
@@ -88,13 +88,13 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
     tool(join(root, 'libexec', 'idb_companion'), [
       'echo "idb $*" >> "$M/calls"',
       'state() { if [ -f "$M/booted" ]; then echo Booted; else echo Shutdown; fi; }',
-      'list() { echo "[{\\"udid\\":\\"FAKE-UDID\\",\\"name\\":\\"iPhone 17\\",\\"state\\":\\"$1\\",\\"type\\":\\"Simulator\\",\\"os_version\\":\\"iOS 27.0\\"},{\\"udid\\":\\"BAD-UDID\\",\\"name\\":\\"iPhone Broken\\",\\"state\\":\\"Shutdown\\",\\"type\\":\\"Simulator\\",\\"os_version\\":\\"iOS 27.0\\"}]"; }',
+      'list() { echo "[{\\"udid\\":\\"DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF\\",\\"name\\":\\"iPhone 17\\",\\"state\\":\\"$1\\",\\"type\\":\\"Simulator\\",\\"os_version\\":\\"iOS 27.0\\"},{\\"udid\\":\\"BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF\\",\\"name\\":\\"iPhone Broken\\",\\"state\\":\\"Shutdown\\",\\"type\\":\\"Simulator\\",\\"os_version\\":\\"iOS 27.0\\"}]"; }',
       'case "$1" in',
       '  --notify)',
       '    last=$(state); list "$last"',
       '    while :; do now=$(state); if [ "$now" != "$last" ]; then list "$now"; last=$now; fi; sleep 0.05; done ;;',
       '  --boot)',
-      '    if [ "$2" = "BAD-UDID" ]; then echo "2026-11-25 15:22:03.218+0200 BAD-UDID could not be resolved to any target" >&2; exit 1; fi',
+      '    if [ "$2" = "BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF" ]; then echo "2026-11-25 15:22:03.218+0200 BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF could not be resolved to any target" >&2; exit 1; fi',
       // The notifier says Booted at once; the boot itself goes on a while, as a real first boot does.
       '    touch "$M/booted"; sleep 1 ;;',
       '  --shutdown) rm -f "$M/booted" ;;',
@@ -134,8 +134,8 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
     await vi.waitFor(async () => expect((await list())?.startable).toEqual([
       { id: 'emulator:Broken_AVD', kind: 'emulator', name: 'Broken AVD', detail: 'Emulator' },
       { id: 'emulator:Pixel_9', kind: 'emulator', name: 'Pixel 9', detail: 'Emulator' },
-      { id: 'simulator:FAKE-UDID', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0' },
-      { id: 'simulator:BAD-UDID', kind: 'simulator', name: 'iPhone Broken', detail: 'Simulator · iOS 27.0' },
+      { id: 'simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0' },
+      { id: 'simulator:BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF', kind: 'simulator', name: 'iPhone Broken', detail: 'Simulator · iOS 27.0' },
     ]), { timeout: 5000 })
     expect((await list())?.noAvds).toBe(false)
   })
@@ -167,23 +167,23 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
   })
 
   it("boots a simulator in the private set: booting until idb's boot ends, then ready; Stop shuts it down", async () => {
-    expect(await start('simulator:FAKE-UDID')).toBeNull()
+    expect(await start('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toBeNull()
     await vi.waitFor(async () => expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }]), { timeout: 5000 })
-    expect((await list())?.startable.map((d) => d.id)).not.toContain('simulator:FAKE-UDID')
+    expect((await list())?.startable.map((d) => d.id)).not.toContain('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')
     await vi.waitFor(async () => expect((await list())?.devices).toEqual([SIM]), { timeout: 5000 })
-    expect(calls()).toContain(`idb --boot FAKE-UDID --device-set-path ${set} --log-level info`)
+    expect(calls()).toContain(`idb --boot DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF --device-set-path ${set} --log-level info`)
 
-    expect(await stop('simulator:FAKE-UDID')).toBeNull()
-    expect(calls()).toContain(`idb --shutdown FAKE-UDID --device-set-path ${set} --log-level info`)
+    expect(await stop('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toBeNull()
+    expect(calls()).toContain(`idb --shutdown DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF --device-set-path ${set} --log-level info`)
     await vi.waitFor(async () => expect((await list())?.devices).toEqual([]), { timeout: 5000 })
   })
 
   it("a start that fails says why, and starting it again clears that (Try again)", async () => {
     expect(await start('emulator:Broken_AVD')).toBeNull()
-    expect(await start('simulator:BAD-UDID')).toBeNull()
+    expect(await start('simulator:BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF')).toBeNull()
     await vi.waitFor(async () => expect((await list())?.startable).toEqual(expect.arrayContaining([
       { id: 'emulator:Broken_AVD', kind: 'emulator', name: 'Broken AVD', detail: 'Emulator', error: 'The emulator stopped (exit code 1).' },
-      { id: 'simulator:BAD-UDID', kind: 'simulator', name: 'iPhone Broken', detail: 'Simulator · iOS 27.0', error: 'BAD-UDID could not be resolved to any target' },
+      { id: 'simulator:BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF', kind: 'simulator', name: 'iPhone Broken', detail: 'Simulator · iOS 27.0', error: 'BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF could not be resolved to any target' },
     ])), { timeout: 5000 })
     expect(await start('emulator:Broken_AVD')).toBeNull()
     expect((await list())?.startable).toContainEqual({ id: 'emulator:Broken_AVD', kind: 'emulator', name: 'Broken AVD', detail: 'Emulator', starting: true })
@@ -191,14 +191,14 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
 
   it("refuses what isn't offered, and stops only a running emulator or simulator", async () => {
     for (const id of [42, 'emulator:Not_There', 'emulator:-help', 'android:8d2e61a']) expect(await start(id)).toEqual({ error: 'Deck no longer sees it.' })
-    for (const id of [42, 'android:8d2e61a', 'emulator:Pixel_9', 'simulator:FAKE-UDID']) {
+    for (const id of [42, 'android:8d2e61a', 'emulator:Pixel_9', 'simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF']) {
       expect(await stop(id)).toEqual({ error: 'Only a running emulator or simulator can be stopped.' })
     }
   })
 
   it('starts nothing while nothing watches', async () => {
     emit(IPC.devicesUnwatch)
-    expect(await start('simulator:FAKE-UDID')).toEqual({ error: "Deck isn't looking for devices." })
+    expect(await start('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toEqual({ error: "Deck isn't looking for devices." })
     emit(IPC.devicesWatch) // for afterAll's unwatch
   })
 })
