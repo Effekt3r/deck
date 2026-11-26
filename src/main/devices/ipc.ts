@@ -3,14 +3,15 @@ import { isAbsolute } from 'node:path'
 import { type BrowserWindow, ipcMain, powerMonitor, shell } from 'electron'
 import { IPC } from '@shared/channels'
 import { quoteImagePath } from '@shared/quote'
-import type { DeviceList, DeviceProject, InsertResult, Platform } from '@shared/types'
+import type { DeviceActionResult, DeviceList, DeviceProject, InsertResult, Platform } from '@shared/types'
 import { adbCandidates, findAdb, runAdb, sdkRoots } from './android/adb'
 import { IDENTITY_SCRIPT, parseIdentity } from './android/devices'
-import { findEmulator, listAvds, startableEmulators } from './android/emulators'
+import { findEmulator, killEmulator, listAvds, startableEmulators, startAvd } from './android/emulators'
 import { adbIo, startScrcpy } from './android/scrcpy'
 import { scrcpyServer } from './android/server'
 import { androidSession } from './android/session'
 import { AndroidTracker } from './android/tracker'
+import { bootSimulator, shutdownSimulator } from './ios/boot'
 import { iphoneIo, IphoneTracker, screenIdOf, startIphone } from './ios/iphone'
 import { startSimulator } from './ios/simulator'
 import { removeSocketDir, simulatorIo } from './ios/simulator-io'
@@ -105,6 +106,11 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   let avdLook: object | null = null
   /** Emulators and simulators started from the panel, until they're listed. */
   const starts = new Starts(() => refresh())
+  /** Simulators Deck is booting. The notifier says "Booted" as soon as a boot begins (19 s before it
+   *  had finished, on a first boot), so each is listed as booting until idb's boot command ends. */
+  const booting = new Set<string>()
+  /** Ends the boots and shutdowns under way when Deck quits. */
+  const quitting = new AbortController()
 
   const send = (channel: string, ...args: unknown[]) => {
     if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) win.webContents.send(channel, ...args)
@@ -143,7 +149,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
    *  the AVDs and shut-down simulators not running, and the starts not listed yet. */
   const update = () => {
     if (disposed || watchers === 0 || (list === null && android.pending && ios.pending && iphones.pending)) return
-    const found = combineLists(android, ios, iphones)
+    const simulatorDevices = ios.devices.map((d) => (booting.has(d.id) ? { ...d, state: 'booting' as const } : d))
+    const found = combineLists(android, { ...ios, devices: simulatorDevices }, iphones)
     starts.listed(found.devices)
     const offered = [...startableEmulators(avds ?? []), ...(simulators?.shutDown() ?? [])]
     publish({ ...found, startable: starts.merge(offered, found.devices), noAvds: avds !== null && avds.length === 0 })
@@ -375,6 +382,58 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   ipcMain.on(IPC.devicesCameraSettings, () => {
     if (opts.platform === 'darwin') void shell.openExternal(CAMERA_SETTINGS)
   })
+  // Only what the list offers can be started, and only a listed emulator or simulator stopped: the
+  // ids come from adb's, the emulator's and idb's own lists, checked where they're read.
+  ipcMain.handle(IPC.devicesStart, (_e, id: unknown): DeviceActionResult => {
+    if (!list) return { error: "Deck isn't looking for devices." }
+    // Started some other way meanwhile: the pick shows it.
+    if (list.devices.some((d) => d.id === id)) return null
+    const device = list.startable.find((d) => d.id === id)
+    if (!device) return { error: 'Deck no longer sees it.' }
+    const fail = starts.begin(device)
+    if (!fail) return null // already starting
+    refresh()
+    const failWith = (err: unknown) => fail(err instanceof Error ? err.message : String(err))
+    if (device.kind === 'emulator') {
+      if (!emulator) fail("Deck can't find Android's emulator.")
+      else startAvd(emulator, device.id.slice('emulator:'.length), fail).then(() => void readAvds(generation), failWith)
+      return null
+    }
+    const udid = udidOf(device.id)
+    if (!idb || !udid) {
+      fail("Deck can't find idb-companion.")
+      return null
+    }
+    booting.add(device.id)
+    bootSimulator(idb.companion, udid, { set: simulatorSet, signal: quitting.signal })
+      .catch((err: unknown) => {
+        if (!quitting.signal.aborted) failWith(err)
+      })
+      .finally(() => {
+        booting.delete(device.id)
+        refresh()
+      })
+    return null
+  })
+  ipcMain.handle(IPC.devicesStop, async (_e, id: unknown): Promise<DeviceActionResult> => {
+    const device = typeof id === 'string' ? list?.devices.find((d) => d.id === id) : undefined
+    if (!device || (device.kind !== 'emulator' && device.kind !== 'simulator')) return { error: 'Only a running emulator or simulator can be stopped.' }
+    try {
+      if (device.kind === 'emulator') {
+        const serial = tracker?.serialFor(device.id)
+        if (!adb || !serial) return { error: "adb doesn't list it." }
+        await killEmulator(adb, serial)
+        void readAvds(generation)
+        return null
+      }
+      const udid = udidOf(device.id)
+      if (!idb || !udid) return { error: "Deck can't find idb-companion." }
+      await shutdownSimulator(idb.companion, udid, { set: simulatorSet, signal: quitting.signal })
+      return null
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) }
+    }
+  })
   ipcMain.handle(IPC.devicesScreenshot, async (_e, png: unknown): Promise<InsertResult> => {
     if (!(png instanceof Uint8Array) || png.length === 0 || png.length > MAX_SCREENSHOT_BYTES || !isPng(png)) {
       return { error: 'There was no screenshot to add.' }
@@ -430,6 +489,7 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     },
     dispose() {
       disposed = true
+      quitting.abort()
       starts.clear()
       streams.stopAll()
       generation++

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/channels'
-import type { DeviceList } from '@shared/types'
+import type { DeviceActionResult, DeviceInfo, DeviceList } from '@shared/types'
 import type { BrowserWindow } from 'electron'
 import { type DeviceIpc, registerDeviceIpc } from './ipc'
 
@@ -24,6 +24,11 @@ vi.mock('electron', () => ({
 const call = <T>(channel: string, ...args: unknown[]) => Promise.resolve(ipc.handlers.get(channel)!({}, ...args)) as Promise<T>
 const emit = (channel: string, ...args: unknown[]) => ipc.listeners.get(channel)!({}, ...args)
 const list = () => call<DeviceList | null>(IPC.devicesList)
+const start = (id: unknown) => call<DeviceActionResult>(IPC.devicesStart, id)
+const stop = (id: unknown) => call<DeviceActionResult>(IPC.devicesStop, id)
+
+const PIXEL: DeviceInfo = { id: 'emulator:Pixel_9', kind: 'emulator', name: 'Pixel 9', detail: 'Emulator · Android 15', state: 'ready' }
+const SIM: DeviceInfo = { id: 'simulator:FAKE-UDID', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' }
 
 // Shell scripts stand in for the SDK's adb and emulator and for idb_companion, never the real ones
 // (a real adb would take over the adb server; real simulators are Franco's). They share a folder of
@@ -144,5 +149,56 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
     win.emit('focus')
     await vi.waitFor(async () => expect((await list())?.startable.filter((d) => d.kind === 'emulator').map((d) => d.id)).toEqual(['emulator:Broken_AVD', 'emulator:Pixel_9']), { timeout: 5000 })
     expect((await list())?.noAvds).toBe(false)
+  })
+
+  it('starts an emulator: starting until adb lists it, then an ordinary device; Stop closes it', async () => {
+    expect(await start('emulator:Pixel_9')).toBeNull()
+    expect((await list())?.startable).toContainEqual({ id: 'emulator:Pixel_9', kind: 'emulator', name: 'Pixel 9', detail: 'Emulator', starting: true })
+    expect(await start('emulator:Pixel_9')).toBeNull() // a second click changes nothing
+    await vi.waitFor(async () => expect((await list())?.devices).toEqual([PIXEL]), { timeout: 5000 })
+    expect((await list())?.startable.map((d) => d.id)).not.toContain('emulator:Pixel_9')
+    expect(calls().filter((c) => c === 'emulator -avd Pixel_9')).toHaveLength(1)
+    expect(await start('emulator:Pixel_9')).toBeNull() // running: nothing to do
+
+    expect(await stop('emulator:Pixel_9')).toBeNull()
+    expect(calls()).toContain('adb -s emulator-5554 emu kill')
+    await vi.waitFor(async () => expect((await list())?.devices).toEqual([]), { timeout: 5000 })
+    expect((await list())?.startable.map((d) => d.id)).toContain('emulator:Pixel_9')
+  })
+
+  it("boots a simulator in the private set: booting until idb's boot ends, then ready; Stop shuts it down", async () => {
+    expect(await start('simulator:FAKE-UDID')).toBeNull()
+    await vi.waitFor(async () => expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }]), { timeout: 5000 })
+    expect((await list())?.startable.map((d) => d.id)).not.toContain('simulator:FAKE-UDID')
+    await vi.waitFor(async () => expect((await list())?.devices).toEqual([SIM]), { timeout: 5000 })
+    expect(calls()).toContain(`idb --boot FAKE-UDID --device-set-path ${set} --log-level info`)
+
+    expect(await stop('simulator:FAKE-UDID')).toBeNull()
+    expect(calls()).toContain(`idb --shutdown FAKE-UDID --device-set-path ${set} --log-level info`)
+    await vi.waitFor(async () => expect((await list())?.devices).toEqual([]), { timeout: 5000 })
+  })
+
+  it("a start that fails says why, and starting it again clears that (Try again)", async () => {
+    expect(await start('emulator:Broken_AVD')).toBeNull()
+    expect(await start('simulator:BAD-UDID')).toBeNull()
+    await vi.waitFor(async () => expect((await list())?.startable).toEqual(expect.arrayContaining([
+      { id: 'emulator:Broken_AVD', kind: 'emulator', name: 'Broken AVD', detail: 'Emulator', error: 'The emulator stopped (exit code 1).' },
+      { id: 'simulator:BAD-UDID', kind: 'simulator', name: 'iPhone Broken', detail: 'Simulator · iOS 27.0', error: 'BAD-UDID could not be resolved to any target' },
+    ])), { timeout: 5000 })
+    expect(await start('emulator:Broken_AVD')).toBeNull()
+    expect((await list())?.startable).toContainEqual({ id: 'emulator:Broken_AVD', kind: 'emulator', name: 'Broken AVD', detail: 'Emulator', starting: true })
+  })
+
+  it("refuses what isn't offered, and stops only a running emulator or simulator", async () => {
+    for (const id of [42, 'emulator:Not_There', 'emulator:-help', 'android:8d2e61a']) expect(await start(id)).toEqual({ error: 'Deck no longer sees it.' })
+    for (const id of [42, 'android:8d2e61a', 'emulator:Pixel_9', 'simulator:FAKE-UDID']) {
+      expect(await stop(id)).toEqual({ error: 'Only a running emulator or simulator can be stopped.' })
+    }
+  })
+
+  it('starts nothing while nothing watches', async () => {
+    emit(IPC.devicesUnwatch)
+    expect(await start('simulator:FAKE-UDID')).toEqual({ error: "Deck isn't looking for devices." })
+    emit(IPC.devicesWatch) // for afterAll's unwatch
   })
 })

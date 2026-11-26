@@ -370,6 +370,9 @@ export interface StartableDevice {
   error?: string
 }
 
+/** devices:start's and devices:stop's answer: null, or why not. */
+export type DeviceActionResult = { error: string } | null
+
 /** What a device runs: Android phones and emulators, or iOS simulators and iPhones. */
 export type DevicePlatform = 'android' | 'ios'
 
@@ -559,6 +562,12 @@ export interface DeckApi {
     /** Opens System Settings at Privacy & Security → Camera (macOS), where Deck can be allowed the
      *  camera (an iPhone's screen is one to macOS). */
     openCameraSettings(): void
+    /** Starts emulator or simulator `id`, one of the list's `startable`: null once it's starting (the
+     *  list then says how it goes; one already running answers null too), or why it can't be. */
+    start(id: string): Promise<DeviceActionResult>
+    /** Stops running emulator or simulator `id`: null once it's stopping (an emulator once it was
+     *  told to, a simulator once it has shut down), or why not. */
+    stop(id: string): Promise<DeviceActionResult>
   }
   app: {
     info(): Promise<AppInfo>

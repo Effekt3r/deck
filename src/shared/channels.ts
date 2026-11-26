@@ -52,6 +52,8 @@ export const IPC = {
   devicesInput: 'devices:input',
   devicesScreenshot: 'devices:screenshot',
   devicesCameraSettings: 'devices:camera-settings',
+  devicesStart: 'devices:start',
+  devicesStop: 'devices:stop',
   appInfo: 'app:info',
   appOpenExternal: 'app:open-external',
   appCopyText: 'app:copy-text',
