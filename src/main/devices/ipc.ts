@@ -461,17 +461,18 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     }
     bootSimulator(idb.companion, udid, { set: simulatorSet, signal: quitting.signal }).then(bootOver, (err: unknown) => {
       if (quitting.signal.aborted) return bootOver()
-      failWith(err)
       // Booting a while longer: a failing `--boot` may end before the notifier says the simulator is
       // going down (the notifier was seen first only in boots that worked). Ready at once, it would end
       // its start, error and all, and could be streamed as it shuts down; still booting, it keeps both
       // until the notifier drops it, and one that's up after all (booted some other way meanwhile)
-      // turns ready, ending its start, once the grace is over.
+      // turns ready, ending its start, once the grace is over. The timer is set before the failure is
+      // published, so the flag is cleared even if publishing throws.
       const grace = setTimeout(() => {
         graces.delete(grace)
         bootOver()
       }, failedBootGraceMs)
       graces.add(grace)
+      failWith(err)
     })
     return null
   })

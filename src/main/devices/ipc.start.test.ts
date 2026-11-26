@@ -41,6 +41,21 @@ vi.mock('./ios/boot', async (importOriginal) => {
   }
 })
 
+/** Emulator exits Deck has heard: startAvd itself runs (against the emulator stand-ins below), and
+ *  this counts each exit once ipc.ts's own `ended` for it has run. */
+const emulatorExits = vi.hoisted(() => ({ heard: 0 }))
+vi.mock('./android/emulators', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./android/emulators')>()
+  return {
+    ...real,
+    startAvd: (emulator: string, name: string, ended?: (how: string, info: { clean: boolean }) => void, logDir?: string | null): Promise<void> =>
+      real.startAvd(emulator, name, (how, info) => {
+        ended?.(how, info)
+        emulatorExits.heard++
+      }, logDir),
+  }
+})
+
 const call = <T>(channel: string, ...args: unknown[]) => Promise.resolve(ipc.handlers.get(channel)!({}, ...args)) as Promise<T>
 const emit = (channel: string, ...args: unknown[]) => ipc.listeners.get(channel)!({}, ...args)
 const list = () => call<DeviceList | null>(IPC.devicesList)
@@ -476,7 +491,7 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: an emulator cl
       'touch "$M/started"',
       // A test asks this one to close on its own (code 0), rather than being killed through adb.
       'if [ -f "$M/exit-clean-after" ]; then',
-      '  while [ ! -f "$M/exit-clean-go" ]; do sleep 0.05; done',
+      '  while [ ! -f "$M/exit-clean-go" ] && [ ! -f "$M/exit-clean-go-$$" ]; do sleep 0.05; done',
       '  touch "$M/emulator-gone"',
       '  exit 0',
       'fi',
@@ -502,7 +517,8 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: an emulator cl
       'fi',
       'if [ "$3" = "emu" ]; then',
       '  touch "$M/killed"',
-      '  kill "$(cat "$M/emulator.pid")"',
+      // kill-noop: the emulator only closes later, by itself (an older one still saving its snapshot).
+      '  if [ ! -f "$M/kill-noop" ]; then kill "$(cat "$M/emulator.pid")"; fi',
       // A held "emu kill" lets a test dispose (or unwatch) while a Stop is still in flight.
       '  if [ -f "$M/kill-hold" ]; then while [ -f "$M/kill-hold" ]; do sleep 0.05; done; fi',
       "  echo 'OK: killing emulator, bye bye'",
@@ -565,6 +581,43 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: an emulator cl
     }
   })
 
+  it("an older emulator's clean exit leaves a newer start of the same AVD alone", async () => {
+    const pid = () => readFileSync(join(marks, 'emulator.pid'), 'utf8').trim()
+    const listedBooting = async () =>
+      expect((await list())?.devices).toEqual([{ id: 'emulator:Slow_Boot', kind: 'emulator', name: 'Slow Boot', detail: 'Emulator · Android 15', state: 'booting' }])
+    writeFileSync(join(marks, 'exit-clean-after'), '')
+    let newer = ''
+    try {
+      expect(await start('emulator:Slow_Boot')).toBeNull()
+      await vi.waitFor(listedBooting, { timeout: 5000 })
+      const older = pid()
+      // Stopped, but still running: it closes on its own later, cleanly.
+      writeFileSync(join(marks, 'kill-noop'), '')
+      expect(await stop('emulator:Slow_Boot')).toBeNull()
+      await vi.waitFor(async () => expect((await list())?.devices).toEqual([]), { timeout: 5000 })
+      expect(await start('emulator:Slow_Boot')).toBeNull()
+      await vi.waitFor(() => expect(pid()).not.toBe(older), { timeout: 5000 })
+      newer = pid()
+
+      const heard = emulatorExits.heard
+      writeFileSync(join(marks, `exit-clean-go-${older}`), '')
+      await vi.waitFor(() => expect(emulatorExits.heard).toBe(heard + 1), { timeout: 5000 })
+      // The newer start is still under way: the older one's clean exit forgot only its own start.
+      await vi.waitFor(async () => expect((await list())?.devices).toEqual([]), { timeout: 5000 })
+      expect((await list())?.startable).toContainEqual({ id: 'emulator:Slow_Boot', kind: 'emulator', name: 'Slow Boot', detail: 'Emulator', starting: true })
+    } finally {
+      rmSync(join(marks, 'kill-noop'), { force: true })
+      rmSync(join(marks, 'exit-clean-after'), { force: true })
+      // The newer one closes cleanly too, which forgets its own start: the next test starts afresh.
+      if (newer) {
+        const heard = emulatorExits.heard
+        writeFileSync(join(marks, `exit-clean-go-${newer}`), '')
+        await vi.waitFor(() => expect(emulatorExits.heard).toBe(heard + 1), { timeout: 5000 })
+      }
+      for (const name of readdirSync(marks)) if (name.startsWith('exit-clean-go-')) rmSync(join(marks, name), { force: true })
+    }
+  })
+
   it("a stop's AVD re-read does nothing once Deck has quit meanwhile", async () => {
     rmSync(join(marks, 'killed'), { force: true })
     rmSync(join(marks, 'emulator-gone'), { force: true })
@@ -617,7 +670,7 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: a failed boot 
       env: { PATH: '', ANDROID_HOME: join(root, 'sdk'), DECK_IDB_COMPANION: join(root, 'libexec', 'idb_companion'), DECK_SIMULATOR_SET: join(root, 'set') },
       socketDir: join(root, 's'),
       iphoneHelper: null,
-      failedBootGraceMs: 300,
+      failedBootGraceMs: 1500,
       saveImage: async () => '',
     })
     devices.attach(win)

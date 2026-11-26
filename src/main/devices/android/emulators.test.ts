@@ -126,14 +126,15 @@ describe.skipIf(process.platform === 'win32')('running the emulator', () => {
     await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).', { clean: false }), { timeout: 3000 })
   })
 
-  it("a code-0 exit with an ERROR line in its log (the AVD broke right as it closed) is not 'clean'", async () => {
-    const emulator = script('start-log-weird', 'emulator', [
-      "echo 'ERROR        | A problem, even though the process itself exited 0.'",
+  it('a code-0 exit is clean even with an ERROR line in its log: a normal shutdown writes one', async () => {
+    const emulator = script('start-log-shutdown', 'emulator', [
+      "echo 'INFO         | removeAll'",
+      "echo 'ERROR        | Failed to restore previous context: 12297'",
       'exit 0',
     ].join('\n'))
     const ended = vi.fn()
-    await startAvd(emulator, 'Pixel_9', ended, join(root, 'logs-weird'))
-    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('A problem, even though the process itself exited 0.', { clean: false }), { timeout: 3000 })
+    await startAvd(emulator, 'Pixel_9', ended, join(root, 'logs-shutdown'))
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('Failed to restore previous context: 12297', { clean: true }), { timeout: 3000 })
   })
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(

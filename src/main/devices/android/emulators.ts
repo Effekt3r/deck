@@ -117,20 +117,22 @@ function removeOldLogs(dir: string, name: string): void {
   }
 }
 
-/** Starts AVD `name` in the emulator's own window, as Android Studio does: detached, so it keeps
- *  running when Deck quits. Resolves once it runs; rejects when it can't be started (ENOENT, EACCES).
- *  `ended` hears if it ends while Deck runs, how, and whether that was clean (code 0, no signal, no
- *  ERROR/PANIC/FATAL log line): a start that dies early (a broken AVD, a missing system image) needn't
- *  wait out its 3 minutes, and a clean exit after the device was up is the user closing its window, not
- *  a failure. With `logDir`, the emulator's stdout and stderr go to a new file of this start's own,
- *  `<logDir>/<name>-<ms>.log`, rather than a pipe, since a file, unlike a pipe, can't ever break the
- *  emulator once Deck quits; `ended`'s reason then comes from that log's first ERROR/PANIC/FATAL line,
- *  read back once it exits. Its own file, not one per AVD: an older emulator of the same AVD can still
- *  be running (Stop, then Start while it saves its snapshot; Try again while a start past its deadline
- *  still boots), and in a shared file its lines would land among this start's, where the reason read
- *  back could be its. Each start removes the AVD's earlier logs (removeOldLogs). Without `logDir`, or
- *  when the folder or the file can't be made, the start still runs, with nothing read from it, as
- *  before. */
+/** Starts AVD `name` in the emulator's own window, as Android Studio does: detached, so it keeps running
+ *  when Deck quits. Resolves once it runs; rejects when it can't be started (ENOENT, EACCES). `ended`
+ *  hears if it ends while Deck runs, how, and whether that was clean (code 0, no signal): a start that
+ *  dies early (a broken AVD, a missing system image) needn't wait out its 3 minutes, and a clean exit is
+ *  the user closing its window, not a failure. Its log doesn't decide that: a normal shutdown
+ *  (`emu kill`; closing its window should be the same) exits 0 but still writes "ERROR | Failed to
+ *  restore previous context: 12297", while its failures exit 1 (an unknown AVD, a second emulator of a
+ *  running AVD; macOS, emulator 37.2, 2026-11-26). With `logDir`, the emulator's stdout and stderr go to
+ *  a new file of this start's own, `<logDir>/<name>-<ms>.log`, rather than a pipe, since a file, unlike
+ *  a pipe, can't ever break the emulator once Deck quits; `ended`'s reason then comes from that log's
+ *  first ERROR/PANIC/FATAL line, read back once it exits. Its own file, not one per AVD: an older
+ *  emulator of the same AVD can still be running (Stop, then Start while it saves its snapshot; Try
+ *  again while a start past its deadline still boots), and in a shared file its lines would land among
+ *  this start's, where the reason read back could be its. Each start removes the AVD's earlier logs
+ *  (removeOldLogs). Without `logDir`, or when the folder or the file can't be made, the start still
+ *  runs, with nothing read from it, as before. */
 export function startAvd(
   emulator: string,
   name: string,
@@ -176,7 +178,7 @@ export function startAvd(
     })
     child.once('exit', (code, signal) => {
       const failure = (logFile && logFailure(logFile)) || null
-      ended(failure || endedAs(code, signal), { clean: failure === null && code === 0 && signal === null })
+      ended(failure || endedAs(code, signal), { clean: code === 0 && signal === null })
     })
   })
 }
