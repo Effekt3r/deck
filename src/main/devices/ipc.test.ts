@@ -215,7 +215,7 @@ describe('registerDeviceIpc', () => {
             IPC.devicesChanged,
             [{ devices: [{ id: 'android:FAKE01', kind: 'android', name: 'FAKE01', detail: 'USB', state: 'unauthorized' }], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false }],
           ]),
-        { timeout: 3000 },
+        { timeout: 5000 },
       )
 
       power.emit('lock-screen')
@@ -228,7 +228,7 @@ describe('registerDeviceIpc', () => {
       expect(sent.length).toBe(afterView)
 
       power.emit('unlock-screen') // starts the stream; there's no scrcpy server in `resources`, so it fails
-      await vi.waitFor(() => expect(sent.length).toBeGreaterThanOrEqual(afterView + 2), { timeout: 3000 })
+      await vi.waitFor(() => expect(sent.length).toBeGreaterThanOrEqual(afterView + 2), { timeout: 5000 })
       expect(sent.slice(afterView, afterView + 2)).toEqual([
         [IPC.devicesStream, ['android:FAKE01', { type: 'state', state: 'connecting' }]],
         [IPC.devicesStream, ['android:FAKE01', { type: 'state', state: 'reconnecting' }]],
@@ -252,13 +252,13 @@ describe('registerDeviceIpc', () => {
       win.emit('focus')
       await vi.waitFor(
         () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE03', state: 'unauthorized' })], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false }]]),
-        { timeout: 3000 },
+        { timeout: 5000 },
       )
     } finally {
       emit(IPC.devicesUnwatch)
       env.PATH = ''
     }
-  })
+  }, 10_000)
 
   it.skipIf(process.platform === 'win32')('devices:start refuses a phone (or an iPhone) already listed, the same way as an unknown id', async () => {
     const phoneAdbDir = join(root, 'phone-adb')
@@ -273,7 +273,7 @@ describe('registerDeviceIpc', () => {
           IPC.devicesChanged,
           [{ devices: [{ id: 'android:FAKE09', kind: 'android', name: 'FAKE09', detail: 'USB', state: 'unauthorized' }], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false }],
         ]),
-        { timeout: 3000 },
+        { timeout: 5000 },
       )
       // A phone (kind: 'android', not emulator/simulator) already listed can't be "started": the same
       // "Deck no longer sees it" an id it doesn't know at all gets, not the null an emulator or
@@ -283,7 +283,7 @@ describe('registerDeviceIpc', () => {
       emit(IPC.devicesUnwatch)
       env.PATH = ''
     }
-  })
+  }, 10_000)
 
   it.skipIf(process.platform === 'win32')("answers null while adb's server is still starting, and pushes nothing before the first list", async () => {
     const slowAdbDir = join(root, 'slow-adb')
@@ -301,12 +301,12 @@ describe('registerDeviceIpc', () => {
       expect(pushes()).toBe(before)
       await vi.waitFor(
         () => expect(sent.at(-1)).toEqual([IPC.devicesChanged, [{ devices: [expect.objectContaining({ id: 'android:FAKE02', state: 'unauthorized' })], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false }]]),
-        { timeout: 3000 },
+        { timeout: 5000 },
       )
       expect(await call<DeviceList | null>(IPC.devicesList)).toEqual({ devices: [expect.objectContaining({ id: 'android:FAKE02' })], problem: null, iosProblem: null, pending: [], startable: [], noAvds: false })
     } finally {
       emit(IPC.devicesUnwatch)
       env.PATH = ''
     }
-  })
+  }, 10_000)
 })

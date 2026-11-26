@@ -1,5 +1,5 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
-import { closeSync, constants, mkdirSync, openSync, readSync, statSync } from 'node:fs'
+import { closeSync, constants, mkdirSync, openSync, readdirSync, readSync, statSync, unlinkSync } from 'node:fs'
 import { access } from 'node:fs/promises'
 import { join, posix, win32 } from 'node:path'
 import type { StartableDevice } from '@shared/types'
@@ -95,16 +95,42 @@ function logFailure(file: string): string | null {
   }
 }
 
+/** Removes AVD `name`'s earlier logs from `dir`: exactly `<name>-<digits>.log`, so AVD `Pixel` never
+ *  takes `Pixel-2`'s. As best it can: Windows may refuse to remove a log an emulator still runs with,
+ *  and it stays until a later start's. */
+function removeOldLogs(dir: string, name: string): void {
+  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const own = new RegExp(`^${escaped}-\\d+\\.log$`)
+  let files: string[]
+  try {
+    files = readdirSync(dir)
+  } catch {
+    return
+  }
+  for (const file of files) {
+    if (!own.test(file)) continue
+    try {
+      unlinkSync(join(dir, file))
+    } catch {
+      // still in use, or already gone
+    }
+  }
+}
+
 /** Starts AVD `name` in the emulator's own window, as Android Studio does: detached, so it keeps
  *  running when Deck quits. Resolves once it runs; rejects when it can't be started (ENOENT, EACCES).
  *  `ended` hears if it ends while Deck runs, how, and whether that was clean (code 0, no signal, no
  *  ERROR/PANIC/FATAL log line): a start that dies early (a broken AVD, a missing system image) needn't
  *  wait out its 3 minutes, and a clean exit after the device was up is the user closing its window, not
- *  a failure. With `logDir`, the emulator's stdout and stderr go to `<logDir>/<name>.log` (overwritten
- *  each start) rather than a pipe, since a file, unlike a pipe, can't ever break the emulator once Deck
- *  quits; `ended`'s reason then comes from the log's own first ERROR/PANIC/FATAL line, read back once
- *  it exits. Without `logDir`, or when it can't be made or the file can't be opened, the start still
- *  runs, with nothing read from it, as before. */
+ *  a failure. With `logDir`, the emulator's stdout and stderr go to a new file of this start's own,
+ *  `<logDir>/<name>-<ms>.log`, rather than a pipe, since a file, unlike a pipe, can't ever break the
+ *  emulator once Deck quits; `ended`'s reason then comes from that log's first ERROR/PANIC/FATAL line,
+ *  read back once it exits. Its own file, not one per AVD: an older emulator of the same AVD can still
+ *  be running (Stop, then Start while it saves its snapshot; Try again while a start past its deadline
+ *  still boots), and in a shared file its lines would land among this start's, where the reason read
+ *  back could be its. Each start removes the AVD's earlier logs (removeOldLogs). Without `logDir`, or
+ *  when the folder or the file can't be made, the start still runs, with nothing read from it, as
+ *  before. */
 export function startAvd(
   emulator: string,
   name: string,
@@ -115,14 +141,16 @@ export function startAvd(
   let logFile: string | null = null
   let fd: number | null = null
   if (logDir) {
-    logFile = join(logDir, `${name}.log`)
+    // Milliseconds, so names don't repeat across Deck's runs either: the folder stays in temp.
+    logFile = join(logDir, `${name}-${Date.now()}.log`)
     try {
       mkdirSync(logDir, { recursive: true })
-      fd = openSync(logFile, 'w')
+      removeOldLogs(logDir, name)
+      // 'wx': a new file, never one another emulator still writes to.
+      fd = openSync(logFile, 'wx')
     } catch {
       // The start must still work, with nothing read from it (stdio falls back to 'ignore' below):
-      // without a file of its own, reading back the one from an earlier start would report its reason
-      // instead of this one's.
+      // without a file of its own, whatever that path holds isn't this start's to report.
       logFile = null
       fd = null
     }

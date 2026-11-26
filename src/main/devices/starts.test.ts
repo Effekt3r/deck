@@ -44,16 +44,16 @@ describe('Starts', () => {
   it("a failed command keeps its reason until the next start, which clears it (Try again)", () => {
     const changed = vi.fn()
     const starts = new Starts(changed)
-    const fail = starts.begin(pixel)!
-    fail('The emulator stopped (exit code 1).')
+    const first = starts.begin(pixel)!
+    first.fail('The emulator stopped (exit code 1).')
     expect(changed).toHaveBeenCalledTimes(1)
     expect(starts.merge([pixel], [])).toEqual([{ ...pixel, error: 'The emulator stopped (exit code 1).' }])
-    fail('Said twice.') // only once
+    first.fail('Said twice.') // only once
     expect(changed).toHaveBeenCalledTimes(1)
     const again = starts.begin(pixel)
     expect(again).not.toBeNull()
     expect(starts.merge([pixel], [])).toEqual([{ ...pixel, starting: true }])
-    fail('From the first start.') // the first start's failure can't touch the second
+    first.fail('From the first start.') // the first start's failure can't touch the second
     expect(starts.merge([pixel], [])).toEqual([{ ...pixel, starting: true }])
   })
 
@@ -86,12 +86,12 @@ describe('Starts', () => {
   it('a listed device ends its start, failed or not, and its deadline with it', () => {
     const changed = vi.fn()
     const starts = new Starts(changed)
-    const fail = starts.begin(pixel)!
+    const start = starts.begin(pixel)!
     starts.listed([running(pixel)])
     vi.advanceTimersByTime(START_DEADLINE_MS)
-    fail('Too late.')
+    start.fail('Too late.')
     expect(changed).not.toHaveBeenCalled()
-    starts.begin(medium)!('Broken AVD.')
+    starts.begin(medium)!.fail('Broken AVD.')
     starts.listed([running(medium)]) // it came up anyway
     expect(starts.merge([], [running(medium)])).toEqual([])
   })
@@ -111,9 +111,9 @@ describe('Starts', () => {
     // device is merely visible (booting): merge() alone hides it, the same as a running device would.
     const changed = vi.fn()
     const starts = new Starts(changed)
-    const fail = starts.begin(iphone)!
+    const start = starts.begin(iphone)!
     expect(starts.merge([], [running(iphone)])).toEqual([])
-    fail('boom')
+    start.fail('boom')
     expect(changed).toHaveBeenCalledTimes(1)
     // Once it's gone (never passed to listed()), the error stands.
     expect(starts.merge([], [])).toEqual([{ ...iphone, error: 'boom' }])
@@ -122,11 +122,11 @@ describe('Starts', () => {
   it('forget(id) clears a start outright: no error, even if its command fails after', () => {
     const changed = vi.fn()
     const starts = new Starts(changed)
-    const fail = starts.begin(pixel)!
+    const start = starts.begin(pixel)!
     starts.forget(pixel.id)
     expect(changed).toHaveBeenCalledTimes(1)
     expect(starts.merge([pixel], [])).toEqual([pixel]) // plain again: not starting, no error
-    fail('too late')
+    start.fail('too late')
     expect(changed).toHaveBeenCalledTimes(1) // the forgotten start's late failure changes nothing
     expect(starts.merge([pixel], [])).toEqual([pixel])
   })
@@ -150,5 +150,32 @@ describe('Starts', () => {
     expect(changed).toHaveBeenCalledTimes(1) // forget() itself
     vi.advanceTimersByTime(START_DEADLINE_MS)
     expect(changed).toHaveBeenCalledTimes(1) // the deadline never fires for it
+  })
+
+  it("a start's own forget() clears it, deadline included, as forget(id) does", () => {
+    const changed = vi.fn()
+    const starts = new Starts(changed)
+    const start = starts.begin(pixel)!
+    start.forget()
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(starts.merge([pixel], [])).toEqual([pixel])
+    vi.advanceTimersByTime(START_DEADLINE_MS)
+    start.fail('too late')
+    expect(changed).toHaveBeenCalledTimes(1)
+  })
+
+  it("an old start's forget() leaves a newer start of the same device alone", () => {
+    const changed = vi.fn()
+    const starts = new Starts(changed)
+    const first = starts.begin(pixel)!
+    starts.forget(pixel.id) // Stop, while the first emulator still closes
+    const second = starts.begin(pixel)! // Start again
+    first.forget() // the first emulator closes cleanly, after the second start began
+    expect(changed).toHaveBeenCalledTimes(1) // Stop's forget only
+    expect(starts.merge([pixel], [])).toEqual([{ ...pixel, starting: true }])
+    second.fail('The emulator stopped (exit code 1).') // the second start still hears its own outcome
+    expect(starts.merge([pixel], [])).toEqual([{ ...pixel, error: 'The emulator stopped (exit code 1).' }])
+    first.forget() // nor does it clear the second start's error
+    expect(starts.merge([pixel], [])).toEqual([{ ...pixel, error: 'The emulator stopped (exit code 1).' }])
   })
 })

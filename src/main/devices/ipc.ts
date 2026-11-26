@@ -37,10 +37,14 @@ export interface DeviceIpcOptions {
   /** Deck's iPhone helper (macOS), or null without one: a build on a Mac without Xcode's command line
    *  tools has none, and no iPhones. */
   iphoneHelper: string | null
-  /** Where a started emulator's stdout and stderr go, `<name>.log` each, overwritten every start, so a
-   *  failed start can say why: see startAvd. Optional; without one (or when it can't be made or the
-   *  file can't be opened) a start runs exactly as it did before, with nothing read from it. */
+  /** Where a started emulator's stdout and stderr go, a file of each start's own (`<name>-<ms>.log`,
+   *  the AVD's earlier ones removed), so a failed start can say why: see startAvd. Optional; without
+   *  one (or when it can't be made or the file can't be opened) a start runs exactly as it did before,
+   *  with nothing read from it. */
   emulatorLogDir?: string | null
+  /** How long a simulator whose boot command failed still counts as booting, unless the notifier
+   *  drops it first: FAILED_BOOT_GRACE_MS (10 s) by default; tests shorten it. */
+  failedBootGraceMs?: number
   /** Saves a PNG where Claude can read it (the clipboard card's folder); resolves with its path. */
   saveImage(png: Uint8Array): Promise<string>
 }
@@ -66,6 +70,9 @@ const CAMERA_SETTINGS = 'x-apple.systempreferences:com.apple.preference.security
  *  devices…" for LineTracker's 20 s first-list deadline, hiding even a simulator listed and picked,
  *  at every start of watching. */
 const IPHONE_FIRST_LIST_MS = 6000
+/** A simulator whose `--boot` failed is still listed as booting this long, unless the notifier says
+ *  it's gone first: see devices:start. */
+const FAILED_BOOT_GRACE_MS = 10_000
 
 /** The device panel's main side: Android devices adb sees and, on macOS, booted simulators
  *  idb-companion sees and iPhones on a cable (each looked for only while a tab needs them), each
@@ -112,11 +119,14 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
   const starts = new Starts(() => refresh())
   /** Simulators Deck is booting, each with its own boot's token. The notifier says "Booted" as soon as
    *  a boot begins (19 s before it had finished, on a first boot), so each is listed as booting until
-   *  idb's boot command ends. A token (not just the id) tells two overlapping boots of the same
-   *  simulator apart (Start, Stop, Start again while the first `--boot` still runs): only the boot
-   *  whose own token is still current may clear the flag, so an older boot ending can't mark a newer
-   *  one's simulator ready while it's still starting. */
+   *  idb's boot command ends (one that fails, a while longer: see devices:start). A token (not just
+   *  the id) tells two overlapping boots of the same simulator apart (Start, Stop, Start again while
+   *  the first `--boot` still runs): only the boot whose own token is still current may clear the
+   *  flag, so an older boot ending can't mark a newer one's simulator ready while it's still starting. */
   const booting = new Map<string, object>()
+  const failedBootGraceMs = opts.failedBootGraceMs ?? FAILED_BOOT_GRACE_MS
+  /** The failed boots' graces under way, ended when Deck quits. */
+  const graces = new Set<ReturnType<typeof setTimeout>>()
   /** Ends idb's boot/shutdown commands under way when Deck quits; the boot itself completes anyway
    *  (measured), since it runs in CoreSimulator, not in the command Deck ran. */
   const quitting = new AbortController()
@@ -414,21 +424,23 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     if (already) return already.kind === 'emulator' || already.kind === 'simulator' ? null : { error: 'Deck no longer sees it.' }
     const device = list.startable.find((d) => d.id === id)
     if (!device) return { error: 'Deck no longer sees it.' }
-    const fail = starts.begin(device)
-    if (!fail) return null // already starting
+    const start = starts.begin(device)
+    if (!start) return null // already starting
     refresh()
     // Captured now (the click), not read lazily once this start's own async work settles: a watch
     // that stops and starts again while it's in flight must still look stale to readAvds below.
     const mine = generation
-    const failWith = (err: unknown) => fail(err instanceof Error ? err.message : String(err))
+    const failWith = (err: unknown) => start.fail(err instanceof Error ? err.message : String(err))
     if (device.kind === 'emulator') {
-      if (!emulator) fail("Deck can't find Android's emulator.")
+      if (!emulator) start.fail("Deck can't find Android's emulator.")
       else {
         const ended = (how: string, info: { clean: boolean }) => {
           // A clean exit (code 0, nothing wrong in its log) once the device was up is the user
-          // closing its own window, not a failed start: forget it rather than show an error.
-          if (info.clean) starts.forget(device.id)
-          else fail(how)
+          // closing its own window, not a failed start: forget it rather than show an error. This
+          // start only: an older emulator of the same AVD closing late (Stop, then Start while it
+          // saves its snapshot) mustn't forget the newer start.
+          if (info.clean) start.forget()
+          else start.fail(how)
         }
         startAvd(emulator, device.id.slice('emulator:'.length), ended, opts.emulatorLogDir ?? null).then(() => void readAvds(mine), failWith)
       }
@@ -436,21 +448,31 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     }
     const udid = udidOf(device.id)
     if (!idb || !udid) {
-      fail("Deck can't find idb-companion.")
+      start.fail("Deck can't find idb-companion.")
       return null
     }
     const boot = {}
     booting.set(device.id, boot)
-    bootSimulator(idb.companion, udid, { set: simulatorSet, signal: quitting.signal })
-      .catch((err: unknown) => {
-        if (!quitting.signal.aborted) failWith(err)
-      })
-      .finally(() => {
-        // Only if this is still the current boot: an older boot ending (Start, Stop, Start again
-        // while the first `--boot` still runs) must not clear the newer one's flag.
-        if (booting.get(device.id) === boot) booting.delete(device.id)
-        refresh()
-      })
+    const bootOver = () => {
+      // Only if this is still the current boot: an older boot ending (Start, Stop, Start again
+      // while the first `--boot` still runs) must not clear the newer one's flag.
+      if (booting.get(device.id) === boot) booting.delete(device.id)
+      refresh()
+    }
+    bootSimulator(idb.companion, udid, { set: simulatorSet, signal: quitting.signal }).then(bootOver, (err: unknown) => {
+      if (quitting.signal.aborted) return bootOver()
+      failWith(err)
+      // Booting a while longer: a failing `--boot` may end before the notifier says the simulator is
+      // going down (the notifier was seen first only in boots that worked). Ready at once, it would end
+      // its start, error and all, and could be streamed as it shuts down; still booting, it keeps both
+      // until the notifier drops it, and one that's up after all (booted some other way meanwhile)
+      // turns ready, ending its start, once the grace is over.
+      const grace = setTimeout(() => {
+        graces.delete(grace)
+        bootOver()
+      }, failedBootGraceMs)
+      graces.add(grace)
+    })
     return null
   })
   ipcMain.handle(IPC.devicesStop, async (_e, id: unknown): Promise<DeviceActionResult> => {
@@ -534,6 +556,8 @@ export function registerDeviceIpc(opts: DeviceIpcOptions): DeviceIpc {
     dispose() {
       disposed = true
       quitting.abort()
+      for (const grace of graces) clearTimeout(grace)
+      graces.clear()
       starts.clear()
       streams.stopAll()
       generation++

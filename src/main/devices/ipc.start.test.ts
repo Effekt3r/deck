@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IPC } from '@shared/channels'
 import type { DeviceActionResult, DeviceInfo, DeviceList } from '@shared/types'
 import type { BrowserWindow } from 'electron'
@@ -21,6 +21,26 @@ vi.mock('electron', () => ({
   shell: { openExternal: async () => {} },
 }))
 
+/** Boots under way, as Deck sees them: bootSimulator itself runs (against the idb_companion
+ *  stand-in below), and this counts each boot down as it settles. ipc.ts's own handlers on the same
+ *  boot run in that turn too, so once a test sees the count drop, Deck has dealt with that boot's end. */
+const boots = vi.hoisted(() => ({ running: 0 }))
+vi.mock('./ios/boot', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./ios/boot')>()
+  return {
+    ...real,
+    bootSimulator: (...args: Parameters<typeof real.bootSimulator>): Promise<void> => {
+      boots.running++
+      const boot = real.bootSimulator(...args)
+      const settled = () => {
+        boots.running--
+      }
+      boot.then(settled, settled)
+      return boot
+    },
+  }
+})
+
 const call = <T>(channel: string, ...args: unknown[]) => Promise.resolve(ipc.handlers.get(channel)!({}, ...args)) as Promise<T>
 const emit = (channel: string, ...args: unknown[]) => ipc.listeners.get(channel)!({}, ...args)
 const list = () => call<DeviceList | null>(IPC.devicesList)
@@ -29,19 +49,71 @@ const stop = (id: unknown) => call<DeviceActionResult>(IPC.devicesStop, id)
 
 const PIXEL: DeviceInfo = { id: 'emulator:Pixel_9', kind: 'emulator', name: 'Pixel 9', detail: 'Emulator · Android 15', state: 'ready' }
 const SIM: DeviceInfo = { id: 'simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF', kind: 'simulator', name: 'iPhone 17', detail: 'Simulator · iOS 27.0', state: 'ready' }
+/** SIM as it's offered while shut down. */
+const SIM_OFFERED = { id: SIM.id, kind: 'simulator' as const, name: 'iPhone 17', detail: 'Simulator · iOS 27.0' }
+
+// idb_companion's stand-in, for each registration's `tool` (`$M` is its folder of marks): the
+// notifier lists DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF booted while `booted` is there, which `--boot`
+// and `--shutdown` set and clear, and BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF always shut down (booting
+// it fails at once).
+const IDB_COMPANION = [
+  'echo "idb $*" >> "$M/calls"',
+  'state() { if [ -f "$M/booted" ]; then echo Booted; else echo Shutdown; fi; }',
+  'list() { echo "[{\\"udid\\":\\"DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF\\",\\"name\\":\\"iPhone 17\\",\\"state\\":\\"$1\\",\\"type\\":\\"Simulator\\",\\"os_version\\":\\"iOS 27.0\\"},{\\"udid\\":\\"BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF\\",\\"name\\":\\"iPhone Broken\\",\\"state\\":\\"Shutdown\\",\\"type\\":\\"Simulator\\",\\"os_version\\":\\"iOS 27.0\\"}]"; }',
+  'case "$1" in',
+  '  --notify)',
+  '    last=$(state); list "$last"',
+  '    while :; do now=$(state); if [ "$now" != "$last" ]; then list "$now"; last=$now; fi; sleep 0.05; done ;;',
+  '  --boot)',
+  '    if [ "$2" = "BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF" ]; then echo "2026-11-25 15:22:03.218+0200 BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF could not be resolved to any target" >&2; exit 1; fi',
+  // Each --boot of DEADBEEF counts itself (bootn), so a test can steer one specific invocation
+  // (boot-hold-<n>, boot-fail-<n>, boot-fail-up-<n>) while others run as before (an unheld one just
+  // sleeps 1 s, as a real first boot's remaining time would, after the notifier already says
+  // Booted), and wait for it to end: it marks boot-done-<n> as it exits, whatever the outcome.
+  '    n=$(( $(cat "$M/bootn" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$M/bootn"',
+  '    trap \': > "$M/boot-done-$n"\' EXIT',
+  '    touch "$M/booted"',
+  '    if [ -f "$M/boot-hold-$n" ]; then while [ -f "$M/boot-hold-$n" ]; do sleep 0.05; done; else sleep 1; fi',
+  // "failed" (not just "died"), so idb_companion's own asFailure() (the FAILURE regex in
+  // process.ts) recognises this as the line to show, not the generic exit-code wording.
+  // boot-fail-<n>: the simulator goes down, and the command fails a moment later. The short sleep
+  // gives the (separately polling, here) notifier a moment to report Shutdown first, the order seen
+  // in real use for a boot that works: idb's own notifier learns of a state change before its
+  // --boot/--shutdown command actually tears down and exits, not in the same instant.
+  '    if [ -f "$M/boot-fail-$n" ]; then rm -f "$M/booted"; sleep 0.2; echo "2026-11-26 00:00:00.000+0200 DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF failed during boot" >&2; exit 1; fi',
+  // boot-fail-up-<n>: the command fails first, with the simulator still up; the test takes it down
+  // (removes `booted`), or doesn't.
+  '    if [ -f "$M/boot-fail-up-$n" ]; then echo "2026-11-26 00:00:00.000+0200 DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF failed during boot" >&2; exit 1; fi',
+  '    ;;',
+  '  --shutdown)',
+  '    if [ -f "$M/shutdown-fail" ]; then echo "2026-11-26 00:00:00.000+0200 Target failed to shut down: Simulator is busy booting." >&2; exit 1; fi',
+  '    rm -f "$M/booted" ;;',
+  'esac',
+]
+
+/** Waits until DEADBEEF's boot `n` (as the stand-in counts them) has ended and Deck has dealt with
+ *  it: the stand-in marked boot-done-<n> as it exited (a moment before Deck hears it has), and only
+ *  `left` boots are still under way for Deck (`boots`). */
+const bootEnded = (marks: string, n: number, left = 0) =>
+  vi.waitFor(() => {
+    expect(existsSync(join(marks, `boot-done-${n}`))).toBe(true)
+    expect(boots.running).toBe(left)
+  }, { timeout: 5000 })
 
 // Shell scripts stand in for the SDK's adb and emulator and for idb_companion, never the real ones
 // (a real adb would take over the adb server; real simulators are Franco's). They share a folder of
 // marks: the emulator lists the AVDs in `avds` and, started, marks `started` and stays up; adb's
-// track-devices lists emulator-5554 from then until `emu kill` (which ends the emulator); idb's
-// notifier lists DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF booted while `booted` is there, which `--boot` and `--shutdown` set and
-// clear. Every call goes to `calls`, one line each.
+// track-devices lists emulator-5554 from then until `emu kill` (which ends the emulator); idb's is
+// IDB_COMPANION above. Every call goes to `calls`, one line each.
 describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and stopping', () => {
   let root: string
   let marks: string
   let set: string
   let devices: DeviceIpc
   let win: BrowserWindow
+  /** What Deck sent the window, each [channel, args]. */
+  const sent: [string, unknown[]][] = []
+  const streamEvents = (id: string) => sent.filter(([channel, args]) => channel === IPC.devicesStream && args[0] === id)
   const calls = () => readFileSync(join(marks, 'calls'), 'utf8').split('\n')
   const tool = (path: string, body: string[]) => {
     mkdirSync(join(path, '..'), { recursive: true })
@@ -90,40 +162,11 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
       'fi',
       'exit 0',
     ])
-    tool(join(root, 'libexec', 'idb_companion'), [
-      'echo "idb $*" >> "$M/calls"',
-      'state() { if [ -f "$M/booted" ]; then echo Booted; else echo Shutdown; fi; }',
-      'list() { echo "[{\\"udid\\":\\"DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF\\",\\"name\\":\\"iPhone 17\\",\\"state\\":\\"$1\\",\\"type\\":\\"Simulator\\",\\"os_version\\":\\"iOS 27.0\\"},{\\"udid\\":\\"BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF\\",\\"name\\":\\"iPhone Broken\\",\\"state\\":\\"Shutdown\\",\\"type\\":\\"Simulator\\",\\"os_version\\":\\"iOS 27.0\\"}]"; }',
-      'case "$1" in',
-      '  --notify)',
-      '    last=$(state); list "$last"',
-      '    while :; do now=$(state); if [ "$now" != "$last" ]; then list "$now"; last=$now; fi; sleep 0.05; done ;;',
-      '  --boot)',
-      '    if [ "$2" = "BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF" ]; then echo "2026-11-25 15:22:03.218+0200 BADDECAF-BADD-ECAF-BADD-ECAFBADDECAF could not be resolved to any target" >&2; exit 1; fi',
-      // Each --boot of DEADBEEF counts itself (bootn), so a test can hold or fail one specific
-      // invocation (boot-hold-<n>, boot-fail-<n>) while others run as before (an unheld one just
-      // sleeps 1 s, as a real first boot's remaining time would, after the notifier already says
-      // Booted).
-      '    n=$(( $(cat "$M/bootn" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$M/bootn"',
-      '    touch "$M/booted"',
-      '    if [ -f "$M/boot-hold-$n" ]; then while [ -f "$M/boot-hold-$n" ]; do sleep 0.05; done; else sleep 1; fi',
-      // "failed" (not just "died"), so idb_companion's own asFailure() (the FAILURE regex in
-      // process.ts) recognises this as the line to show, not the generic exit-code wording. The
-      // short sleep between removing "booted" and this command's own exit gives the (separately
-      // polling, here) notifier a moment to report Shutdown first, as it would in real use: idb's own
-      // notifier learns of a state change well before its --boot/--shutdown command actually tears
-      // down and exits, not in the same instant.
-      '    if [ -f "$M/boot-fail-$n" ]; then rm -f "$M/booted"; sleep 0.2; echo "2026-11-26 00:00:00.000+0200 DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF failed during boot" >&2; exit 1; fi',
-      '    ;;',
-      '  --shutdown)',
-      '    if [ -f "$M/shutdown-fail" ]; then echo "2026-11-26 00:00:00.000+0200 Target failed to shut down: Simulator is busy booting." >&2; exit 1; fi',
-      '    rm -f "$M/booted" ;;',
-      'esac',
-    ])
+    tool(join(root, 'libexec', 'idb_companion'), IDB_COMPANION)
     writeFileSync(join(root, 'libexec', 'sim-video'), '#!/bin/sh\n')
     chmodSync(join(root, 'libexec', 'sim-video'), 0o755)
 
-    const webContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: () => {} })
+    const webContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: (channel: string, ...args: unknown[]) => sent.push([channel, args]) })
     win = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents }) as unknown as BrowserWindow
     devices = registerDeviceIpc({
       picksFile: join(root, 'devices.json'),
@@ -138,6 +181,15 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
     })
     devices.attach(win)
     emit(IPC.devicesWatch)
+  })
+  // Each test begins watching, with a first list out (the AVDs read, both sources listed), whatever
+  // ran before it: so any one of them can run alone (-t).
+  beforeEach(async () => {
+    await vi.waitFor(async () => {
+      const now = await list()
+      expect(now?.pending).toEqual([])
+      expect(now?.noAvds || now?.startable.some((d) => d.kind === 'emulator')).toBe(true)
+    }, { timeout: 5000 })
   })
   afterAll(() => {
     emit(IPC.devicesUnwatch)
@@ -210,35 +262,47 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
     expect((await list())?.startable).toContainEqual({ id: 'emulator:Broken_AVD', kind: 'emulator', name: 'Broken AVD', detail: 'Emulator', starting: true })
   })
 
+  /** Removes every boot-* mark (a held boot goes on, as one that works). */
+  const clearBootMarks = () => {
+    for (const file of readdirSync(marks)) if (file.startsWith('boot-')) rmSync(join(marks, file), { force: true })
+  }
+  /** Numbers DEADBEEF's boots from 1 again, with none of an earlier test's marks left. */
+  const freshBoots = () => {
+    clearBootMarks()
+    writeFileSync(join(marks, 'bootn'), '0')
+  }
+
   // A best-effort reset for the tests below, which drive DEADBEEF's boot by hand: whatever the test's
-  // own assertions did, this always leaves it shut down and its hold/fail marks gone, so one test's
-  // failure can't cascade into the next's.
+  // own assertions did, this always leaves it shut down, its boots ended and their marks gone, so one
+  // test's failure can't cascade into the next's.
   const resetSim = async () => {
-    rmSync(join(marks, 'boot-hold-1'), { force: true })
-    rmSync(join(marks, 'boot-fail-1'), { force: true })
-    await stop('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF').catch(() => {})
-    await vi.waitFor(async () => expect((await list())?.devices.some((d) => d.id === 'simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toBe(false), { timeout: 5000 }).catch(() => {})
+    clearBootMarks()
+    await stop(SIM.id).catch(() => {})
+    await vi.waitFor(async () => expect((await list())?.devices.some((d) => d.id === SIM.id)).toBe(false), { timeout: 5000 }).catch(() => {})
+    await vi.waitFor(() => expect(boots.running).toBe(0), { timeout: 5000 }).catch(() => {})
   }
 
   it("gives each boot of the same simulator its own flag: Start, Stop, Start again while the first --boot still runs keeps it booting until the SECOND ends", async () => {
-    writeFileSync(join(marks, 'bootn'), '0')
+    freshBoots()
     writeFileSync(join(marks, 'boot-hold-1'), '')
+    writeFileSync(join(marks, 'boot-hold-2'), '')
     try {
-      expect(await start('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toBeNull()
+      expect(await start(SIM.id)).toBeNull()
       await vi.waitFor(async () => expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }]), { timeout: 5000 })
 
-      expect(await stop('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toBeNull()
+      expect(await stop(SIM.id)).toBeNull()
       await vi.waitFor(async () => expect((await list())?.devices).toEqual([]), { timeout: 5000 })
 
-      expect(await start('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toBeNull()
+      expect(await start(SIM.id)).toBeNull()
       await vi.waitFor(async () => expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }]), { timeout: 5000 })
 
       // Ends the FIRST boot (still running, held): the SECOND boot's own flag must keep it booting.
       rmSync(join(marks, 'boot-hold-1'))
-      await new Promise((resolve) => setTimeout(resolve, 400)) // let the first boot's command actually end
+      await bootEnded(marks, 1, 1)
       expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }])
 
       // Ends the second boot: only now does it go ready.
+      rmSync(join(marks, 'boot-hold-2'))
       await vi.waitFor(async () => expect((await list())?.devices).toEqual([SIM]), { timeout: 5000 })
     } finally {
       await resetSim()
@@ -246,7 +310,7 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
   })
 
   it('a boot whose stand-in reports Booted then fails keeps its error once the device is gone (no Stop involved)', async () => {
-    writeFileSync(join(marks, 'bootn'), '0')
+    freshBoots()
     writeFileSync(join(marks, 'boot-fail-1'), '')
     try {
       expect(await start('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toBeNull()
@@ -272,24 +336,50 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: starting and s
     }
   })
 
-  it('a Stop during a boot forgets its start: no error, even once the still-running boot command fails afterwards', async () => {
-    writeFileSync(join(marks, 'bootn'), '0')
+  it("a boot whose command fails while the simulator is still up stays booting, unstreamed, until it's gone, then shows its error", async () => {
+    freshBoots()
     writeFileSync(join(marks, 'boot-hold-1'), '')
-    const plain = { id: 'simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF', kind: 'simulator' as const, name: 'iPhone 17', detail: 'Simulator · iOS 27.0' }
+    writeFileSync(join(marks, 'boot-fail-up-1'), '')
     try {
-      expect(await start('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toBeNull()
+      expect(await start(SIM.id)).toBeNull()
       await vi.waitFor(async () => expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }]), { timeout: 5000 })
 
-      expect(await stop('simulator:DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF')).toBeNull()
+      // The command fails first, while the notifier still says Booted: still booting, so its start
+      // keeps its error, and there's nothing to stream.
+      rmSync(join(marks, 'boot-hold-1'))
+      await bootEnded(marks, 1)
+      expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }])
+      const before = streamEvents(SIM.id).length
+      emit(IPC.devicesView, SIM.id)
+      expect(streamEvents(SIM.id)).toHaveLength(before)
+
+      // Then the simulator goes down: once it's gone, the error shows.
+      rmSync(join(marks, 'booted'))
+      await vi.waitFor(async () => expect((await list())?.devices).toEqual([]), { timeout: 5000 })
+      await vi.waitFor(async () => expect((await list())?.startable).toContainEqual({ ...SIM_OFFERED, error: 'DEADBEEF-DEAD-BEEF-DEAD-BEEFDEADBEEF failed during boot' }), { timeout: 5000 })
+    } finally {
+      emit(IPC.devicesUnview, SIM.id)
+      await resetSim()
+    }
+  })
+
+  it('a Stop during a boot forgets its start: no error, even once the still-running boot command fails afterwards', async () => {
+    freshBoots()
+    writeFileSync(join(marks, 'boot-hold-1'), '')
+    try {
+      expect(await start(SIM.id)).toBeNull()
+      await vi.waitFor(async () => expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }]), { timeout: 5000 })
+
+      expect(await stop(SIM.id)).toBeNull()
       await vi.waitFor(async () => expect((await list())?.devices).toEqual([]), { timeout: 5000 })
       // Forgotten at once: plainly startable again, no "error", before the held boot command even answers.
-      expect((await list())?.startable).toContainEqual(plain)
+      expect((await list())?.startable).toContainEqual(SIM_OFFERED)
 
       // The original --boot command, still running, now fails: must not retroactively show an error.
       writeFileSync(join(marks, 'boot-fail-1'), '')
       rmSync(join(marks, 'boot-hold-1'))
-      await new Promise((resolve) => setTimeout(resolve, 400))
-      expect((await list())?.startable).toContainEqual(plain)
+      await bootEnded(marks, 1)
+      expect((await list())?.startable).toContainEqual(SIM_OFFERED)
     } finally {
       await resetSim()
     }
@@ -491,5 +581,70 @@ describe.skipIf(process.platform === 'win32')('registerDeviceIpc: an emulator cl
     expect(await stopping).toBeNull()
     await new Promise((resolve) => setTimeout(resolve, 300)) // give the stop's own readAvds a chance to (mis)fire
     expect(calls().filter((c) => c === 'emulator -list-avds').length).toBe(before)
+  })
+})
+
+// A registration of its own, with a short grace for a failed boot: the shared one above keeps the
+// default (10 s), long enough for the notifier to drop a simulator that goes down; this one shows one
+// that stays up turning ready once the grace is over.
+describe.skipIf(process.platform === 'win32')('registerDeviceIpc: a failed boot whose simulator stays up', () => {
+  let root: string
+  let marks: string
+  let devices: DeviceIpc
+  const tool = (path: string, body: string[]) => {
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, ['#!/bin/sh', `M='${marks}'`, ...body, ''].join('\n'))
+    chmodSync(path, 0o755)
+  }
+
+  beforeAll(async () => {
+    root = mkdtempSync(join(tmpdir(), 'deck-start-ipc-grace-'))
+    marks = join(root, 'marks')
+    mkdirSync(marks)
+    writeFileSync(join(marks, 'calls'), '')
+    // No devices, ever: only there so that no real adb (Homebrew's) is found and started.
+    tool(join(root, 'sdk', 'platform-tools', 'adb'), ['if [ "$1" = "track-devices" ]; then printf \'0000\'; exec sleep 60; fi', 'exit 0'])
+    tool(join(root, 'libexec', 'idb_companion'), IDB_COMPANION)
+    writeFileSync(join(root, 'libexec', 'sim-video'), '#!/bin/sh\n')
+    chmodSync(join(root, 'libexec', 'sim-video'), 0o755)
+    const webContents = Object.assign(new EventEmitter(), { isDestroyed: () => false, send: () => {} })
+    const win = Object.assign(new EventEmitter(), { isDestroyed: () => false, webContents }) as unknown as BrowserWindow
+    devices = registerDeviceIpc({
+      picksFile: join(root, 'devices.json'),
+      resources: join(root, 'resources'),
+      platform: 'darwin',
+      home: join(root, 'home'),
+      env: { PATH: '', ANDROID_HOME: join(root, 'sdk'), DECK_IDB_COMPANION: join(root, 'libexec', 'idb_companion'), DECK_SIMULATOR_SET: join(root, 'set') },
+      socketDir: join(root, 's'),
+      iphoneHelper: null,
+      failedBootGraceMs: 300,
+      saveImage: async () => '',
+    })
+    devices.attach(win)
+    emit(IPC.devicesWatch)
+    await vi.waitFor(async () => expect((await list())?.startable).toContainEqual(SIM_OFFERED), { timeout: 5000 })
+  })
+  afterAll(() => {
+    emit(IPC.devicesUnwatch)
+    devices?.dispose()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  it('turns ready once the grace is over, which ends its start, with no error', async () => {
+    writeFileSync(join(marks, 'boot-hold-1'), '')
+    writeFileSync(join(marks, 'boot-fail-up-1'), '')
+    expect(await start(SIM.id)).toBeNull()
+    await vi.waitFor(async () => expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }]), { timeout: 5000 })
+
+    rmSync(join(marks, 'boot-hold-1'))
+    await bootEnded(marks, 1)
+    // Seen before the grace can be over: bootEnded's check runs on a timer due well before it.
+    expect((await list())?.devices).toEqual([{ ...SIM, state: 'booting' }])
+    await vi.waitFor(async () => expect((await list())?.devices).toEqual([SIM]), { timeout: 5000 })
+
+    // Its start ended as it turned ready: once it's gone (shut down some other way), it's offered
+    // plainly, with no error and not starting.
+    rmSync(join(marks, 'booted'))
+    await vi.waitFor(async () => expect((await list())?.startable).toContainEqual(SIM_OFFERED), { timeout: 5000 })
   })
 })

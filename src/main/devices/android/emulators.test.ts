@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it, vi } from 'vitest'
@@ -137,18 +137,66 @@ describe.skipIf(process.platform === 'win32')('running the emulator', () => {
   })
 
   it.skipIf(process.platform === 'win32' || process.getuid?.() === 0)(
-    "falls back to the exit-code wording, not an earlier start's stale log, when the log can't be opened for writing",
+    "falls back to the exit-code wording, not an earlier start's log, when its own log can't be made",
     async () => {
       const dir = join(root, 'logs-stale')
       mkdirSync(dir, { recursive: true })
-      const logFile = join(dir, 'Pixel_9.log')
-      writeFileSync(logFile, 'ERROR        | A reason from an earlier start\n')
-      chmodSync(logFile, 0o444) // read-only: this start's own open for writing fails
-      const ended = vi.fn()
-      await startAvd(script('start-stale-log', 'emulator', 'exit 1'), 'Pixel_9', ended, dir)
-      await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).', { clean: false }), { timeout: 3000 })
+      writeFileSync(join(dir, 'Pixel_9-1.log'), 'ERROR        | A reason from an earlier start\n')
+      chmodSync(dir, 0o555) // read-only: this start can make no file there (nor remove the earlier one)
+      try {
+        const ended = vi.fn()
+        await startAvd(script('start-stale-log', 'emulator', 'exit 1'), 'Pixel_9', ended, dir)
+        await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The emulator stopped (exit code 1).', { clean: false }), { timeout: 3000 })
+      } finally {
+        chmodSync(dir, 0o755) // so afterAll can remove it
+      }
     },
   )
+
+  it("logs each start to a new file of its own, and removes that AVD's earlier logs but no other's", async () => {
+    const dir = join(root, 'logs-own')
+    mkdirSync(dir, { recursive: true })
+    const avd = 'Medium_Phone_API_36.1'
+    const others = [
+      'Medium_Phone_API_36.1-2-1.log', // AVD Medium_Phone_API_36.1-2's
+      'Medium_Phone_API_36x1-1.log', // the dot in the name is only a dot
+      'Medium_Phone_API_36.1.log',
+      'Medium_Phone_API_36.1-1.log.old',
+      'Medium_Phone_API_36.1-x.log',
+    ]
+    for (const file of [`${avd}-1.log`, `${avd}-17.log`, ...others]) writeFileSync(join(dir, file), 'ERROR        | An earlier start.\n')
+    const ended = vi.fn()
+    await startAvd(script('start-own-log', 'emulator', "echo 'ERROR        | This start.'\nexit 1"), avd, ended, dir)
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('This start.', { clean: false }), { timeout: 3000 })
+    const files = readdirSync(dir)
+    const own = files.filter((file) => /^Medium_Phone_API_36\.1-\d+\.log$/.test(file))
+    expect(own).toHaveLength(1)
+    expect(readFileSync(join(dir, own[0]), 'utf8')).toBe('ERROR        | This start.\n')
+    expect(files.filter((file) => file !== own[0]).sort()).toEqual([...others].sort())
+  })
+
+  it('a start overlapping an older emulator of the same AVD, still running, reads only its own log', async () => {
+    const dir = join(root, 'logs-overlap')
+    const marks = join(root, 'overlap-marks')
+    mkdirSync(marks, { recursive: true })
+    // Marks order the two: the older one says it failed only once the newer one has written a line,
+    // and the newer one says why only after that. In a file both wrote to (each at its own offset),
+    // the older one's line would land over the newer one's first and be read back as its reason.
+    // Each wait gives up after 5 s, so nothing is left running if the test fails.
+    const waitFor = (mark: string) => `i=0; while [ ! -f '${join(marks, mark)}' ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i + 1)); done`
+    const older = script('overlap-older', 'emulator', [waitFor('newer-began'), "echo 'ERROR        | The older one.'", `touch '${join(marks, 'older-said')}'`, 'exit 1'].join('\n'))
+    const newer = script('overlap-newer', 'emulator', [
+      "echo 'INFO         | Starting.'",
+      `touch '${join(marks, 'newer-began')}'`,
+      waitFor('older-said'),
+      "echo 'ERROR        | The newer one.'",
+      'exit 1',
+    ].join('\n'))
+    const ended = vi.fn()
+    await startAvd(older, 'Pixel_9', () => {}, dir)
+    await startAvd(newer, 'Pixel_9', ended, dir)
+    await vi.waitFor(() => expect(ended).toHaveBeenCalledWith('The newer one.', { clean: false }), { timeout: 5000 })
+  }, 10_000)
 
   it('killEmulator tells the emulator to close through adb', async () => {
     const adb = script('kill', 'adb', `echo "$@" > "$DIR/args"\necho 'OK: killing emulator, bye bye'`)

@@ -18,6 +18,17 @@ interface Start {
   timer: ReturnType<typeof setTimeout> | null
 }
 
+/** How a start's own command reports back, about that start only: once it's no longer the device's
+ *  start (listed, forgotten, cleared, or started again), both do nothing, so an older command of the
+ *  same device (an emulator still closing after Stop, then Start) can't touch a newer start. */
+export interface StartHandle {
+  /** Its command failed: the start keeps `why` until it's started again (Try again). Only the first
+   *  failure counts. */
+  fail(why: string): void
+  /** It ended without failing (the emulator's window closed cleanly): forgotten, as forget(id) does. */
+  forget(): void
+}
+
 /** The emulators and simulators started from the panel, from the click until they're listed among
  *  the devices, for 3 minutes at most. One whose command fails, or that runs out of time, keeps its
  *  error until it's started again (Try again). Merged into what the panel can start. */
@@ -27,24 +38,30 @@ export class Starts {
   /** `changed`: a start failed or ran out of time, so what can be started changed. */
   constructor(private readonly changed: () => void, private readonly deadlineMs = START_DEADLINE_MS) {}
 
-  /** `device` starts now: what to call if its command fails, or null when it's already starting (a
-   *  second click). Starting one that failed (Try again) clears its error. */
-  begin(device: StartableDevice): ((why: string) => void) | null {
+  /** `device` starts now: how its command reports back (StartHandle), or null when it's already
+   *  starting (a second click). Starting one that failed (Try again) clears its error. */
+  begin(device: StartableDevice): StartHandle | null {
     const known = this.starts.get(device.id)
     if (known && known.error === null) return null
     if (known?.timer) clearTimeout(known.timer)
     const start: Start = { device: { id: device.id, kind: device.kind, name: device.name, detail: device.detail }, error: null, timer: null }
     this.starts.set(device.id, start)
+    // Only this start: a later start of the same device has its own.
+    const current = () => this.starts.get(device.id) === start
     const fail = (why: string) => {
-      // Only this start, and only once: a later start of the same device has its own.
-      if (this.starts.get(device.id) !== start || start.error !== null) return
+      if (!current() || start.error !== null) return
       if (start.timer) clearTimeout(start.timer)
       start.timer = null
       start.error = why
       this.changed()
     }
     start.timer = setTimeout(() => fail(`It didn't start within ${minutesText(this.deadlineMs)}.`), this.deadlineMs)
-    return fail
+    return {
+      fail,
+      forget: () => {
+        if (current()) this.forget(device.id)
+      },
+    }
   }
 
   /** Ends the starts whose device is listed now: it has started, whatever its command said. */
@@ -57,9 +74,9 @@ export class Starts {
     }
   }
 
-  /** Forgets `id`'s start outright, deadline included: it wasn't a failure (Stop was clicked, or it
-   *  ended cleanly on its own), so its command's own outcome, even a late one, must never show as an
-   *  error. A silent no-op without a start to forget (already ended, or never began). */
+  /** Forgets `id`'s start outright, whichever start it is, deadline included: Stop was clicked, so its
+   *  command's own outcome, even a late one, must never show as an error. A silent no-op without a
+   *  start to forget (already ended, or never began). */
   forget(id: string): void {
     const start = this.starts.get(id)
     if (!start) return
