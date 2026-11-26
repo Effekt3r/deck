@@ -82,12 +82,12 @@ Written into the spec's "Decided while planning" section (UI calls are delegated
 
 ## Before you start
 
-- **Worktree:** `/Users/francolandman/.config/superpowers/worktrees/deck/m5-device-start-stop`, branch
+- **Worktree:** `~/.config/superpowers/worktrees/deck/m5-device-start-stop`, branch
   `m5-device-start-stop`, stacked on `m5-device-iphones` (device panel step 3, PR #22). Run every
   command from there; paths below are relative to it.
 - **Node:** `export PATH="$HOME/.nvm/versions/node/v22.19.0/bin:$PATH"` in every shell.
 - **Dependencies:** if `node_modules` is missing, `npm install --no-audit --no-fund`, then
-  `cp /Users/francolandman/Development/deck/resources/scrcpy-server resources/scrcpy-server` if its
+  `cp ~/Development/deck/resources/scrcpy-server resources/scrcpy-server` if its
   download failed, and `git checkout -- package-lock.json` (npm install touches it). Postinstall also
   builds the iPhone helper (needs Xcode; fine on this Mac).
 - **Baseline:** `npx vitest run src/main/devices src/renderer/src/device` and `npm run typecheck` pass
