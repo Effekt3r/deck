@@ -1,5 +1,5 @@
 import { type CSSProperties, memo, useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react'
-import type { AppInfo, ClipboardPreview, DeviceInfo, MenuCommand, ProjectAction, UsageState } from '@shared/types'
+import type { AppInfo, ClipboardPreview, DeviceInfo, MenuCommand, ProjectAction, StartableDevice, UsageState } from '@shared/types'
 import { ClaudePanel } from './claude/ClaudePanel'
 import { shownSession, toResume } from './claude/resume'
 import { useClaudeSession } from './claude/useClaude'
@@ -54,6 +54,7 @@ const SHARE_MAX = 0.85
 const DEVICE_MIN = 152
 const CLAUDE_MIN_BELOW = 160
 const NO_DEVICES: DeviceInfo[] = []
+const NO_STARTABLE: StartableDevice[] = []
 
 /** `px` within min … share of the window, and within `room` (what the other panel and the terminal leave). */
 const clampWidth = (px: number, min: number, share: number, room = Infinity) =>
@@ -345,9 +346,11 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
   const deviceNeeded = devicesNeeded({ project, tabDevice, tabHidden, platform })
   const deviceList = useDeviceList(deviceNeeded)
   const devices = deviceList?.devices ?? NO_DEVICES
-  const { byHand, apps, wants, looking: deviceLooking, choice, iosHint } = panelRules({ project, tabDevice, tabHidden, list: deviceList, platform })
-  const deviceView = useHeldView(choice, devices, deviceRoot, tabDevice ?? project?.picks[0] ?? null)
-  const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand || iosHint)
+  const { byHand, apps, wants, looking: deviceLooking, choice, iosHint, startPick } = panelRules({ project, tabDevice, tabHidden, list: deviceList, platform })
+  /** The tab's device: its own pick, else the project's latest. */
+  const devicePick = tabDevice ?? project?.picks[0] ?? null
+  const deviceView = useHeldView(choice, devices, deviceRoot, devicePick)
+  const showDevice = tabHidden !== true && (deviceView.kind !== 'none' || byHand || iosHint || startPick)
   const shownDevice = deviceView.kind === 'device' ? deviceView.device.id : null
   const showRight = showClaude || showDevice
   const [deviceDrag, setDeviceDrag] = useState<number | null>(null)
@@ -489,7 +492,8 @@ const Workspace = memo(function Workspace(props: WorkspaceProps) {
         <div className={deviceSplit ? 'claude-pane with-device' : 'claude-pane'} ref={claudeRef} style={{ width: claudeDrag ?? claudeWidth }}>
           {showDevice && (
             <div className="device-slot" ref={deviceRef} style={deviceStyle}>
-              <DevicePanel view={deviceView} devices={menuOrder(devices, apps)} problem={deviceList?.problem ?? null}
+              <DevicePanel view={deviceView} devices={menuOrder(devices, apps)} startable={menuOrder(deviceList?.startable ?? NO_STARTABLE, apps)}
+                noAvds={deviceList?.noAvds ?? false} pick={devicePick} problem={deviceList?.problem ?? null}
                 iosProblem={deviceList?.iosProblem ?? null} wants={wants} looking={deviceLooking}
                 open={deviceOpen} onToggle={onDeviceToggle} visible={active && pageVisible && projectFresh} claudeRuns={claudeRuns}
                 onPick={pickDevice} onInsert={insert} onFocusLost={focusTerminal} />

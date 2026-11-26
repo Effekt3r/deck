@@ -120,6 +120,10 @@
 .dp-choice:hover { border-color: var(--teal); }
 .dp-choice-detail { color: var(--muted); font-size: 11px; }
 
+/* An empty panel's Start buttons: side by side while they fit, a long name cut. */
+.dp-starts { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; max-width: 100%; }
+.dp-starts .button { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Everything else a <code> needs (padding, background, font) is claude/panel.css's .cp-state code,
    more specific than a single class: this only adds what it doesn't. */
 .dp-command { user-select: text; }
