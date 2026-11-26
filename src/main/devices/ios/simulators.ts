@@ -1,5 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
-import type { DeviceInfo } from '@shared/types'
+import type { DeviceInfo, StartableDevice } from '@shared/types'
 import { LineTracker } from './tracker'
 
 /** What idb_companion's notifier says of a simulator. */
@@ -46,12 +46,24 @@ export function readNotifyLine(line: string, known: ReadonlyMap<string, SimTarge
   return next
 }
 
+const byName = (a: SimTarget, b: SimTarget) => a.name.localeCompare(b.name) || a.udid.localeCompare(b.udid)
+const detailOf = (t: SimTarget) => (t.osVersion ? `Simulator · ${t.osVersion}` : 'Simulator')
+
 /** The booted simulators, by name, as devices. */
 export function simulatorDevices(targets: ReadonlyMap<string, SimTarget>): DeviceInfo[] {
   return [...targets.values()]
     .filter((t) => t.state === 'Booted')
-    .sort((a, b) => a.name.localeCompare(b.name) || a.udid.localeCompare(b.udid))
-    .map((t) => ({ id: `${PREFIX}${t.udid}`, kind: 'simulator', name: t.name, detail: t.osVersion ? `Simulator · ${t.osVersion}` : 'Simulator', state: 'ready' }))
+    .sort(byName)
+    .map((t) => ({ id: `${PREFIX}${t.udid}`, kind: 'simulator', name: t.name, detail: detailOf(t), state: 'ready' }))
+}
+
+/** The shut-down simulators, by name, as what the panel can start. One booting or shutting down is
+ *  neither listed nor offered until it settles. */
+export function startableSimulators(targets: ReadonlyMap<string, SimTarget>): StartableDevice[] {
+  return [...targets.values()]
+    .filter((t) => t.state === 'Shutdown')
+    .sort(byName)
+    .map((t) => ({ id: `${PREFIX}${t.udid}`, kind: 'simulator', name: t.name, detail: detailOf(t) }))
 }
 
 export interface SimulatorTrackerDeps {
@@ -101,5 +113,10 @@ export class SimulatorTracker {
   /** Whether simulator `udid` was booted at the last line. */
   booted(udid: string): boolean {
     return this.targets.get(udid)?.state === 'Booted'
+  }
+
+  /** The simulators shut down at the last line, as what the panel can start. */
+  shutDown(): StartableDevice[] {
+    return startableSimulators(this.targets)
   }
 }
